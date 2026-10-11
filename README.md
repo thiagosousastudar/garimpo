@@ -2,7 +2,7 @@
 
 Painel para afiliados do Mercado Livre e da Shopee: cadastrar produtos campeões, classificar por prioridade, preparar e publicar as postagens e acompanhar as comissões.
 
-Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com Docker (veja o fim).
+Hospedado em **Render + Supabase** (veja "Publicar na Render"). Também roda na Vercel ou em servidor próprio com Docker.
 
 ## O que já funciona
 
@@ -18,6 +18,16 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 - Busca automática de produtos e importação automática de comissões nas plataformas (próxima etapa: API de afiliados da Shopee; no Mercado Livre pode ser preciso importar o relatório por CSV).
 - Envio automático para o WhatsApp. O painel prepara o texto e você copia e cola no grupo.
 - Recuperação de senha por e-mail e vários usuários por conta.
+
+## Publicar na Render
+
+1. Supabase: faça os passos 1, 3 (só a migração) e 5 da seção da Vercel abaixo. No **Connect**, copie a string do **Session pooler** (host `aws-...pooler.supabase.com`). A conexão direta `db.xxx.supabase.co` não funciona na Render, que não tem IPv6.
+2. Na Render: **New > Blueprint**, escolha o repositório. O `render.yaml` cria o serviço `garimpo` e gera `JWT_SECRET`, `ENCRYPTION_KEY` e `CRON_SECRET`. Preencha os campos pedidos: `DATABASE_URL` (Session pooler, senha com caracteres especiais codificada, ex.: `@` vira `%40`), `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` e, se quiser, `ANTHROPIC_API_KEY`.
+3. O endereço público (`https://garimpo-xxxx.onrender.com`) é lido sozinho de `RENDER_EXTERNAL_URL`; não precisa de `APP_URL`, a não ser que use domínio próprio.
+4. Crie a sua conta no app e depois mude `ALLOW_SIGNUP` para `false` em **Environment**.
+5. **Plano gratuito dorme** após 15 minutos sem acesso, e aí as postagens agendadas não saem. Duas saídas: plano pago (Starter) ou o pg_cron do Supabase chamando `/api/cron/tick` a cada minuto (bloco no fim de `supabase/setup.sql`, com o domínio da Render e o `CRON_SECRET` que a Render gerou). O pg_cron também mantém o serviço acordado.
+
+Com o servidor ligado, o agendador interno já publica sozinho a cada minuto; o endpoint de cron é só um reforço.
 
 ## Publicar: Git, Supabase e Vercel
 
