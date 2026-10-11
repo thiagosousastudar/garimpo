@@ -1,0 +1,39 @@
+# Uso local ou em servidor próprio:  cp .env.example .env  (preencha os segredos)  e depois  docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: garimpo
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-garimpo}
+      POSTGRES_DB: garimpo
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U garimpo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://garimpo:${DB_PASSWORD:-garimpo}@db:5432/garimpo
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no arquivo .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?defina ENCRYPTION_KEY no arquivo .env}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - uploads:/app/data/uploads
+
+volumes:
+  dbdata:
+  uploads:

@@ -1,0 +1,43 @@
+/* Extras da versão com banco de dados: login, formulários, fila editável, conexões. */
+.thumb img,.thumb video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.thumb.sm img,.thumb.sm video{border-radius:10px}
+.top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.who{color:var(--muted);font-size:13px}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+.btn.danger{color:var(--bad)}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.hint{color:var(--muted);font-size:13px;margin:0}
+.err{color:var(--bad);font-size:13px;margin:0}
+.ok{color:var(--good);font-size:13px;margin:0}
+
+.login{max-width:420px;margin:12vh auto 0;display:flex;flex-direction:column;gap:14px}
+.login h1{font-size:30px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+input[type=text],input[type=email],input[type=password],input[type=datetime-local],input[type=date],textarea,select{
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;width:100%;min-width:0;color:var(--ink)}
+textarea{min-height:140px;resize:vertical;line-height:1.45}
+form.stack{display:flex;flex-direction:column;gap:12px}
+.cols{display:grid;gap:12px;grid-template-columns:1fr 1fr}
+@media (max-width:520px){.cols{grid-template-columns:1fr}}
+.link{background:none;border:0;color:var(--accent);padding:0;font-weight:600;text-align:left}
+
+dialog{border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);padding:20px;width:min(560px,calc(100vw - 32px));max-height:90vh;overflow:auto}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h2{font-size:20px;margin-bottom:12px}
+
+.pill.draft{background:var(--surface2);color:var(--muted)}
+.pill.scheduled{background:var(--gold-soft);color:var(--gold)}
+.pill.publishing{background:var(--gold-soft);color:var(--gold)}
+.pill.posted{background:var(--accent-soft);color:var(--accent)}
+.pill.failed{background:var(--surface2);color:var(--bad)}
+.qmedia{display:flex;gap:12px;align-items:flex-start}
+.qmedia .thumb{width:96px}
+.qitem .actions{display:flex;flex-wrap:wrap;gap:8px}
+.chart text.val{fill:var(--ink)}
+.conn{display:flex;flex-direction:column;gap:12px;max-width:640px}
+.steps{margin:0;padding-left:18px;color:var(--muted);font-size:14px}
+.steps li{margin-bottom:4px}
+.file-input{font-size:13px}
+.centered-empty{margin-block:24px}
+.pill.processing{background:var(--gold-soft);color:var(--gold)}
