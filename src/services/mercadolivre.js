@@ -38,8 +38,8 @@ function fromItem(it, defaultCommission) {
 }
 
 /**
- * Produto de catálogo (/products/search). A busca de catálogo não traz preço: ele vem da oferta mais barata
- * entre os vendedores do produto (/products/{id}/items). "rank" é a posição na lista de mais vendidos da categoria.
+ * Produto de catálogo (/products/search). A busca de catálogo não traz preço: ele vem da oferta que o
+ * Mercado Livre exibe entre os vendedores do produto (/products/{id}/items). "rank" é a posição na lista de mais vendidos.
  */
 /**
  * Comissão de afiliado para a categoria principal: a da tabela do usuário, senão a padrão.
@@ -150,13 +150,17 @@ function createMercadoLivreClient({ token, defaultCommission = null, commissionT
     return data;
   }
 
-  /** Oferta mais barata entre os vendedores de um produto de catálogo (null se ninguém vende). */
+  /**
+   * A oferta que o Mercado Livre mostra na página do produto (null se ninguém vende).
+   * A API devolve as ofertas na ordem do próprio Mercado Livre e a primeira é a exibida ("a partir de").
+   * Não usar a mais barata: costuma haver ofertas mais baratas que o site não exibe (sem garantia,
+   * sem estoque, vendedor não elegível), e o preço divulgado ficaria errado.
+   */
   async function bestOffer(productId) {
     const d = await get(`/products/${productId}/items`, { limit: 10 });
-    const offers = (d.results || []).filter((o) => num(o.price) > 0);
-    if (!offers.length) return null;
-    const best = offers.reduce((a, b) => (num(b.price) < num(a.price) ? b : a));
-    return { ...best, sellers: Number(d.paging?.total) || offers.length };
+    const first = (d.results || []).find((o) => num(o.price) > 0);
+    if (!first) return null;
+    return { ...first, sellers: Number(d.paging?.total) || (d.results || []).length };
   }
 
   /** Categoria principal de uma categoria qualquer (ex.: "De Ar" -> Eletrodomésticos). Falha vira null. */

@@ -74,7 +74,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
         ], paging: { total: 2 } });
       }
       if (u.pathname === '/products/MLB9001/items') {
-        return json(200, { paging: { total: 2 }, results: [{ item_id: 'MLB5', category_id: 'MLB456045', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }] });
+        return json(200, { paging: { total: 3 }, results: [{ item_id: 'MLB5', category_id: 'MLB456045', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }, { item_id: 'MLB7', price: 99, shipping: { free_shipping: true } }] });
       }
       if (u.pathname === '/products/MLB9002/items') return json(200, { results: [] });
       if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }, { url: 'http://http2.mlstatic.com/D_9001b-F.jpg' }], main_features: [{ text: 'Capacidade de 4,2 L para porções individuais.' }, { text: 'Potência de 1400 W.' }], attributes: [{ id: 'BRAND', value_name: 'Elgin' }] });
@@ -861,7 +861,8 @@ test('Mercado Livre profissional: tendências, categorias, selos, galeria, texto
     assert.equal(byCat.status, 200, JSON.stringify(byCat.data));
     assert.equal(byCat.data.items.length, 1);
     const p = byCat.data.items[0];
-    assert.deepEqual([p.best_seller_rank, p.free_shipping, p.full, p.official_store, p.sellers, p.brand], [3, true, true, true, 2, 'Elgin']);
+    // a oferta usada é a primeira (a que o site exibe), não a mais barata (R$ 99, que o site não mostra)
+    assert.deepEqual([p.price, p.best_seller_rank, p.free_shipping, p.full, p.official_store, p.sellers, p.brand], [299.9, 3, true, true, true, 3, 'Elgin']);
     assert.equal(p.images.length, 2);
     assert.ok(p.images.every((u) => u.startsWith('https://')));
     assert.equal(p.features[0], 'Capacidade de 4,2 L para porções individuais.');
