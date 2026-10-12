@@ -115,3 +115,7 @@ textarea{font:inherit;color:var(--ink)}
 .seeprod:hover{text-decoration:underline}
 .waguide{background:var(--accent-soft);border-radius:10px;padding:10px 10px 10px 28px;color:var(--ink)}
 .wa-actions .btn{text-decoration:none}
+.price .from{font-size:13px;font-weight:600;color:var(--muted);align-self:center}
+.price .hint{flex-basis:100%;margin-top:-4px}
+.cols4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+@media (max-width:620px){.cols4{grid-template-columns:1fr 1fr}}

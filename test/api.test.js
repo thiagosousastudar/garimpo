@@ -1461,3 +1461,37 @@ test('texto do WhatsApp no estilo da Anninha: negrito, de/por riscado, destaques
   assert.match(g, /1️⃣ \*Air Fryer 4L\*\n💥 \*R\$\s239,00\* ~R\$\s716,90~ \(−67%\) · 🚚 frete grátis\n👉 https:\/\/meli\.la\/abc/);
   assert.match(g, /2️⃣ \*Garrafa\*\n💥 \*R\$\s20,00\*\n👉 https:\/\/s\.shopee\.com\.br\/x/);
 });
+test('preço com variações (kits): "a partir de", "até R$" validado e texto honesto', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const base = { title: 'Kit Bola De Natal', marketplace: 'SH', price: '28,90', original_price: '89,90', affiliate_url: 'https://s.shopee.com.br/k' };
+    assert.equal((await api('POST', '/api/products', { ...base, price_max: '20' })).status, 400);
+    const p = (await api('POST', '/api/products', { ...base, price_max: '110,80' })).data.product;
+    assert.deepEqual([p.price, p.price_max], [28.9, 110.8]);
+
+    const wa = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' })).data.caption;
+    assert.match(wa, /💥 A partir de: \*R\$\s28,90\* \(−68% OFF\)/);
+    assert.ok(wa.includes('📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha'));
+    const ig = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram' })).data.caption;
+    assert.match(ig, /a partir de R\$\s28,90/);
+
+    // editar: valor inválido recusado; vazio volta a preço único (e o texto volta ao normal)
+    assert.equal((await api('PATCH', `/api/products/${p.id}`, { price_max: '10' })).status, 400);
+    const cleared = (await api('PATCH', `/api/products/${p.id}`, { price_max: '' })).data.product;
+    assert.equal(cleared.price_max, undefined);
+    const wa2 = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' })).data.caption;
+    assert.match(wa2, /💥 Por: \*R\$\s28,90\*/);
+    assert.ok(!wa2.includes('Tem opções'));
+
+    // cadastro pela lista (links/planilha): "até" salvo só se fizer sentido
+    const s = await api('POST', '/api/garimpo/save', { items: [
+      { marketplace: 'SH', external_id: '1.2', title: 'Kit A', price: 10, price_max: '35,50', product_url: 'https://shopee.com.br/product/1/2' },
+      { marketplace: 'SH', external_id: '1.3', title: 'Kit B', price: 10, price_max: '5', product_url: 'https://shopee.com.br/product/1/3' },
+    ] });
+    assert.equal(s.data.saved, 2);
+    const byId = Object.fromEntries((await api('GET', '/api/products')).data.products.map((x) => [x.external_id, x]));
+    assert.deepEqual([byId['1.2'].price_max, byId['1.3'].price_max], [35.5, undefined]);
+  } finally { t.close(); }
+});

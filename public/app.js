@@ -207,7 +207,9 @@
   }
   var SHIP_OPTS = [['', 'Qualquer frete'], ['free', 'Só frete grátis'], ['cheap', 'Frete grátis ou barato']];
   function priceBlock(p) {
-    return '<div class="price"><strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') + '</div>';
+    var range = p.price_max > p.price; // produto com opções/kits: preço "a partir de"
+    return '<div class="price">' + (range ? '<span class="from">a partir de</span>' : '') + '<strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') +
+      (range ? '<span class="hint num">até ' + brl(p.price_max) + ' conforme a opção</span>' : '') + '</div>';
   }
 
   function viewGarimpar() {
@@ -514,9 +516,9 @@
     var inner = field('title', 'Nome do produto', p.title, 'required') +
       '<div class="cols"><div class="field"><label for="marketplace">Marketplace</label><select id="marketplace" name="marketplace"><option value="ML"' + (p.marketplace === 'ML' ? ' selected' : '') + '>Mercado Livre</option><option value="SH"' + (p.marketplace === 'SH' ? ' selected' : '') + '>Shopee</option></select></div>' + field('category', 'Categoria', p.category, 'list="cats"') + '</div>' +
       '<datalist id="cats"><option>Casa e cozinha</option><option>Eletrônicos</option><option>Beleza</option><option>Acessórios</option></datalist>' +
-      '<div class="cols">' + field('price', 'Preço (R$)', p.price, 'inputmode="decimal" required') + field('original_price', 'Preço original (R$)', p.original_price, 'inputmode="decimal"') + '</div>' +
-      '<div class="cols">' + field('commission_pct', 'Comissão (%)', p.commission_pct, 'inputmode="decimal"') + field('rating', 'Avaliação (0 a 5)', p.rating, 'inputmode="decimal"') + '</div>' +
-      field('sales_k', 'Vendidos (em milhares)', p.sales_k, 'inputmode="decimal"') +
+      '<div class="cols">' + field('price', 'Preço (R$) — o menor, se tiver opções', p.price, 'inputmode="decimal" required') + field('original_price', 'Preço original (R$)', p.original_price, 'inputmode="decimal"') + '</div>' +
+      '<div class="cols">' + field('price_max', 'Até (R$) — só se tiver opções/kits', p.price_max, 'inputmode="decimal" placeholder="vazio = preço único"') + field('commission_pct', 'Comissão (%)', p.commission_pct, 'inputmode="decimal"') + '</div>' +
+      '<div class="cols">' + field('rating', 'Avaliação (0 a 5)', p.rating, 'inputmode="decimal"') + field('sales_k', 'Vendidos (em milhares)', p.sales_k, 'inputmode="decimal"') + '</div>' +
       field('product_url', 'Link do anúncio', p.product_url, 'inputmode="url"') + field('affiliate_url', 'Seu link de afiliado', p.affiliate_url, 'inputmode="url"') +
       field('image_url', 'Foto (endereço)', p.image_url, 'inputmode="url"') + field('video_url', 'Vídeo (endereço)', p.video_url, 'inputmode="url"') +
       '<div class="field"><label for="pfile">Ou envie foto/vídeo do seu aparelho</label><input id="pfile" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4"></div>';
@@ -681,7 +683,7 @@
           var num = function (f, label, ph) {
             return '<label class="field"><span class="hint">' + label + '</span><input type="text" inputmode="decimal" data-li="' + i + '" data-lf="' + f + '" value="' + esc(x[f] == null ? '' : String(x[f]).replace('.', ',')) + '" placeholder="' + ph + '"></label>';
           };
-          return '<div class="linkitem">' + head + '<div class="cols3">' + num('price', 'Preço (R$)', '0,00') + num('original_price', 'Preço "de" (R$)', 'opcional') + num('commission_pct', 'Comissão (%)', 'Ex.: 8') + '</div></div>';
+          return '<div class="linkitem">' + head + '<div class="cols4">' + num('price', 'Preço (R$)', 'o menor') + num('price_max', 'Até (R$)', 'se tiver kits') + num('original_price', 'Preço "de" (R$)', 'opcional') + num('commission_pct', 'Comissão (%)', 'Ex.: 8') + '</div></div>';
         }).join('') + '</div>' +
         '<p class="err" id="links-err" role="alert"></p>' +
         '<div class="row end"><button type="button" class="btn" data-act="links-back">Colar outros links</button>' +

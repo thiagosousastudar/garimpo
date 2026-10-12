@@ -32,10 +32,12 @@ function clean(e) {
     shipping_cost: Number.isFinite(Number(e.shipping_cost)) && e.shipping_cost !== null && e.shipping_cost !== '' && Number(e.shipping_cost) >= 0 && Number(e.shipping_cost) < 10000
       ? Math.round(Number(e.shipping_cost) * 100) / 100 : null,
     shipping_zip: /^\d{8}$/.test(String(e.shipping_zip || '')) ? String(e.shipping_zip) : null,
+    // produto com variações (kits, tamanhos): preço da variação mais cara; o "price" do produto é o "a partir de"
+    price_max: Number(e.price_max) > 0 && Number(e.price_max) < 1e7 ? Math.round(Number(e.price_max) * 100) / 100 : null,
   };
   const empty = !out.images.length && !out.features.length && !out.free_shipping && !out.full && !out.official_store
     && !out.warranty && !out.sellers && !out.brand && !out.best_seller_rank && !out.category_id && !out.commission_auto && !out.has_video
-    && out.shipping_cost === null;
+    && out.shipping_cost === null && out.price_max === null;
   return empty ? null : out;
 }
 

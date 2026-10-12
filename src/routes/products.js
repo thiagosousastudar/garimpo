@@ -231,7 +231,10 @@ function productRoutes({ pool, cfg, fetchImpl }) {
   });
 
   r.post('/', async (req, res) => {
-    const row = await insertProduct(pool, req.uid, parseBody(req.body || {}));
+    const d = parseBody(req.body || {});
+    const max = req.body?.price_max === undefined || req.body.price_max === '' ? null : parseNum(req.body.price_max);
+    if (max !== null && !(max > d.price)) throw new HttpError(400, 'O preço "até" (variações) precisa ser maior que o preço "a partir de". Deixe vazio se o produto tem preço único.');
+    const row = await insertProduct(pool, req.uid, d, null, max !== null ? serializeExtras({ price_max: max }) : null);
     res.status(201).json({ product: mapProduct(row) });
   });
 
@@ -239,9 +242,20 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     const id = Number(req.params.id);
     const d = parseBody(req.body || {}, true);
     const cols = COLS.filter((c) => d[c] !== undefined);
-    if (!cols.length) throw new HttpError(400, 'Nada para atualizar.');
+    const hasMax = req.body && req.body.price_max !== undefined;
+    if (!cols.length && !hasMax) throw new HttpError(400, 'Nada para atualizar.');
     const cur = (await pool.query('select * from products where id = $1 and user_id = $2', [id, req.uid])).rows[0];
     if (!cur) throw new HttpError(404, 'Produto não encontrado.');
+    // "Até R$" (variações): vazio remove; precisa ser maior que o preço "a partir de"
+    let maxExtras;
+    if (hasMax) {
+      const max = req.body.price_max === '' || req.body.price_max === null ? null : parseNum(req.body.price_max);
+      const base = d.price !== undefined ? Number(d.price) : Number(cur.price);
+      if (max !== null && !(max > base)) throw new HttpError(400, 'O preço "até" (variações) precisa ser maior que o preço "a partir de". Deixe vazio se o produto tem preço único.');
+      const e = parseExtras(cur.extras);
+      e.price_max = max;
+      maxExtras = serializeExtras(e);
+    }
     const next = { ...cur, ...d };
     const extra = {};
     if (d.product_url !== undefined || d.affiliate_url !== undefined || d.marketplace !== undefined) {
@@ -254,6 +268,10 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     // comissão digitada pelo usuário passa a valer sobre a da tabela/loja
     const comChanged = d.commission_pct !== undefined
       && (d.commission_pct === null ? cur.commission_pct !== null : Number(d.commission_pct) !== Number(cur.commission_pct));
+    if (maxExtras !== undefined) {
+      cur.extras = maxExtras; // a regra da comissão abaixo parte dos detalhes já atualizados
+      extra.extras = maxExtras;
+    }
     if (comChanged && parseExtras(cur.extras).commission_auto) {
       extra.extras = mergeExtras(cur.extras, { commission_auto: false });
     }

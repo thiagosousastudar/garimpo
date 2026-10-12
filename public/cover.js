@@ -150,12 +150,14 @@
     // bloco de baixo (nome + preço) centralizado entre o cartão (y 900) e o rodapé (y 1264)
     ctx.font = font(600, 44, BODY);
     var lines = wrap(ctx, p.title, 960, 2);
-    var block = lines.length * 54 + 16 + (off > 0 ? 52 : 0) + 118;
+    var range = Number(p.price_max) > Number(p.price); // opções/kits: preço "a partir de"
+    var block = lines.length * 54 + 16 + (off > 0 ? 52 : 0) + (range ? 40 : 0) + 118;
     var top = 912 + Math.max(0, (340 - block) / 2);
     ctx.fillStyle = INK;
     lines.forEach(function (l, i) { ctx.fillText(l, 60, top + 42 + i * 54); });
     var y = top + lines.length * 54 + 16;
     if (off > 0) { ctx.fillStyle = MUTED; ctx.font = font(500, 40, BODY); strike(ctx, 'de ' + brl(p.original_price), 60, y + 38); y += 52; }
+    if (range) { ctx.fillStyle = MUTED; ctx.font = font(600, 34, BODY); ctx.fillText('a partir de', 60, y + 34); y += 40; }
     ctx.fillStyle = shade(c, -0.18);
     ctx.font = font(700, fit(ctx, brl(p.price), 560, 128, 70, 700, DISPLAY), DISPLAY);
     ctx.fillText(brl(p.price), 56, y + 112);
@@ -180,6 +182,7 @@
     // etiqueta de preço
     ctx.save(); ctx.translate(800, 1085); ctx.rotate(-0.1);
     shadow(ctx, true); ctx.fillStyle = GOLD; roundRect(ctx, -235, -120, 470, 240, 34); ctx.fill(); shadow(ctx, false);
+    if (Number(p.price_max) > Number(p.price)) pill(ctx, 'A PARTIR DE', 0, -150, { bg: INK, fg: GOLD, size: 26, align: 'center' });
     ctx.fillStyle = INK; ctx.textAlign = 'left';
     if (off > 0) { ctx.font = font(500, 34, BODY); var t = 'de ' + brl(p.original_price); var tw = ctx.measureText(t).width; strike(ctx, t, -tw / 2, -50); }
     ctx.font = font(700, fit(ctx, brl(p.price), 420, 104, 56, 700, DISPLAY), DISPLAY);
@@ -215,7 +218,8 @@
       ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x + 46, y + 46, 34, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = onColor(c); ctx.textAlign = 'center'; ctx.font = font(700, 38, DISPLAY); ctx.fillText(String(i + 1), x + 46, y + 59); ctx.textAlign = 'left';
       var off = discount(p);
-      var w = pill(ctx, brl(p.price), x + 24, y + ch - 84, { bg: shade(c, -0.15), fg: onColor(shade(c, -0.15)), size: 34, family: DISPLAY });
+      var range = Number(p.price_max) > Number(p.price);
+      var w = pill(ctx, (range ? 'a partir de ' : '') + brl(p.price), x + 24, y + ch - 84, { bg: shade(c, -0.15), fg: onColor(shade(c, -0.15)), size: range ? 26 : 34, family: DISPLAY });
       if (off > 0) pill(ctx, '-' + off + '%', x + 24 + w + 10, y + ch - 80, { bg: GOLD, fg: INK, size: 28 });
     });
     if (n > list.length) pill(ctx, '+' + (n - list.length) + ' no carrossel', W - 60, 1212, { bg: INK, fg: '#FFFFFF', size: 28, align: 'right' });

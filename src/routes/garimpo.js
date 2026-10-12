@@ -113,6 +113,9 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
           notes: it.shop ? `Loja: ${it.shop}` : undefined,
         });
         const ext = EXTERNAL_ID[d.marketplace]?.test(String(it.external_id || '')) ? String(it.external_id) : null;
+        // "até R$" só vale se for maior que o preço "a partir de"
+        if (it.price_max !== undefined && !(parseNum(it.price_max) > d.price)) it.price_max = null;
+        else if (it.price_max !== undefined) it.price_max = parseNum(it.price_max);
         saved.push(mapProduct(await insertProduct(pool, req.uid, d, ext, serializeExtras(it))));
       } catch (e) {
         if (e.status === 409) skipped++;

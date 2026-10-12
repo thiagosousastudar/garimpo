@@ -33,8 +33,10 @@ function facts(p) {
   const { desc } = scoreProduct(p);
   const d = details(p);
   const out = [];
-  if (desc > 0 && p.original_price) out.push(`de ${brl(p.original_price)} por ${brl(p.price)} (−${desc}%)`);
-  else out.push(`por ${brl(p.price)}`);
+  const from = d.price_max > Number(p.price); // variações: o preço é o "a partir de"
+  if (desc > 0 && p.original_price) out.push(`de ${brl(p.original_price)} ${from ? 'a partir de' : 'por'} ${brl(p.price)} (−${desc}%)`);
+  else out.push(`${from ? 'a partir de' : 'por'} ${brl(p.price)}`);
+  if (from) out.push('tem opções (kits/tamanhos): o preço muda conforme a escolha');
   if (d.best_seller_rank && d.best_seller_rank <= 20) out.push(`${d.best_seller_rank}º mais vendido da categoria`);
   if (Number(p.rating)) out.push(`avaliação ★ ${Number(p.rating).toFixed(1)}`);
   if (Number(p.sales_k)) out.push(`mais de ${Math.floor(Number(p.sales_k))} mil vendidos`);
@@ -83,12 +85,14 @@ function templateCopy(p, channel) {
   if (channel === 'whatsapp') {
     const { desc } = scoreProduct(p);
     const off = desc > 0 && p.original_price;
+    const from = details(p).price_max > Number(p.price);
     return [
       off && desc >= 30 ? pick(WA_HOOKS_DISCOUNT) : pick(WA_HOOKS),
       '',
       `🛍️ *${p.title}*`,
       '',
-      ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 Por: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 Por apenas: *${brl(p.price)}*`]),
+      ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 ${from ? 'A partir de' : 'Por'}: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 ${from ? 'A partir de' : 'Por apenas'}: *${brl(p.price)}*`]),
+      ...(from ? ['📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha'] : []),
       ...waPerks(p),
       '',
       `👉 ${p.affiliate_url || PLACEHOLDER}`,
@@ -164,7 +168,7 @@ const NUMS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', 
 function groupLine(p) {
   const { desc } = scoreProduct(p);
   const d = details(p);
-  return `${p.title} por ${brl(p.price)}${desc > 0 && p.original_price ? ` (−${desc}%)` : ''}${d.free_shipping ? ' · frete grátis' : ''}`;
+  return `${p.title} ${d.price_max > Number(p.price) ? 'a partir de' : 'por'} ${brl(p.price)}${desc > 0 && p.original_price ? ` (−${desc}%)` : ''}${d.free_shipping ? ' · frete grátis' : ''}`;
 }
 
 /** Texto de um post com vários produtos (carrossel no Instagram, lista no WhatsApp). */
@@ -178,7 +182,7 @@ function templateGroupCopy(list, channel) {
         const off = desc > 0 && p.original_price;
         return [
           `${NUMS[i]} *${p.title}*`,
-          `💥 *${brl(p.price)}*${off ? ` ~${brl(p.original_price)}~ (−${desc}%)` : ''}${details(p).free_shipping ? ' · 🚚 frete grátis' : ''}`,
+          `💥 ${details(p).price_max > Number(p.price) ? 'a partir de ' : ''}*${brl(p.price)}*${off ? ` ~${brl(p.original_price)}~ (−${desc}%)` : ''}${details(p).free_shipping ? ' · 🚚 frete grátis' : ''}`,
           `👉 ${p.affiliate_url || PLACEHOLDER}`,
           '',
         ];

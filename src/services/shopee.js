@@ -26,6 +26,8 @@ function toProduct(n) {
     title: String(n.productName || '').slice(0, 300),
     price,
     original_price: original,
+    // variações com preços diferentes: price = menor ("a partir de"), price_max = maior
+    price_max: num(n.priceMax) && price && num(n.priceMax) > price ? num(n.priceMax) : null,
     rating: num(n.ratingStar) ? Math.round(num(n.ratingStar) * 10) / 10 : null,
     sales_k: num(n.sales) ? Math.round((num(n.sales) / 1000) * 10) / 10 : null,
     // A Shopee devolve a taxa como fração (0.07 = 7%)
