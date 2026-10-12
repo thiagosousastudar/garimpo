@@ -1,4 +1,4 @@
-const { HttpError, decrypt } = require('../util');
+const { HttpError, decrypt, encrypt } = require('../util');
 const { createInstagramClient } = require('./instagram');
 
 const EDITABLE = ['draft', 'scheduled', 'failed'];
@@ -216,8 +216,36 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
  * Um ciclo do agendador: publica o que venceu, conclui os Reels em processamento
  * e libera itens que ficaram presos em "publishing" por muito tempo.
  */
+/**
+ * Renova os tokens do login do Instagram (valem 60 dias) com mais de 7 dias, para a publicação não parar
+ * quando vencerem. Tokens do login do Facebook não são renovados por aqui. Falha só é registrada no log.
+ */
+async function refreshInstagramTokens({ pool, cfg, fetchImpl, log = console }) {
+  const { rows } = await pool.query(
+    `select user_id, ig_token_enc from connections where ig_token_enc is not null and updated_at < $1`,
+    [new Date(Date.now() - 7 * 864e5).toISOString()]
+  );
+  let refreshed = 0;
+  const client = createInstagramClient({ cfg, fetchImpl });
+  for (const r of rows) {
+    let token;
+    try { token = decrypt(r.ig_token_enc, cfg.encryptionKey); } catch (_) { continue; }
+    try {
+      const out = await client.refreshToken(token);
+      if (!out) continue;
+      await pool.query('update connections set ig_token_enc = $1, updated_at = now() where user_id = $2',
+        [encrypt(out.token, cfg.encryptionKey), r.user_id]);
+      refreshed++;
+    } catch (e) {
+      log.error(`[agendador] não renovou o token do Instagram (conta ${r.user_id}): ${e.message}`);
+    }
+  }
+  return refreshed;
+}
+
 async function processDue({ pool, cfg, fetchImpl, log = console }) {
   const result = { published: 0, finished: 0, failed: 0, released: 0 };
+  result.tokens_refreshed = await refreshInstagramTokens({ pool, cfg, fetchImpl, log }).catch(() => 0);
 
   const stale = await pool.query(
     `update queue_items set status = 'failed',
@@ -276,4 +304,4 @@ function startScheduler({ pool, cfg, fetchImpl, log = console }) {
   return { stop: () => clearInterval(timer), tick };
 }
 
-module.exports = { publishItem, finishItem, processDue, startScheduler, EDITABLE, validate, credentialsFor, parseMediaItems, MAX_CAROUSEL };
+module.exports = { publishItem, finishItem, processDue, startScheduler, refreshInstagramTokens, EDITABLE, validate, credentialsFor, parseMediaItems, MAX_CAROUSEL };

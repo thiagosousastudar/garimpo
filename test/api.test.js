@@ -18,9 +18,12 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
   return async (url, opts = {}) => {
     const u = new URL(String(url));
     const body = opts.body instanceof URLSearchParams ? Object.fromEntries(opts.body) : null;
-    log.push({ method: opts.method || 'GET', path: u.pathname, query: Object.fromEntries(u.searchParams), body });
+    log.push({ method: opts.method || 'GET', url: String(url), path: u.pathname, query: Object.fromEntries(u.searchParams), body });
     const json = (status, data) => ({ ok: status < 400, status, json: async () => data });
-    if (u.hostname === 'graph.facebook.com') {
+    if (u.hostname === 'graph.instagram.com' && u.pathname === '/refresh_access_token') {
+      return json(200, { access_token: 'IGAA-renovado-' + u.searchParams.get('access_token').slice(-4), token_type: 'bearer', expires_in: 5184000 });
+    }
+    if (u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') {
       if (u.pathname.endsWith('/media_publish')) return json(200, { id: 'MEDIA_1' });
       if (u.pathname.endsWith('/media')) {
         if (failMedia) return json(400, { error: { message: `Invalid token ${body.access_token}` } });
@@ -1037,5 +1040,41 @@ test('carrossel: várias fotos do mesmo produto, vários produtos juntos e víde
     await t.pool.query(`update queue_items set media_type = 'carousel', media_items = $1 where id = $2`, [JSON.stringify(fotos), draft.id]);
     const ch = await api('PATCH', `/api/queue/${draft.id}`, { media_type: 'image', media_url: 'https://img.exemplo.com/9.jpg' });
     assert.deepEqual([ch.data.item.media_type, ch.data.item.media_items], ['image', null]);
+  } finally { t.close(); }
+});
+test('Instagram pelo login do Instagram: chave IG usa graph.instagram.com e é renovada sozinha', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const IGTOKEN = 'IGAAT-token-do-login-do-instagram-123456';
+    const conn = await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000001', access_token: IGTOKEN });
+    assert.equal(conn.status, 200, JSON.stringify(conn.data));
+    const who = t.calls.filter((c) => c.path.endsWith('/17841400000000001')).pop();
+    assert.ok(who, 'conferiu o usuário');
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Oferta', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(r.data.item.status, 'posted', JSON.stringify(r.data));
+    // todas as chamadas de publicação foram para graph.instagram.com
+    const media = t.calls.filter((c) => c.path.endsWith('/media') || c.path.endsWith('/media_publish'));
+    assert.equal(media.length, 2);
+    assert.ok(media.every((c) => c.url.startsWith('https://graph.instagram.com/v')), media.map((c) => c.url).join());
+    assert.ok(who.url.startsWith('https://graph.instagram.com/'));
+
+    // token com mais de 7 dias: o agendador renova e grava o novo, criptografado
+    await t.pool.query(`update connections set updated_at = now() - interval '8 days'`);
+    const { refreshInstagramTokens } = require('../src/services/publisher');
+    const n = await refreshInstagramTokens({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { error() {} } });
+    assert.equal(n, 1);
+    const { decrypt } = require('../src/util');
+    const row = (await t.pool.query('select ig_token_enc from connections')).rows[0];
+    assert.equal(decrypt(row.ig_token_enc, t.cfg.encryptionKey), 'IGAA-renovado-3456');
+    // recém-renovado: não renova de novo
+    assert.equal(await refreshInstagramTokens({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl }), 0);
+
+    // chave do login do Facebook (EAA...) continua em graph.facebook.com e não é renovada por aqui
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    await t.pool.query(`update connections set updated_at = now() - interval '8 days'`);
+    assert.equal(await refreshInstagramTokens({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl }), 0);
   } finally { t.close(); }
 });

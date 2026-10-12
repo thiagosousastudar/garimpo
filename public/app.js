@@ -432,7 +432,12 @@
       '<form class="stack" id="ig-form"><div class="field"><label for="ig-id">ID da conta do Instagram</label><input id="ig-id" name="ig_user_id" type="text" inputmode="numeric" placeholder="17841400000000000" required></div>' +
       '<div class="field"><label for="ig-token">Token de acesso</label><input id="ig-token" name="access_token" type="password" autocomplete="off" required></div>' +
       '<p class="err" id="ig-err" role="alert"></p><button class="btn primary" type="submit">' + (c.connected ? 'Atualizar credenciais' : 'Conectar') + '</button></form></section>' +
-      '<section class="card"><h3>Como conseguir as credenciais</h3><ol class="steps"><li>Transforme o Instagram em conta profissional (comercial ou criador).</li><li>Crie um app em developers.facebook.com e adicione o produto Instagram.</li><li>Autorize a permissão de publicação de conteúdo para a sua conta.</li><li>Copie o ID da conta e gere um token de acesso de longa duração.</li></ol><p class="hint">O token é guardado criptografado no banco e nunca volta para esta tela.</p></section></div>';
+      '<section class="card"><h3>Como conseguir as credenciais</h3><ol class="steps">' +
+      '<li>No app do Instagram, deixe a conta como <b>profissional</b> (Comercial ou Criador de conteúdo).</li>' +
+      '<li>Em developers.facebook.com, crie um app com o caso de uso <b>Gerenciar mensagens e conteúdo no Instagram</b> (API do Instagram).</li>' +
+      '<li>No painel do app, abra <b>Configuração da API com login do Instagram</b> e, em <b>Gerar tokens de acesso</b>, adicione a sua conta do Instagram.</li>' +
+      '<li>Copie o <b>ID da conta do Instagram</b> e o <b>token</b> (começa com IG) para cá.</li></ol>' +
+      '<p class="hint">Não precisa de Página do Facebook. O token é guardado criptografado, nunca volta para esta tela e é renovado sozinho antes de vencer (60 dias).</p></section></div>';
   }
 
   function render() {

@@ -3,8 +3,17 @@
  * Fluxo: cria um "container" de mídia, confere o processamento (vídeo) e publica o container.
  * Requer conta profissional, app da Meta e permissão de publicação (ver README).
  */
+const IG_LOGIN_BASE = 'https://graph.instagram.com';
+
+/**
+ * Tokens do "login do Instagram" (API do Instagram sem Página do Facebook) começam com "IG" e usam
+ * graph.instagram.com; os do login do Facebook ("EAA...") usam graph.facebook.com. Os endpoints de
+ * publicação (/media, /media_publish, status) são os mesmos nos dois.
+ */
+const isInstagramLoginToken = (token) => /^IG/.test(String(token || ''));
+
 function createInstagramClient({ cfg, fetchImpl = fetch }) {
-  const base = `${cfg.graphBase}/${cfg.graphVersion}`;
+  const baseFor = (token) => `${isInstagramLoginToken(token) ? (cfg.igLoginBase || IG_LOGIN_BASE) : cfg.graphBase}/${cfg.graphVersion}`;
 
   function clean(message, token) {
     let m = String(message || 'Erro desconhecido');
@@ -13,7 +22,7 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
   }
 
   async function call(method, path, params, token) {
-    const url = new URL(base + path);
+    const url = new URL(baseFor(token) + path);
     const all = { ...params, access_token: token };
     let res;
     if (method === 'GET') {
@@ -32,6 +41,21 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
   }
 
   return {
+    /**
+     * Renova um token de longa duração do login do Instagram (vale 60 dias; renovável após 24 h de emitido).
+     * Devolve { token, expiresIn } ou null se o token não for desse tipo.
+     */
+    async refreshToken(token) {
+      if (!isInstagramLoginToken(token)) return null;
+      const url = new URL(`${cfg.igLoginBase || IG_LOGIN_BASE}/refresh_access_token`);
+      url.searchParams.set('grant_type', 'ig_refresh_token');
+      url.searchParams.set('access_token', token);
+      const res = await fetchImpl(url.toString(), { method: 'GET' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.access_token) throw new Error(clean(data.error?.message || `Erro HTTP ${res.status}`, token));
+      return { token: data.access_token, expiresIn: Number(data.expires_in) || null };
+    },
+
     /** Confere o token e devolve o @usuário. */
     async whoami({ igUserId, token }) {
       return call('GET', `/${igUserId}`, { fields: 'username' }, token);
@@ -78,4 +102,4 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
   };
 }
 
-module.exports = { createInstagramClient };
+module.exports = { createInstagramClient, isInstagramLoginToken };
