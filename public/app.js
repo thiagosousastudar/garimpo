@@ -570,7 +570,10 @@
         return api('POST', '/api/queue/upload', undefined, fd);
       }
       return loadSupabase().then(function () {
-        var sb = window.supabase.createClient(s.supabase_url, s.anon_key);
+        // um cliente só por página (vários geram aviso do Supabase e podem conflitar)
+        var sb = uploadFile.sb && uploadFile.sbKey === s.supabase_url + s.anon_key ? uploadFile.sb
+          : (uploadFile.sb = window.supabase.createClient(s.supabase_url, s.anon_key, { auth: { persistSession: false, autoRefreshToken: false } }));
+        uploadFile.sbKey = s.supabase_url + s.anon_key;
         return sb.storage.from(s.bucket).uploadToSignedUrl(s.path, s.token, file, { contentType: file.type });
       }).then(function (r) {
         if (r.error) throw new Error(r.error.message || 'Falha no envio do arquivo.');
@@ -815,7 +818,7 @@
     });
   }
 
-  /** Reels: confere a cada 5 s, por até 5 minutos, enquanto a janela estiver aberta. */
+  /** Reels/carrossel com vídeo: confere a cada 15 s, por até 10 minutos, enquanto a janela estiver aberta (o servidor ainda espaça para 1 min). */
   function pollPost(id, tries) {
     setTimeout(function () {
       if (!post || post.itemId !== id || post.status !== 'processing') return;
@@ -826,7 +829,7 @@
         else if (tries > 1) pollPost(id, tries - 1);
         else { post.error = 'O vídeo está demorando. Confira depois na Fila (botão Verificar).'; renderPost(); }
       }).catch(function () { if (tries > 1) pollPost(id, tries - 1); });
-    }, 5000);
+    }, 15000);
   }
 
   Object.assign(actions, {
@@ -892,9 +895,9 @@
       else { body.media_type = 'carousel'; body.media_items = post.media; }
       return api('POST', '/api/queue/post-now', body).then(function (r) {
         post.itemId = r.item.id; post.status = r.item.status === 'posted' ? 'posted' : 'processing'; post.permalink = r.item.permalink;
-        if (post.status === 'posted') toast('Publicado no Instagram'); else pollPost(r.item.id, 60);
+        if (post.status === 'posted') toast('Publicado no Instagram'); else pollPost(r.item.id, 40);
       }).catch(function (e) {
-        post.error = e.message + (e.status === 502 ? ' O post ficou na Fila como "Falhou" para tentar de novo.' : '');
+        post.error = e.message + (e.status === 502 || e.status === 429 ? ' O post ficou na Fila como "Falhou" para tentar de novo.' : '');
       }).finally(function () { if (post) { post.busy = false; post.sending = false; renderPost(); } });
     },
     'post-wa': function () {
@@ -1098,13 +1101,13 @@
     }
   });
 
-  /* Enquanto houver Reels processando e a Fila estiver aberta, confere a cada 20 segundos. */
+  /* Enquanto houver Reels/carrossel processando e a Fila estiver aberta, confere a cada 60 segundos (poupa a cota da Meta). */
   setInterval(function () {
     if (!state.user || state.tab !== 'fila' || document.hidden) return;
     var pend = state.queue.filter(function (q) { return q.status === 'processing'; });
     if (!pend.length) return;
     Promise.all(pend.map(function (q) { return api('POST', '/api/queue/' + q.id + '/check').catch(function () {}); })).then(reload).catch(function () {});
-  }, 20000);
+  }, 60000);
 
   /* ---------- início ---------- */
   // Volta da autorização do Mercado Livre: /?ml=ok#conexoes ou /?ml=erro&msg=...#conexoes

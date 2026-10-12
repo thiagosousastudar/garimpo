@@ -13,7 +13,7 @@ const { createStorage } = require('../src/services/storage');
 
 const TOKEN = 'EAAB-super-secret-token-1234567890';
 
-function makeMockFetch(log, { failMedia = false, videoStates = [], childStates = [], carouselStates = [], shopee = {}, ml = {} } = {}) {
+function makeMockFetch(log, { failMedia = false, videoStates = [], childStates = [], carouselStates = [], shopee = {}, ml = {}, meta = {} } = {}) {
   let child = 0;
   return async (url, opts = {}) => {
     const u = new URL(String(url));
@@ -22,6 +22,9 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     const json = (status, data) => ({ ok: status < 400, status, json: async () => data });
     if (u.hostname === 'graph.instagram.com' && u.pathname === '/refresh_access_token') {
       return json(200, { access_token: 'IGAA-renovado-' + u.searchParams.get('access_token').slice(-4), token_type: 'bearer', expires_in: 5184000 });
+    }
+    if ((u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') && meta.rateLimit) {
+      return json(400, { error: { message: 'Application request limit reached', type: 'OAuthException', code: 4 } });
     }
     if (u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') {
       if (u.pathname.endsWith('/media_publish')) return json(200, { id: 'MEDIA_1' });
@@ -1194,5 +1197,58 @@ test('frete: CEP de referência, frete e total por produto, filtros "grátis" e 
     r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'airfryer grátis' });
     assert.equal(r.data.items[0].shipping_cost, 0);
     assert.equal(opts.ml.shipCalls.length, n);
+  } finally { t.close(); }
+});
+test('cota da Meta: foto não é conferida, vídeo é conferido com pausa e limite atingido faz o app esperar', async () => {
+  const opts = { childStates: [], meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const statusCalls = () => t.calls.filter((c) => c.method === 'GET' && /\/CHILD_\d+$/.test(c.path)).length;
+    const fotos = [1, 2, 3, 4].map((i) => ({ type: 'image', url: `https://img.exemplo.com/${i}.jpg` }));
+
+    // só fotos: nenhuma conferência de item
+    const a = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Fotos', media_type: 'carousel', media_items: fotos });
+    assert.equal(a.data.item.status, 'posted');
+    assert.equal(statusCalls(), 0);
+
+    // fotos + 1 vídeo demorando: confere só o vídeo (1 chamada por rodada, não 5)
+    opts.childStates.push(...Array(20).fill('IN_PROGRESS'));
+    const v = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Com vídeo', media_type: 'carousel',
+      media_items: [...fotos, { type: 'video', url: 'https://cdn.exemplo.com/v.mp4' }] });
+    assert.equal(v.data.item.status, 'processing');
+    const rounds = statusCalls();
+    assert.equal(rounds, t.cfg.videoInlinePolls);
+    assert.match(v.data.item.container_id, /^children:(CHILD_\d+,){4}vCHILD_\d+$/);
+
+    // primeira conferência (ainda processando) agenda a próxima para daqui a 1 min; conferir de novo agora não chama a Meta
+    await api('POST', `/api/queue/${v.data.item.id}/check`);
+    const after1 = statusCalls();
+    assert.equal(after1, rounds + 1);
+    await api('POST', `/api/queue/${v.data.item.id}/check`);
+    assert.equal(statusCalls(), after1);
+
+    // limite da Meta durante a conferência: espera 20 min, com aviso claro, e o agendador não insiste
+    await t.pool.query('update queue_items set next_check_at = null where id = $1', [v.data.item.id]);
+    opts.meta.rateLimit = true;
+    await api('POST', `/api/queue/${v.data.item.id}/check`);
+    let row = (await t.pool.query('select status, error, next_check_at from queue_items where id = $1', [v.data.item.id])).rows[0];
+    assert.equal(row.status, 'processing');
+    assert.match(row.error, /limitou as chamadas/);
+    assert.ok(new Date(row.next_check_at).getTime() - Date.now() > 15 * 60 * 1000);
+    const before = t.calls.length;
+    const { processDue } = require('../src/services/publisher');
+    await processDue({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } });
+    assert.equal(t.calls.length, before, 'agendador não chamou a Meta durante a espera');
+
+    // publicar com o limite atingido: 429 com mensagem clara, item na Fila como Falhou
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'x', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(r.status, 429);
+    assert.match(r.data.error, /limitou as chamadas do app/);
+    const failed = (await api('GET', '/api/queue')).data.items.find((i) => i.status === 'failed');
+    assert.match(failed.error, /Espere cerca de 1 hora/);
   } finally { t.close(); }
 });

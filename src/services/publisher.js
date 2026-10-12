@@ -64,12 +64,32 @@ function validate(item, cfg) {
   return checkMedia(cfg, item.media_url, item.media_type);
 }
 
-/** Situação conjunta dos itens do carrossel: FINISHED (todos prontos), ERROR (algum falhou) ou IN_PROGRESS. */
-async function childrenStatus(client, token, ids) {
-  const all = await Promise.all(ids.map((id) => client.containerStatus({ containerId: id, token })));
+/**
+ * Situação conjunta dos itens do carrossel: FINISHED (todos prontos), ERROR (algum falhou) ou IN_PROGRESS.
+ * Só os vídeos são conferidos: foto fica pronta na criação, e conferir tudo gastava a cota de chamadas da Meta.
+ */
+async function childrenStatus(client, token, children) {
+  const videos = children.filter((c) => c.video);
+  const all = await Promise.all(videos.map((c) => client.containerStatus({ containerId: c.id, token })));
   if (all.some((s) => s === 'ERROR' || s === 'EXPIRED')) return 'ERROR';
   return all.every((s) => s === 'FINISHED' || s === 'PUBLISHED') ? 'FINISHED' : 'IN_PROGRESS';
 }
+
+/**
+ * Itens do carrossel anotados no container_id: "children:123,v456" (v = vídeo). Só vai para "processing"
+ * carrossel com vídeo, então o formato novo sempre tem algum "v"; sem nenhum, é o formato antigo e tudo é conferido.
+ */
+const encodeChildren = (children) => CHILDREN + children.map((c) => (c.video ? 'v' : '') + c.id).join(',');
+function decodeChildren(raw) {
+  const parts = String(raw).slice(CHILDREN.length).split(',').filter(Boolean);
+  const marked = parts.some((s) => s.startsWith('v'));
+  return parts.map((s) => (s.startsWith('v') ? { id: s.slice(1), video: true } : { id: s, video: !marked }));
+}
+
+const RATE_LIMIT_WAIT_MS = 20 * 60 * 1000;
+const RECHECK_MS = 60 * 1000;
+const RATE_LIMIT_MSG = 'O Instagram limitou as chamadas do app (limite por hora da Meta). Espere cerca de 1 hora e tente de novo pela Fila.';
+const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG : e.message);
 
 /**
  * Cria o container do carrossel com os itens prontos e publica quando o Instagram terminar de prepará-lo.
@@ -78,7 +98,7 @@ async function childrenStatus(client, token, ids) {
  * (botão Verificar, janela do Postar agora ou agendador), pelo mesmo caminho do Reels.
  */
 async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, children, caption }) {
-  const carousel = await client.createCarousel({ igUserId, token, children, caption });
+  const carousel = await client.createCarousel({ igUserId, token, children: children.map((c) => (typeof c === 'object' ? c.id : c)), caption });
   for (let i = 0; i < Math.max(1, cfg.videoInlinePolls); i++) {
     const st = await client.containerStatus({ containerId: carousel.id, token });
     if (st === 'FINISHED') {
@@ -88,7 +108,7 @@ async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, chi
     await sleep(cfg.videoPollMs);
   }
   const { rows } = await pool.query(
-    `update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2 returning *`,
+    `update queue_items set status = 'processing', container_id = $1, claimed_at = now(), next_check_at = null where id = $2 returning *`,
     [carousel.id, itemId]
   );
   return rows[0];
@@ -148,11 +168,12 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     if (item.media_type === 'carousel') {
       const children = [];
       for (const m of mediaUrl) {
-        children.push((await client.createContainer({ igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true })).id);
+        const made = await client.createContainer({ igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true });
+        children.push({ id: made.id, video: m.kind === 'video' });
       }
       if (mediaUrl.some((m) => m.kind === 'video')) {
-        await pool.query(`update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2`,
-          [CHILDREN + children.join(','), item.id]);
+        await pool.query(`update queue_items set status = 'processing', container_id = $1, claimed_at = now(), next_check_at = null where id = $2`,
+          [encodeChildren(children), item.id]);
         for (let i = 0; i < cfg.videoInlinePolls; i++) {
           const st = await childrenStatus(client, token, children);
           if (st === 'FINISHED') return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
@@ -181,20 +202,26 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     }
     return (await pool.query('select * from queue_items where id = $1', [item.id])).rows[0];
   } catch (e) {
-    await markFailed(pool, item.id, e.message);
+    await markFailed(pool, item.id, friendly(e));
     if (e instanceof HttpError) throw e;
+    if (e.rateLimited) throw new HttpError(429, RATE_LIMIT_MSG);
     throw new HttpError(502, `Falha ao publicar: ${e.message}`);
   }
 }
 
-/** Confere um Reels que estava em processamento e publica se já estiver pronto. */
+/**
+ * Confere um Reels/carrossel em processamento e publica se já estiver pronto.
+ * Respeita next_check_at: entre uma conferência e outra (1 min, ou 20 min depois de um limite da Meta)
+ * não chama a Meta, para não gastar a cota de chamadas.
+ */
 async function finishItem({ pool, cfg, fetchImpl, item }) {
   const age = Date.now() - new Date(item.claimed_at || 0).getTime();
+  if (item.next_check_at && new Date(item.next_check_at).getTime() > Date.now()) return item;
   try {
     const { igUserId, token } = await credentialsFor(pool, cfg, item.user_id);
     const client = createInstagramClient({ cfg, fetchImpl });
     const isCarousel = String(item.container_id || '').startsWith(CHILDREN);
-    const children = isCarousel ? item.container_id.slice(CHILDREN.length).split(',').filter(Boolean) : [];
+    const children = isCarousel ? decodeChildren(item.container_id) : [];
     const st = isCarousel ? await childrenStatus(client, token, children) : await client.containerStatus({ containerId: item.container_id, token });
     if (st === 'FINISHED') {
       const claim = await pool.query(
@@ -214,8 +241,16 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
       await markFailed(pool, item.id, 'O Instagram não conseguiu processar o vídeo.');
     } else if (age > PROCESSING_TIMEOUT_MS) {
       await markFailed(pool, item.id, 'O vídeo demorou demais para processar. Tente publicar de novo.');
+    } else {
+      await pool.query('update queue_items set next_check_at = $1 where id = $2', [new Date(Date.now() + RECHECK_MS).toISOString(), item.id]);
     }
   } catch (e) {
+    if (e.rateLimited) {
+      // limite da Meta: não insiste; tenta de novo daqui a 20 minutos (o container vale 24 h)
+      await pool.query('update queue_items set error = $1, next_check_at = $2 where id = $3 and status = $4',
+        [RATE_LIMIT_MSG, new Date(Date.now() + RATE_LIMIT_WAIT_MS).toISOString(), item.id, 'processing']);
+      throw e;
+    }
     if (age > PROCESSING_TIMEOUT_MS) await markFailed(pool, item.id, e.message);
     else await pool.query('update queue_items set error = $1 where id = $2 and status = $3', [e.message, item.id, 'processing']);
     throw e;
@@ -282,7 +317,9 @@ async function processDue({ pool, cfg, fetchImpl, log = console }) {
     }
   }
 
-  const proc = await pool.query(`select * from queue_items where status = 'processing' order by claimed_at limit 10`);
+  const proc = await pool.query(
+    `select * from queue_items where status = 'processing' and (next_check_at is null or next_check_at <= now())
+       order by claimed_at limit 10`);
   for (const item of proc.rows) {
     try {
       const row = await finishItem({ pool, cfg, fetchImpl, item });

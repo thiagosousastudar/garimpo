@@ -12,6 +12,14 @@ const IG_LOGIN_BASE = 'https://graph.instagram.com';
  */
 const isInstagramLoginToken = (token) => /^IG/.test(String(token || ''));
 
+/**
+ * Limite de chamadas da Meta (por app ou por usuário, janela de 1 hora): códigos 4, 17, 32, 613
+ * ou mensagens "request limit reached". Repetir só piora; é preciso esperar.
+ */
+function isRateLimit(err, status) {
+  return [4, 17, 32, 613].includes(Number(err?.code)) || /request limit|rate limit|too many calls/i.test(String(err?.message || '')) || status === 429;
+}
+
 function createInstagramClient({ cfg, fetchImpl = fetch }) {
   const baseFor = (token) => `${isInstagramLoginToken(token) ? (cfg.igLoginBase || IG_LOGIN_BASE) : cfg.graphBase}/${cfg.graphVersion}`;
 
@@ -35,7 +43,10 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.error) {
-      throw new Error(clean(data.error?.message || `Erro HTTP ${res.status}`, token));
+      const e = new Error(clean(data.error?.message || `Erro HTTP ${res.status}`, token));
+      e.code = data.error?.code;
+      e.rateLimited = isRateLimit(data.error, res.status);
+      throw e;
     }
     return data;
   }
@@ -102,4 +113,4 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
   };
 }
 
-module.exports = { createInstagramClient, isInstagramLoginToken };
+module.exports = { createInstagramClient, isInstagramLoginToken, isRateLimit };
