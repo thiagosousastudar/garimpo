@@ -30,6 +30,7 @@ function toProduct(n) {
     sales_k: num(n.sales) ? Math.round((num(n.sales) / 1000) * 10) / 10 : null,
     // A Shopee devolve a taxa como fração (0.07 = 7%)
     commission_pct: com === null ? null : Math.round((com <= 1 ? com * 100 : com) * 100) / 100,
+    commission_auto: com !== null,
     product_url: n.productLink || null,
     affiliate_url: n.offerLink || null,
     image_url: n.imageUrl || null,

@@ -41,7 +41,19 @@ function fromItem(it, defaultCommission) {
  * Produto de catálogo (/products/search). A busca de catálogo não traz preço: ele vem da oferta mais barata
  * entre os vendedores do produto (/products/{id}/items). "rank" é a posição na lista de mais vendidos da categoria.
  */
-function fromCatalog(p, offer, defaultCommission, rank = null) {
+/**
+ * Comissão de afiliado para a categoria principal: a da tabela do usuário, senão a padrão.
+ * O Mercado Livre não informa a comissão pela API; ela é por categoria, no painel de Afiliados.
+ */
+function commissionRule(table, fallback) {
+  return (root) => {
+    const v = root && table ? table[root.id] : undefined;
+    return v !== undefined && v !== null && v !== '' ? Number(v) : fallback ?? null;
+  };
+}
+
+function fromCatalog(p, offer, commissionFor, rank = null, root = null) {
+  const commission = typeof commissionFor === 'function' ? commissionFor(root) : commissionFor ?? null;
   const price = num(offer?.price) ?? num(p.buy_box_winner?.price);
   const orig = num(offer?.original_price) ?? num(p.buy_box_winner?.original_price);
   const images = (p.pictures || []).map((x) => bigImage(x.secure_url || x.url)).filter(Boolean);
@@ -54,7 +66,10 @@ function fromCatalog(p, offer, defaultCommission, rank = null) {
     original_price: orig && orig > price ? orig : null,
     rating: null,
     sales_k: null,
-    commission_pct: defaultCommission ?? null,
+    commission_pct: commission,
+    commission_auto: commission !== null,
+    category: root?.name || null,
+    category_id: root?.id || null,
     product_url: p.permalink || (p.id ? `https://www.mercadolivre.com.br/p/${p.id}` : null),
     affiliate_url: null,
     image_url: images[0] || null,
@@ -71,6 +86,9 @@ function fromCatalog(p, offer, defaultCommission, rank = null) {
     sellers: offer?.sellers || null,
   };
 }
+
+// Categoria -> categoria principal ({ id, name }). Dado público e estável: guardado em memória.
+const rootCache = new Map();
 
 /** Executa fn em cada item com no máximo "limit" chamadas ao mesmo tempo. */
 async function mapLimit(list, limit, fn) {
@@ -112,7 +130,8 @@ function oauth({ clientId, clientSecret, fetchImpl = fetch }) {
   };
 }
 
-function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl = fetch }) {
+function createMercadoLivreClient({ token, defaultCommission = null, commissionTable = null, fetchImpl = fetch }) {
+  const commissionFor = commissionRule(commissionTable, defaultCommission);
   async function get(path, params = {}) {
     const u = new URL(API + path);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
@@ -138,12 +157,29 @@ function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl =
     return { ...best, sellers: Number(d.paging?.total) || offers.length };
   }
 
+  /** Categoria principal de uma categoria qualquer (ex.: "De Ar" -> Eletrodomésticos). Falha vira null. */
+  function rootOf(categoryId) {
+    if (!categoryId) return Promise.resolve(null);
+    if (!rootCache.has(categoryId)) {
+      const p = get(`/categories/${categoryId}`)
+        .then((c) => { const r = (c.path_from_root || [])[0]; return r ? { id: r.id, name: r.name } : null; })
+        .catch(() => { rootCache.delete(categoryId); return null; });
+      rootCache.set(categoryId, p);
+    }
+    return rootCache.get(categoryId);
+  }
+
+  /** Produto de catálogo completo: oferta + categoria principal (para a comissão). */
+  async function catalogItem(prod, offer, rank = null) {
+    return fromCatalog(prod, offer, commissionFor, rank, await rootOf(offer.category_id));
+  }
+
   /** Mais vendidos de uma categoria (até 20, em ordem), já com detalhes e a oferta mais barata. */
   async function bestSellersOf(categoryId) {
     const h = await get(`/highlights/MLB/category/${categoryId}`);
     const top = (h.content || []).filter((c) => c.type === 'PRODUCT');
     const full = await mapLimit(top, 8, (c) => Promise.all([get(`/products/${c.id}`), bestOffer(c.id)])
-      .then(([prod, offer]) => (offer ? fromCatalog(prod, offer, defaultCommission, Number(c.position) || null) : null))
+      .then(([prod, offer]) => (offer ? catalogItem(prod, offer, Number(c.position) || null) : null))
       .catch(() => null));
     return full.filter(Boolean);
   }
@@ -204,7 +240,7 @@ function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl =
       const seen = new Set(top.map((x) => x.external_id));
       const products = (data.results || []).filter((prod) => !seen.has(prod.id));
       const offers = await mapLimit(products, 8, (prod) => bestOffer(prod.id).catch(() => null));
-      const rest = products.map((prod, i) => (offers[i] ? fromCatalog(prod, offers[i], defaultCommission) : null)).filter(Boolean);
+      const rest = (await Promise.all(products.map((prod, i) => (offers[i] ? catalogItem(prod, offers[i]) : null)))).filter(Boolean);
       const total = Number(data.paging?.total) || 0;
       return { items: [...top, ...rest], hasMore: offset + size < Math.min(total, 1000) };
     },
@@ -218,7 +254,7 @@ function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl =
       if (!/^MLB\d+$/.test(id)) throw new Error('ID do produto do Mercado Livre inválido.');
       try {
         const [prod, offer] = await Promise.all([get(`/products/${id}`), bestOffer(id)]);
-        return offer ? fromCatalog(prod, offer, defaultCommission) : null;
+        return offer ? await catalogItem(prod, offer) : null;
       } catch (e) {
         if (e.status !== 404) throw e;
       }
@@ -234,4 +270,4 @@ function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl =
   };
 }
 
-module.exports = { createMercadoLivreClient, mercadoLivreOAuth: oauth, bigImage };
+module.exports = { createMercadoLivreClient, mercadoLivreOAuth: oauth, bigImage, commissionRule };

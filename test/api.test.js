@@ -69,7 +69,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, 
         ], paging: { total: 2 } });
       }
       if (u.pathname === '/products/MLB9001/items') {
-        return json(200, { paging: { total: 2 }, results: [{ item_id: 'MLB5', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }] });
+        return json(200, { paging: { total: 2 }, results: [{ item_id: 'MLB5', category_id: 'MLB456045', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }] });
       }
       if (u.pathname === '/products/MLB9002/items') return json(200, { results: [] });
       if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }, { url: 'http://http2.mlstatic.com/D_9001b-F.jpg' }], main_features: [{ text: 'Capacidade de 4,2 L para porções individuais.' }, { text: 'Potência de 1400 W.' }], attributes: [{ id: 'BRAND', value_name: 'Elgin' }] });
@@ -77,6 +77,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, 
       if (u.pathname === '/sites/MLB/domain_discovery/search') return json(200, [{ category_id: 'MLB456045' }]);
       if (u.pathname.startsWith('/highlights/MLB/category/')) return json(200, { content: [{ id: 'MLB9001', position: 3, type: 'PRODUCT' }, { id: 'MLB7777', position: 4, type: 'USER_PRODUCT' }] });
       if (u.pathname === '/trends/MLB' || u.pathname.startsWith('/trends/MLB/')) return json(200, [{ keyword: 'air fryer' }, { keyword: u.pathname.length > 11 ? 'trend da categoria' : 'fone bluetooth' }]);
+      if (u.pathname === '/categories/MLB456045') return json(200, { id: 'MLB456045', path_from_root: [{ id: 'MLB5726', name: 'Eletrodomésticos' }, { id: 'MLB456045', name: 'De Ar' }] });
       if (u.pathname === '/sites/MLB/categories') return json(200, [{ id: 'MLB5726', name: 'Eletrodomésticos' }, { id: 'MLB1648', name: 'Informática' }]);
       if (u.pathname.startsWith('/items/')) return json(200, item(u.pathname.split('/')[2], ml.itemPrice || 229.9));
     }
@@ -909,5 +910,57 @@ test('Mercado Livre profissional: tendências, categorias, selos, galeria, texto
     const api2 = t.client();
     await signup(api2, 'b@exemplo.com');
     assert.equal((await api2('GET', `/api/products/${prod.id}/history`)).status, 404);
+  } finally { t.close(); }
+});
+test('comissão: Shopee vem da loja; Mercado Livre pela tabela por categoria, sem sobrescrever a digitada', async () => {
+  const opts = { ml: { search403: true } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/connections/mercadolivre', { client_id: '1234567890123', client_secret: 'segredo-do-ml-abc' });
+    const auth = await api('GET', '/api/connections/mercadolivre/authorize');
+    await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=${new URL(auth.location).searchParams.get('state')}`);
+
+    // sem padrão e sem tabela: comissão desconhecida, mas a categoria principal já vem
+    let r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    let it = r.data.items[0];
+    assert.deepEqual([it.commission_pct, it.category, it.category_id, it.earn_per_sale], [null, 'Eletrodomésticos', 'MLB5726', 0]);
+
+    // salva sem comissão; depois a tabela preenche e recalcula o produto salvo
+    const saved = (await api('POST', '/api/garimpo/save', { items: [it] })).data.products[0];
+    assert.equal(saved.commission_pct, null);
+    assert.equal(saved.category, 'Eletrodomésticos');
+    assert.equal((await api('PUT', '/api/connections/mercadolivre/commissions', { table: { MLB5726: 'x' } })).status, 400);
+    assert.equal((await api('PUT', '/api/connections/mercadolivre/commissions', { table: { '../x': 5 } })).status, 400);
+    const tb = await api('PUT', '/api/connections/mercadolivre/commissions', { table: { MLB5726: '6,5', MLB1648: '' } });
+    assert.equal(tb.status, 200, JSON.stringify(tb.data));
+    assert.deepEqual([tb.data.table, tb.data.updated], [{ MLB5726: 6.5 }, 1]);
+    let prod = (await api('GET', '/api/products')).data.products[0];
+    assert.deepEqual([prod.commission_pct, prod.earn_per_sale], [6.5, 19.49]);
+    assert.deepEqual((await api('GET', '/api/connections/marketplaces')).data.ML.commission_table, { MLB5726: 6.5 });
+
+    // busca nova já usa a tabela
+    r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    assert.equal(r.data.items[0].commission_pct, 6.5);
+
+    // editar outro campo (o formulário manda a comissão igual) não trava a comissão automática
+    await api('PATCH', `/api/products/${prod.id}`, { affiliate_url: 'https://mercadolivre.com/sec/xyz', commission_pct: '6,5' });
+    await api('PUT', '/api/connections/mercadolivre/commissions', { table: { MLB5726: 7 } });
+    prod = (await api('GET', '/api/products')).data.products[0];
+    assert.equal(prod.commission_pct, 7);
+
+    // comissão digitada pelo usuário vale sobre a tabela e sobre o "atualizar preço"
+    await api('PATCH', `/api/products/${prod.id}`, { commission_pct: '12' });
+    const upd = await api('PUT', '/api/connections/mercadolivre/commissions', { table: { MLB5726: 5 } });
+    assert.equal(upd.data.updated, 0);
+    const ref = await api('POST', `/api/products/${prod.id}/refresh`);
+    assert.equal(ref.data.product.commission_pct, 12);
+
+    // comissão padrão vale para categorias sem valor na tabela
+    await api('PUT', '/api/connections/mercadolivre/commissions', { table: {} });
+    await api('PUT', '/api/connections/mercadolivre', { default_commission: '4' });
+    r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    assert.equal(r.data.items[0].commission_pct, 4);
   } finally { t.close(); }
 });

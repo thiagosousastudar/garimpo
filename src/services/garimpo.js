@@ -1,7 +1,8 @@
 const { HttpError, encrypt, decrypt } = require('../util');
 const { scoreProduct } = require('./score');
 const { createShopeeClient } = require('./shopee');
-const { createMercadoLivreClient, mercadoLivreOAuth } = require('./mercadolivre');
+const { createMercadoLivreClient, mercadoLivreOAuth, commissionRule } = require('./mercadolivre');
+const { parseExtras, mergeExtras } = require('./extras');
 
 const NAMES = { ML: 'Mercado Livre', SH: 'Shopee' };
 
@@ -65,7 +66,39 @@ async function clientFor({ pool, cfg, fetchImpl, uid, marketplace }) {
   }
   const token = await mercadoLivreToken({ pool, cfg, fetchImpl, conn });
   const com = conn.default_commission === null ? null : Number(conn.default_commission);
-  return createMercadoLivreClient({ token, defaultCommission: com, fetchImpl });
+  return createMercadoLivreClient({ token, defaultCommission: com, commissionTable: commissionTableOf(conn), fetchImpl });
+}
+
+/** Tabela de comissão do Mercado Livre por categoria principal: { "MLB5726": 6, ... }. */
+function commissionTableOf(conn) {
+  if (!conn || !conn.commission_table) return {};
+  try {
+    const t = JSON.parse(conn.commission_table);
+    return t && typeof t === 'object' ? t : {};
+  } catch (_) { return {}; }
+}
+
+/**
+ * Reaplica a tabela (e a comissão padrão) nos produtos do Mercado Livre já salvos.
+ * Só mexe nos produtos cuja comissão foi preenchida pelo app ou está vazia; a que o usuário digitou fica.
+ */
+async function applyCommissionTable(pool, uid) {
+  const conn = await loadConnection(pool, uid, 'ML');
+  if (!conn) return 0;
+  const rule = commissionRule(commissionTableOf(conn), conn.default_commission === null ? null : Number(conn.default_commission));
+  const { rows } = await pool.query(`select id, commission_pct, extras from products where user_id = $1 and marketplace = 'ML'`, [uid]);
+  let updated = 0;
+  for (const p of rows) {
+    const e = parseExtras(p.extras);
+    if (p.commission_pct !== null && !e.commission_auto) continue;
+    const next = rule(e.category_id ? { id: e.category_id } : null);
+    const cur = p.commission_pct === null ? null : Number(p.commission_pct);
+    if (next === cur) continue;
+    await pool.query('update products set commission_pct = $1, extras = $2 where id = $3',
+      [next, mergeExtras(p.extras, { commission_auto: next !== null }), p.id]);
+    updated++;
+  }
+  return updated;
 }
 
 const SORTERS = {
@@ -164,4 +197,4 @@ async function freshData({ pool, cfg, fetchImpl, uid, product }) {
   return item;
 }
 
-module.exports = { externalIdFrom, search, trends, categories, enrich, freshData, clientFor, saveMercadoLivreTokens, loadConnection, NAMES };
+module.exports = { externalIdFrom, search, trends, categories, enrich, freshData, clientFor, saveMercadoLivreTokens, loadConnection, applyCommissionTable, commissionTableOf, NAMES };

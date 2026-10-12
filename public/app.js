@@ -94,7 +94,7 @@
     Promise.all([
       api('GET', '/api/garimpo/trends').then(function (r) { g.trends = r.trends; }).catch(function () {}),
       api('GET', '/api/garimpo/categories').then(function (r) { g.cats = r.categories; }).catch(function () {}),
-    ]).then(function () { if (state.tab === 'garimpar') render(); });
+    ]).then(function () { if (state.tab === 'garimpar' || state.tab === 'conexoes') render(); });
   }
   function reload() { return loadAll().then(render); }
 
@@ -144,7 +144,11 @@
     return '<select id="' + id + '" name="' + name + '" aria-label="' + label + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
   }
   function statsBlock(p) {
-    return '<div class="stats"><div><span>Comissão</span><b class="num">' + (p.commission_pct != null ? p.commission_pct + '%' : '—') + '</b></div><div><span>Ganho/venda</span><b class="num">' + brl(p.earn_per_sale) + '</b></div><div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>';
+    var hasCom = p.commission_pct != null;
+    var fix = p.marketplace === 'ML' ? '<button class="link small" data-tab="conexoes" title="Preencha a tabela de comissão por categoria em Conexões">definir</button>' : '—';
+    return '<div class="stats"><div><span>Comissão</span><b class="num">' + (hasCom ? p.commission_pct + '%' : fix) + '</b></div>' +
+      '<div><span>Você ganha</span><b class="num earn">' + (hasCom ? brl(p.earn_per_sale) : '—') + '</b><small class="hint">' + (hasCom ? 'por venda' : 'sem comissão') + '</small></div>' +
+      '<div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>';
   }
   /** Selos da oferta: ranking, frete grátis, Full, loja oficial, nº de vendedores. */
   function badges(p) {
@@ -356,6 +360,24 @@
       '<section class="card panel" style="margin-top:12px"><h3>Lançamentos recentes</h3>' + (rows ? '<div class="tablewrap"><table><thead><tr><th>Dia</th><th>Produto</th><th>Canal</th><th class="r">Cliques</th><th class="r">Pedidos</th><th class="r">Comissão</th><th>Situação</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="hint">Nada lançado ainda. Importe o relatório do painel de afiliados ou use Novo lançamento.</p>') + '</section>';
   }
 
+  /**
+   * Tabela de comissão do Mercado Livre por categoria principal. A API não informa a comissão de afiliado;
+   * o usuário copia do painel de Afiliados uma vez e o app aplica em cada produto pela categoria dele.
+   */
+  function commissionTableCard(ml) {
+    var cats = state.g.cats;
+    if (!cats) return '<p class="hint">Carregando as categorias do Mercado Livre…</p>';
+    var t = ml.commission_table || {};
+    var filled = Object.keys(t).length;
+    var rows = cats.map(function (c) {
+      return '<label class="comrow"><span>' + esc(c.name) + '</span><input type="text" inputmode="decimal" name="' + esc(c.id) + '" value="' + esc(t[c.id] == null ? '' : String(t[c.id]).replace('.', ',')) + '" placeholder="' + esc(ml.default_commission == null ? '—' : String(ml.default_commission).replace('.', ',')) + '" aria-label="Comissão em ' + esc(c.name) + ' (%)"><em>%</em></label>';
+    }).join('');
+    return '<details class="comtable"' + (filled ? '' : ' open') + '><summary><b>Comissão por categoria</b> <span class="hint">(' + filled + ' de ' + cats.length + ' preenchidas)</span></summary>' +
+      '<p class="hint">O Mercado Livre não informa a comissão de afiliado pela API. Copie os percentuais do seu painel de Afiliados do Mercado Livre: o app descobre a categoria de cada produto e calcula quanto você ganha por venda. Em branco = usa a comissão padrão.</p>' +
+      '<form id="mlcom-form" class="stack"><div class="comgrid">' + rows + '</div><p class="err" id="mlcom-err" role="alert"></p>' +
+      '<div class="row end"><button class="btn primary" type="submit">Salvar comissões</button></div></form></details>';
+  }
+
   function viewConexoes() {
     var c = state.conn || {};
     var m = state.mkts || { SH: {}, ML: {} };
@@ -378,7 +400,8 @@
       '<li>Em <b>URI de redirect</b>, cole exatamente:<br><code class="copyable">' + esc(ml.redirect_uri || '') + '</code></li>' +
       '<li>Marque as permissões de leitura e <b>offline_access</b> (para não precisar autorizar de novo a cada 6 horas).</li>' +
       '<li>Copie o <b>Client ID</b> e a <b>Client Secret</b> para cá e clique em Salvar e autorizar. Na página do Mercado Livre, aceite.</li>' +
-      '<li>A comissão padrão é usada na nota de prioridade, porque a API não informa a comissão de afiliado. Confira a sua no portal de Afiliados.</li></ol></section>';
+      '<li>A comissão padrão vale para as categorias que você não preencher na tabela abaixo.</li></ol>' +
+      (ml.authorized ? commissionTableCard(ml) : '') + '</section>';
     return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar e Instagram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard +
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
@@ -820,12 +843,19 @@
       var btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true; btn.textContent = 'Testando…';
       api('PUT', '/api/connections/shopee', s).then(function () { toast('Shopee conectada'); return reload(); })
         .catch(function (err) { btn.disabled = false; btn.textContent = 'Salvar e testar'; var el = $('#sh-err'); if (el) el.textContent = err.message; });
+    } else if (e.target.id === 'mlcom-form') {
+      e.preventDefault();
+      var table = Object.fromEntries(new FormData(e.target).entries());
+      api('PUT', '/api/connections/mercadolivre/commissions', { table: table }).then(function (r) {
+        toast('Comissões salvas' + (r.updated ? '. ' + r.updated + ' produto' + (r.updated === 1 ? '' : 's') + ' recalculado' + (r.updated === 1 ? '' : 's') : ''));
+        return reload();
+      }).catch(function (err) { var el = $('#mlcom-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'ml-form') {
       e.preventDefault();
       var mfd = Object.fromEntries(new FormData(e.target).entries());
       api('PUT', '/api/connections/mercadolivre', mfd).then(function (r) {
         if (r.authorize) { window.location.href = r.authorize; return null; }
-        toast('Comissão padrão salva'); return reload();
+        toast('Comissão padrão salva' + (r.updated ? '. ' + r.updated + ' produto(s) recalculado(s)' : '')); return reload();
       }).catch(function (err) { var el = $('#ml-err'); if (el) el.textContent = err.message; });
     }
   });

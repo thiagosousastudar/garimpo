@@ -70,14 +70,20 @@ async function priceStats(pool, uid, products) {
 /** Atualiza um produto com os dados atuais da loja e registra o preço no histórico. */
 async function refreshOne({ pool, cfg, fetchImpl, uid, cur }) {
   const fresh = await freshData({ pool, cfg, fetchImpl, uid, product: cur });
+  const old = parseExtras(cur.extras);
+  // Comissão: a da Shopee vem da loja; a do Mercado Livre vem da tabela por categoria. Em ambos os casos,
+  // só substitui se a atual estiver vazia ou tiver sido preenchida pelo app (a digitada pelo usuário fica).
+  const auto = cur.commission_pct === null || old.commission_auto;
+  const takeCommission = fresh.commission_pct !== null && fresh.commission_pct !== undefined && auto;
+  const { commission_auto: _ignored, ...freshExtras } = fresh;
   const sets = ['price = $3', 'original_price = $4', 'price_checked_at = now()', 'extras = $5'];
-  const vals = [fresh.price, fresh.original_price, mergeExtras(cur.extras, fresh)];
-  // Só sobrescreve o que a loja informou; a comissão e a avaliação digitadas pelo usuário ficam se a loja não mandar.
-  for (const k of ['rating', 'sales_k', 'commission_pct']) {
-    if (fresh[k] !== null && fresh[k] !== undefined && !(k === 'commission_pct' && cur.marketplace === 'ML')) {
-      vals.push(fresh[k]); sets.push(`${k} = $${vals.length + 2}`);
-    }
+  const vals = [fresh.price, fresh.original_price,
+    mergeExtras(cur.extras, { ...freshExtras, ...(takeCommission ? { commission_auto: true } : {}) })];
+  for (const k of ['rating', 'sales_k']) {
+    if (fresh[k] !== null && fresh[k] !== undefined) { vals.push(fresh[k]); sets.push(`${k} = $${vals.length + 2}`); }
   }
+  if (takeCommission) { vals.push(fresh.commission_pct); sets.push(`commission_pct = $${vals.length + 2}`); }
+  if (!cur.category && fresh.category) { vals.push(fresh.category); sets.push(`category = $${vals.length + 2}`); }
   if (!cur.image_url && fresh.image_url) { vals.push(fresh.image_url); sets.push(`image_url = $${vals.length + 2}`); }
   const { rows } = await pool.query(`update products set ${sets.join(', ')} where id = $1 and user_id = $2 returning *`, [cur.id, uid, ...vals]);
   await recordPrice(pool, cur.id, fresh.price, fresh.original_price);
@@ -244,6 +250,12 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     }
     const priceChanged = (d.price !== undefined && Number(d.price) !== Number(cur.price))
       || (d.original_price !== undefined && Number(d.original_price) !== Number(cur.original_price));
+    // comissão digitada pelo usuário passa a valer sobre a da tabela/loja
+    const comChanged = d.commission_pct !== undefined
+      && (d.commission_pct === null ? cur.commission_pct !== null : Number(d.commission_pct) !== Number(cur.commission_pct));
+    if (comChanged && parseExtras(cur.extras).commission_auto) {
+      extra.extras = mergeExtras(cur.extras, { commission_auto: false });
+    }
     const all = [...cols.map((c) => [c, d[c]]), ...Object.entries(extra)];
     const sets = all.map(([c], i) => `${c} = $${i + 3}`).concat(priceChanged ? ['price_checked_at = now()'] : []).join(', ');
     let rows;

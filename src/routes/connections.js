@@ -4,7 +4,7 @@ const { HttpError, encrypt, decrypt, parseNum } = require('../util');
 const { createInstagramClient } = require('../services/instagram');
 const { createShopeeClient } = require('../services/shopee');
 const { mercadoLivreOAuth } = require('../services/mercadolivre');
-const { saveMercadoLivreTokens } = require('../services/garimpo');
+const { saveMercadoLivreTokens, applyCommissionTable, commissionTableOf } = require('../services/garimpo');
 
 function connectionRoutes({ pool, cfg, fetchImpl }) {
   const r = express.Router();
@@ -63,7 +63,7 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
 
   r.get('/marketplaces', async (req, res) => {
     const { rows } = await pool.query(
-      'select marketplace, app_id, access_token_enc, refresh_token_enc, token_expires_at, default_commission from marketplace_connections where user_id = $1',
+      'select marketplace, app_id, access_token_enc, refresh_token_enc, token_expires_at, default_commission, commission_table from marketplace_connections where user_id = $1',
       [req.uid]
     );
     const by = Object.fromEntries(rows.map((x) => [x.marketplace, x]));
@@ -75,6 +75,7 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
         authorized: Boolean(ml && ml.access_token_enc && (ml.refresh_token_enc || new Date(ml.token_expires_at) > new Date())),
         app_id: ml?.app_id || null,
         default_commission: ml?.default_commission === null || ml?.default_commission === undefined ? null : Number(ml.default_commission),
+        commission_table: commissionTableOf(ml),
         redirect_uri: mlRedirect(),
       },
     });
@@ -114,7 +115,7 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
     const cur = (await pool.query(`select app_id from marketplace_connections where user_id = $1 and marketplace = 'ML'`, [req.uid])).rows[0];
     if (!clientId && cur) {
       await pool.query(`update marketplace_connections set default_commission = $1, updated_at = now() where user_id = $2 and marketplace = 'ML'`, [com, req.uid]);
-      return res.json({ ok: true });
+      return res.json({ ok: true, updated: await applyCommissionTable(pool, req.uid) });
     }
     if (!/^\d{5,25}$/.test(clientId)) throw new HttpError(400, 'O Client ID do Mercado Livre deve ter apenas números.');
     if (secret.length < 10) throw new HttpError(400, 'Informe a Client Secret do Mercado Livre.');
@@ -126,6 +127,30 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
       [req.uid, clientId, encrypt(secret, cfg.encryptionKey), com]
     );
     res.json({ ok: true, authorize: '/api/connections/mercadolivre/authorize' });
+  });
+
+  /**
+   * Comissão de afiliado do Mercado Livre por categoria principal ({ "MLB5726": 6, ... }; vazio = usa a padrão).
+   * Ao salvar, reaplica nos produtos já salvos cuja comissão foi preenchida pelo app.
+   */
+  r.put('/mercadolivre/commissions', async (req, res) => {
+    const input = req.body?.table;
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'Envie a tabela de comissões.');
+    const table = {};
+    for (const [cat, v] of Object.entries(input)) {
+      if (!/^MLB\d+$/.test(cat)) throw new HttpError(400, 'Categoria inválida na tabela.');
+      if (v === '' || v === null || v === undefined) continue;
+      const n = parseNum(v);
+      if (n === null || n < 0 || n > 100) throw new HttpError(400, 'Cada comissão deve estar entre 0 e 100%.');
+      table[cat] = n;
+    }
+    if (Object.keys(table).length > 200) throw new HttpError(400, 'Tabela grande demais.');
+    const out = await pool.query(
+      `update marketplace_connections set commission_table = $1, updated_at = now() where user_id = $2 and marketplace = 'ML' returning user_id`,
+      [JSON.stringify(table), req.uid]
+    );
+    if (!out.rows.length) throw new HttpError(400, 'Conecte o Mercado Livre primeiro.');
+    res.json({ ok: true, table, updated: await applyCommissionTable(pool, req.uid) });
   });
 
   const OAUTH_COOKIE = 'ml_oauth';
