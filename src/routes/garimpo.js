@@ -1,7 +1,7 @@
 const express = require('express');
-const { HttpError, parseNum } = require('../util');
+const { HttpError, parseNum, parseCsv } = require('../util');
 const { search, trends, categories, enrich, clientFor, externalIdFrom } = require('../services/garimpo');
-const { previewLink } = require('../services/linkpreview');
+const { previewLink, fromShopeeBatch, fillImages } = require('../services/linkpreview');
 const { scoreProduct } = require('../services/score');
 const { serializeExtras } = require('../services/extras');
 const { parseBody, insertProduct, mapProduct } = require('./products');
@@ -70,6 +70,27 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     res.json({ items: out });
   });
 
+  /**
+   * Planilha "Obter link em massa" da Shopee (até 200 linhas): já traz nome, preço, comissão, vendas e o link
+   * de afiliado; a foto vem da prévia de cada link. Devolve para conferir, sem salvar.
+   */
+  r.post('/from-shopee-csv', async (req, res) => {
+    if (typeof req.body !== 'string') throw new HttpError(400, 'Envie a planilha (CSV).');
+    const items = fromShopeeBatch(parseCsv(req.body));
+    if (!items) throw new HttpError(400, 'Esta não parece a planilha "Obter link em massa" da Shopee (faltam as colunas Item Name e Offer Link).');
+    if (!items.length) throw new HttpError(400, 'A planilha está vazia.');
+    if (items.length > 200) throw new HttpError(400, 'Envie no máximo 200 produtos por vez.');
+    await fillImages(items, fetchImpl);
+    for (const it of items) {
+      if (it.external_id) {
+        const { rows } = await pool.query('select id from products where user_id = $1 and marketplace = $2 and external_id = $3', [req.uid, 'SH', it.external_id]);
+        it.saved_id = rows[0]?.id || null;
+      }
+      if (it.price) Object.assign(it, scoreProduct(it));
+    }
+    res.json({ items });
+  });
+
   r.get('/categories', async (req, res) => {
     res.json({ categories: await categories({ pool, cfg, fetchImpl, uid: req.uid }) });
   });
@@ -78,7 +99,7 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
   r.post('/save', async (req, res) => {
     const list = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!list.length) throw new HttpError(400, 'Selecione pelo menos um produto.');
-    if (list.length > 50) throw new HttpError(400, 'Salve no máximo 50 produtos por vez.');
+    if (list.length > 200) throw new HttpError(400, 'Salve no máximo 200 produtos por vez.');
     const saved = [];
     let skipped = 0;
     const errors = [];
@@ -89,6 +110,7 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
           title: it.title, marketplace: it.marketplace, category: it.category, price: it.price,
           original_price: it.original_price, rating: it.rating, sales_k: it.sales_k, commission_pct: it.commission_pct,
           product_url: it.product_url, affiliate_url: it.affiliate_url, image_url: it.image_url,
+          notes: it.shop ? `Loja: ${it.shop}` : undefined,
         });
         const ext = EXTERNAL_ID[d.marketplace]?.test(String(it.external_id || '')) ? String(it.external_id) : null;
         saved.push(mapProduct(await insertProduct(pool, req.uid, d, ext, serializeExtras(it))));

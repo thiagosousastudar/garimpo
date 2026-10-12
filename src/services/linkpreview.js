@@ -107,4 +107,66 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, externalId
   };
 }
 
-module.exports = { previewLink, marketplaceOf, shopeeIds };
+/** "10mil+" -> 10, "2,5mil" -> 2.5, "66" -> 0.066 (em milhares, como sales_k). */
+function salesK(v) {
+  const s = String(v || '').toLowerCase().replace(/\+/g, '').trim();
+  if (!s) return null;
+  const mil = /mil|k/.test(s);
+  const n = Number(s.replace(/mil|k/g, '').replace(/\./g, '').replace(',', '.').trim());
+  if (!Number.isFinite(n)) return null;
+  return mil ? n : Math.round((n / 1000) * 1000) / 1000;
+}
+
+const brNum = (v) => {
+  const s = String(v || '').replace(/R\$|%|\s/g, '');
+  if (!s) return null;
+  const n = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Planilha "Obter link em massa" do painel de afiliados da Shopee (BatchProductLinks*.csv):
+ * Item Id, Item Name, Price, Sales, Nome da loja, Commission Rate, Commission, Product Link, Offer Link.
+ * rows: saída de parseCsv (cabeçalhos em minúsculas, sem acento). Devolve null se não for esse formato.
+ */
+function fromShopeeBatch(rows) {
+  if (!rows.length || !('offer link' in rows[0]) || !('item name' in rows[0])) return null;
+  return rows.filter((r) => r['item name'] && r['offer link']).map((r) => {
+    const ids = shopeeIds(r['product link']);
+    return {
+      marketplace: 'SH',
+      external_id: ids,
+      title: String(r['item name']).trim().slice(0, 300),
+      price: brNum(r.price),
+      original_price: null,
+      commission_pct: brNum(r['commission rate']),
+      commission_auto: brNum(r['commission rate']) !== null,
+      sales_k: salesK(r.sales),
+      shop: (r['nome da loja'] || '').trim() || null,
+      product_url: ids ? `https://shopee.com.br/product/${ids.replace('.', '/')}` : r['product link'] || null,
+      affiliate_url: r['offer link'],
+      link: r['offer link'],
+      image_url: null,
+      source: 'planilha',
+    };
+  });
+}
+
+/** Busca a foto (prévia do link) de vários itens, 8 por vez, até o tempo-limite. Quem não der fica sem foto. */
+async function fillImages(items, fetchImpl, budgetMs = 40000) {
+  const deadline = Date.now() + budgetMs;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(8, items.length) }, async () => {
+    while (next < items.length && Date.now() < deadline) {
+      const it = items[next++];
+      if (it.image_url || !it.link) continue;
+      let u;
+      try { u = new URL(it.link); } catch (_) { continue; }
+      if (u.protocol !== 'https:' || marketplaceOf(u.hostname) !== 'SH') continue; // só busca na Shopee
+      try { const og = await openGraph(u.toString(), fetchImpl); if (og?.image_url) it.image_url = og.image_url; } catch (_) { /* fica sem foto */ }
+    }
+  }));
+  return items;
+}
+
+module.exports = { previewLink, marketplaceOf, shopeeIds, fromShopeeBatch, fillImages, salesK };

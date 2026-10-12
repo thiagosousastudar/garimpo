@@ -2,7 +2,8 @@ const express = require('express');
 const { HttpError, parseNum, parseCsv } = require('../util');
 const { scoreProduct } = require('../services/score');
 const { externalIdFrom, freshData } = require('../services/garimpo');
-const { parseExtras, mergeExtras } = require('../services/extras');
+const { parseExtras, mergeExtras, serializeExtras } = require('../services/extras');
+const { fromShopeeBatch, fillImages } = require('../services/linkpreview');
 
 const MARKETS = { ml: 'ML', 'mercado livre': 'ML', mercadolivre: 'ML', sh: 'SH', shopee: 'SH' };
 const HISTORY_DAYS = 90;
@@ -296,6 +297,29 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     let imported = 0;
     let skipped = 0;
     const errors = [];
+
+    // Planilha "Obter link em massa" da Shopee: formato próprio, com foto buscada na prévia de cada link.
+    const batch = fromShopeeBatch(rows);
+    if (batch) {
+      if (batch.length > 200) throw new HttpError(400, 'Envie no máximo 200 produtos por vez.');
+      await fillImages(batch, fetchImpl);
+      for (let i = 0; i < batch.length; i++) {
+        const it = batch[i];
+        try {
+          const d = parseBody({
+            title: it.title, marketplace: 'SH', price: it.price, sales_k: it.sales_k, commission_pct: it.commission_pct,
+            product_url: it.product_url, affiliate_url: it.affiliate_url, image_url: it.image_url, notes: it.shop ? `Loja: ${it.shop}` : undefined,
+          });
+          await insertProduct(pool, req.uid, d, it.external_id, serializeExtras(it));
+          imported++;
+        } catch (e) {
+          if (e.status === 409) skipped++;
+          else errors.push({ line: i + 2, error: e.message });
+        }
+      }
+      return res.json({ imported, skipped, errors, format: 'shopee' });
+    }
+
     for (let i = 0; i < rows.length; i++) {
       const c = rows[i];
       try {

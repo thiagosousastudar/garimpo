@@ -110,4 +110,4 @@ textarea{font:inherit;color:var(--ink)}
 .linkhead input{margin-top:6px}
 .cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 @media (max-width:520px){.cols3{grid-template-columns:1fr 1fr}}
-#links-text{min-height:160px}
+#links-text{min-height:160px}.sheetbox{border:1px dashed var(--accent);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px;background:var(--accent-soft)}

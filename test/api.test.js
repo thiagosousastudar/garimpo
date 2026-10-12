@@ -1397,3 +1397,42 @@ test('cadastrar por links: Shopee pela prévia (sem preço), Mercado Livre pela 
     assert.ok(again.data.items.every((x) => x.saved_id));
   } finally { t.close(); }
 });
+test('planilha "Obter link em massa" da Shopee: lê preço, comissão, vendas e link; foto pela prévia; só busca na Shopee', async () => {
+  const opts = { ml: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const csv = [
+      'Item Id,Item Name,Price,Sales,Nome da loja,Commission Rate,Commission,Product Link,Offer Link',
+      '22499247158,Carregador Portátil Mini Power Bank 10000mAh Com 02 Saídas Tipo-C / Lightning,"31,99",10mil+,SHR ELETRONICOS,28%,"R$8,96",https://shopee.com.br/product/408715442/22499247158,https://s.shopee.com.br/5LCczJBazQ',
+      '23394849645,Shorts Masculino Tactel Praia Academia Treino Corrida Verão Secagem Rápida,"35,00",66,F&A MIX ,83%,"R$29,05",https://shopee.com.br/product/1163397054/23394849645,https://s.shopee.com.br/5VW3BcAxeT',
+      '55260497129,Kit Estética Automotiva Vonixx,"113,58",4mil+,Yamase Loja Oficial,14%,"R$15,90",https://shopee.com.br/product/316945044/55260497129,https://evil.example.com/x',
+      '',
+    ].join('\n');
+    assert.equal((await api('POST', '/api/garimpo/from-shopee-csv', 'titulo;preco\nx;1\n')).status, 400);
+    const r = await api('POST', '/api/garimpo/from-shopee-csv', csv);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const [a, b, c] = r.data.items;
+    assert.deepEqual([a.title.slice(0, 22), a.price, a.commission_pct, a.sales_k, a.shop, a.external_id, a.affiliate_url],
+      ['Carregador Portátil Mi', 31.99, 28, 10, 'SHR ELETRONICOS', '408715442.22499247158', 'https://s.shopee.com.br/5LCczJBazQ']);
+    assert.equal(a.image_url, 'https://down-br.img.susercontent.com/file/abc');
+    assert.equal(a.earn_per_sale, 8.96);
+    assert.deepEqual([b.sales_k, b.commission_pct, b.shop], [0.066, 83, 'F&A MIX']);
+    assert.equal(c.image_url, null, 'link de fora da Shopee não é buscado');
+    assert.equal(opts.ml.evilHit, undefined);
+
+    // salva em lote; depois os mesmos aparecem como já cadastrados
+    const save = await api('POST', '/api/garimpo/save', { items: r.data.items });
+    assert.deepEqual([save.data.saved, save.data.errors.length], [3, 0], JSON.stringify(save.data));
+    const p = (await api('GET', '/api/products')).data.products.find((x) => x.external_id === '408715442.22499247158');
+    assert.deepEqual([p.price, p.commission_pct, p.sales_k, p.notes, p.affiliate_url], [31.99, 28, 10, 'Loja: SHR ELETRONICOS', 'https://s.shopee.com.br/5LCczJBazQ']);
+    assert.ok((await api('POST', '/api/garimpo/from-shopee-csv', csv)).data.items.every((x) => x.saved_id));
+
+    // "Importar CSV" também reconhece a planilha da Shopee (em outra conta)
+    const api2 = t.client();
+    await signup(api2, 'b@exemplo.com');
+    const imp = await api2('POST', '/api/products/import', csv);
+    assert.deepEqual([imp.data.imported, imp.data.format], [3, 'shopee']);
+  } finally { t.close(); }
+});

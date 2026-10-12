@@ -653,6 +653,9 @@
     var body;
     if (!it) {
       body = '<p class="hint">Cole os links dos produtos, um por linha (até 20). Vale link curto de afiliado da Shopee (s.shopee.com.br/…) e link do Mercado Livre. O link colado fica salvo como o seu link de afiliado.</p>' +
+        '<div class="sheetbox"><b>Shopee: planilha "Obter link em massa"</b><p class="hint">No painel de afiliados da Shopee, gere os links em massa e baixe o arquivo (BatchProductLinks…csv). Ele já traz preço, comissão, vendas e o seu link de afiliado; a foto o Garimpo busca sozinho.</p>' +
+        '<input id="links-sheet" class="file-input" type="file" accept=".csv,text/csv"' + (links.busy ? ' disabled' : '') + ' aria-label="Planilha da Shopee"></div>' +
+        '<p class="hint" style="text-align:center">ou cole os links</p>' +
         '<textarea id="links-text" placeholder="https://s.shopee.com.br/…&#10;https://mercadolivre.com/sec/…" aria-label="Links dos produtos">' + esc(links.text || '') + '</textarea>' +
         '<div class="row end"><button type="button" class="btn" data-act="links-close">Cancelar</button><button type="button" class="btn primary" data-act="links-fetch"' + (links.busy ? ' disabled' : '') + '>' + (links.busy ? 'Buscando…' : 'Buscar produtos') + '</button></div>';
     } else {
@@ -663,7 +666,10 @@
         '<div class="linklist">' + it.map(function (x, i) {
           var img = safeUrl(x.image_url);
           var head = '<div class="linkhead">' + (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span class="noimg"></span>') +
-            '<div class="grow"><div class="meta">' + (x.marketplace ? mktTag(x.marketplace) : '') + (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
+            '<div class="grow"><div class="meta">' + (x.marketplace ? mktTag(x.marketplace) : '') +
+            (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source === 'planilha' ? '<span class="tag free">planilha da Shopee</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
+            (x.sales_k ? '<span class="hint">' + (x.sales_k >= 1 ? x.sales_k + ' mil' : Math.round(x.sales_k * 1000)) + ' vendidos</span>' : '') +
+            (x.shop ? '<span class="hint">· ' + esc(x.shop) + '</span>' : '') +
             (x.saved_id ? '<span class="pill posted">Já cadastrado</span>' : '') + '</div>' +
             (x.error ? '<p class="err small">' + esc(x.error) + '</p><p class="hint">' + esc(x.link) + '</p>' : '<input type="text" data-li="' + i + '" data-lf="title" value="' + esc(x.title || '') + '" aria-label="Nome do produto">') + '</div></div>';
           if (x.error || x.saved_id) return '<div class="linkitem off">' + head + '</div>';
@@ -1095,6 +1101,16 @@
     if (t.id === 'f-ord') { state.ordem = t.value; return render(); }
     if (t.id === 'f-days') { state.days = Number(t.value); return reload(); }
     if (t.dataset.earnStatus) return api('PATCH', '/api/earnings/' + t.dataset.earnStatus, { status: t.value }).then(reload);
+    if (t.id === 'links-sheet' && t.files[0] && links) {
+      links.busy = true; renderLinks();
+      return t.files[0].text().then(function (txt) { return api('POST', '/api/garimpo/from-shopee-csv', undefined, txt); })
+        .then(function (r) {
+          links.items = r.items;
+          var noImg = r.items.filter(function (x) { return !x.image_url; }).length;
+          toast(r.items.length + ' produtos lidos da planilha' + (noImg ? ' (' + noImg + ' sem foto)' : ''));
+        })
+        .finally(function () { if (links) { links.busy = false; renderLinks(); } });
+    }
     if (t.dataset.pupload && t.files.length && post) {
       // envia um arquivo por vez; cada um entra marcado no post (até o limite de 10)
       var files = Array.prototype.slice.call(t.files);
