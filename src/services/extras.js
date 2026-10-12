@@ -28,9 +28,14 @@ function clean(e) {
     category_id: /^MLB\d+$/.test(String(e.category_id || '')) ? String(e.category_id) : null,
     commission_auto: e.commission_auto === true,
     has_video: e.has_video === true,
+    // frete estimado para o CEP de referência do usuário (o Mercado Livre calcula por região)
+    shipping_cost: Number.isFinite(Number(e.shipping_cost)) && e.shipping_cost !== null && e.shipping_cost !== '' && Number(e.shipping_cost) >= 0 && Number(e.shipping_cost) < 10000
+      ? Math.round(Number(e.shipping_cost) * 100) / 100 : null,
+    shipping_zip: /^\d{8}$/.test(String(e.shipping_zip || '')) ? String(e.shipping_zip) : null,
   };
   const empty = !out.images.length && !out.features.length && !out.free_shipping && !out.full && !out.official_store
-    && !out.warranty && !out.sellers && !out.brand && !out.best_seller_rank && !out.category_id && !out.commission_auto && !out.has_video;
+    && !out.warranty && !out.sellers && !out.brand && !out.best_seller_rank && !out.category_id && !out.commission_auto && !out.has_video
+    && out.shipping_cost === null;
   return empty ? null : out;
 }
 

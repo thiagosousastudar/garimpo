@@ -53,8 +53,9 @@
     products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
     mkt: 'todos', cat: 'todas', comMin: 0, ordem: 'score', days: 14, authMode: 'login',
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
-    g: { mkt: 'ML', q: '', category: '', freeShip: false, sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
-    onlyFree: false,
+    g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
+    shipFilter: '', // filtro de frete na aba Produtos ('', 'free', 'cheap')
+    shipZip: null, // CEP de referência do frete
     psel: {}, // produtos marcados para postar juntos (carrossel)
     brand: { color: null, handle: null }, // identidade das capas (cor e @)
   };
@@ -174,6 +175,24 @@
     if (s.inflated_original) out.push('<span class="trend warn" title="Nas conferências dos últimos 90 dias o produto nunca custou o preço original anunciado">⚠ Desconto suspeito: o "preço de" nunca foi visto</span>');
     return out.length ? '<div class="trends-line">' + out.join('') + '</div>' : '';
   }
+  /**
+   * Frete até o CEP de referência e o total que o comprador paga. Frete acima de 30% do preço ganha alerta:
+   * quem vê o preço no post e encontra um total bem maior no checkout costuma desistir.
+   */
+  function shipInfo(p) {
+    if (p.free_shipping || p.shipping_cost === 0 || p.shipping_cost == null) return '';
+    var high = p.shipping_cost > p.price * 0.3;
+    var zip = p.shipping_zip ? ' <span class="hint">(CEP ' + esc(p.shipping_zip.slice(0, 5) + '-' + p.shipping_zip.slice(5)) + ')</span>' : '';
+    return '<p class="ship' + (high ? ' high' : '') + '">Frete ' + brl(p.shipping_cost) + ' · total ' + brl(p.price + p.shipping_cost) + zip +
+      (high ? '<br><b>⚠ Frete alto</b>: o comprador paga ' + Math.round((p.shipping_cost / p.price) * 100) + '% a mais no checkout.' : '') + '</p>';
+  }
+  function shipFilterOk(p, mode) {
+    if (!mode) return true;
+    var free = p.free_shipping || p.shipping_cost === 0;
+    if (mode === 'free') return free;
+    return free || (p.shipping_cost != null && p.shipping_cost <= p.price * 0.15);
+  }
+  var SHIP_OPTS = [['', 'Qualquer frete'], ['free', 'Só frete grátis'], ['cheap', 'Frete grátis ou barato']];
   function priceBlock(p) {
     return '<div class="price"><strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') + '</div>';
   }
@@ -192,7 +211,7 @@
       selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
       (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
         selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) :
-        '<label class="pick"><input type="checkbox" id="g-free"' + (g.freeShip ? ' checked' : '') + '> Só frete grátis</label>') + '</div>' +
+        selectEl('g-ship', 'ship', 'Frete', SHIP_OPTS, g.ship)) + '</div>' +
       (g.mkt === 'ML' && ready ? mlExplore(g) : '') + '</form>';
 
     var note = g.mkt === 'ML' ? '<div class="rule">Primeiro vêm os mais vendidos da categoria (com a posição no ranking), depois os demais produtos com vendedor ativo. O preço é o da oferta mais barata. O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado: a comissão usa o padrão de Conexões e o link você gera no portal de Afiliados e cola no produto (botão Editar).</div>' : '';
@@ -206,7 +225,7 @@
       return '<article class="card' + (picked ? ' picked' : '') + '">' + thumb(p) +
         '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        badges(p) + priceBlock(p) + statsBlock(p) +
+        badges(p) + priceBlock(p) + shipInfo(p) + statsBlock(p) +
         '<div class="row">' + (p.saved_id ? '<span class="pill posted">Já salvo</span>' : '<label class="pick"><input type="checkbox" data-gpick="' + i + '"' + (picked ? ' checked' : '') + '> Selecionar</label>') +
         '<span class="grow"></span>' + (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Ver na loja</a>' : '') + '</div></article>';
     }).join('');
@@ -234,7 +253,7 @@
     return api('POST', '/api/garimpo/search', {
       marketplace: g.mkt, q: g.q, category: g.mkt === 'ML' && g.category ? g.category : undefined, page: page, sort: g.sort,
       min_discount: g.minDesc, min_commission: g.mkt === 'SH' ? g.minCom : 0, min_rating: g.mkt === 'SH' ? g.minRat : 0,
-      free_shipping: g.mkt === 'ML' && g.freeShip,
+      shipping: g.mkt === 'ML' ? g.ship : '',
     }).then(function (r) {
       if (page === 1) { g.results = r.items; g.sel = {}; } else g.results = g.results.concat(r.items);
       g.page = r.page; g.more = r.has_more; g.done = true;
@@ -254,7 +273,7 @@
   function viewDescobrir() {
     var cats = ['todas'].concat(Array.from(new Set(state.products.map(function (p) { return p.category; }).filter(Boolean))));
     var list = state.products.filter(function (p) {
-      return (state.mkt === 'todos' || p.marketplace === state.mkt) && (state.cat === 'todas' || p.category === state.cat) && (p.commission_pct || 0) >= state.comMin && (!state.onlyFree || p.free_shipping);
+      return (state.mkt === 'todos' || p.marketplace === state.mkt) && (state.cat === 'todas' || p.category === state.cat) && (p.commission_pct || 0) >= state.comMin && shipFilterOk(p, state.shipFilter);
     });
     list.sort(function (a, b) {
       if (state.ordem === 'ganho') return b.earn_per_sale - a.earn_per_sale;
@@ -271,7 +290,7 @@
       return '<article class="card">' + thumb(p) +
         '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        badges(p) + priceBlock(p) + priceTrend(p) + statsBlock(p) +
+        badges(p) + priceBlock(p) + shipInfo(p) + priceTrend(p) + statsBlock(p) +
         '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
         (p.price_stats && p.price_stats.count > 1 ? ' · <button class="link" data-history="' + p.id + '">Histórico</button>' : '') +
         (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
@@ -290,7 +309,7 @@
       sel('f-cat', 'Categoria', cats.map(function (c) { return [c, c === 'todas' ? 'Todas as categorias' : c]; }), state.cat) +
       sel('f-com', 'Comissão mínima', [[0, 'Qualquer comissão'], [8, 'A partir de 8%'], [10, 'A partir de 10%'], [12, 'A partir de 12%']], state.comMin) +
       sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) +
-      '<label class="pick"><input type="checkbox" id="f-free"' + (state.onlyFree ? ' checked' : '') + '> Só frete grátis</label></div>' +
+      sel('f-ship', 'Frete', SHIP_OPTS, state.shipFilter) + '</div>' +
       (list.length ? '<div class="grid three">' + cards + '</div>' + groupBar() :
         '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Use a aba Garimpar, Novo produto ou importe um CSV.') + '</div>');
   }
@@ -388,6 +407,16 @@
    * Tabela de comissão do Mercado Livre por categoria principal. A API não informa a comissão de afiliado;
    * o usuário copia do painel de Afiliados uma vez e o app aplica em cada produto pela categoria dele.
    */
+  /** CEP de referência: o Mercado Livre calcula o frete por região; o app estima para este CEP. */
+  function shipZipCard() {
+    var z = state.shipZip ? state.shipZip.slice(0, 5) + '-' + state.shipZip.slice(5) : '';
+    return '<form id="ship-form" class="stack shipzip"><div class="field"><label for="ship-zip">CEP de referência para o frete</label>' +
+      '<div class="row"><input id="ship-zip" name="zip" type="text" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="00000-000" value="' + esc(z) + '" style="max-width:160px">' +
+      '<button class="btn small" type="submit">Salvar CEP</button></div></div>' +
+      '<p class="hint">O frete muda por região. Use o seu CEP ou o de uma cidade onde estão seus seguidores. Os produtos mostram o frete e o total até esse CEP (atualizado no "Atualizar preço").</p>' +
+      '<p class="err" id="ship-err" role="alert"></p></form>';
+  }
+
   function commissionTableCard(ml) {
     var cats = state.g.cats;
     if (!cats) return '<p class="hint">Carregando as categorias do Mercado Livre…</p>';
@@ -425,7 +454,7 @@
       '<li>Marque as permissões de leitura e <b>offline_access</b> (para não precisar autorizar de novo a cada 6 horas).</li>' +
       '<li>Copie o <b>Client ID</b> e a <b>Client Secret</b> para cá e clique em Salvar e autorizar. Na página do Mercado Livre, aceite.</li>' +
       '<li>A comissão padrão vale para as categorias que você não preencher na tabela abaixo.</li></ol>' +
-      (ml.authorized ? commissionTableCard(ml) : '') + '</section>';
+      (ml.authorized ? shipZipCard() + commissionTableCard(ml) : '') + '</section>';
     return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar e Instagram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard +
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
@@ -996,13 +1025,13 @@
       state.g.q = '';
       return garimpar(1);
     }
-    if (t.id === 'g-free') { state.g.freeShip = t.checked; return state.g.done ? garimpar(1) : render(); }
+    if (t.id === 'g-ship') { state.g.ship = t.value; return state.g.done ? garimpar(1) : render(); }
     if (t.form && t.form.id === 'g-form' && t.tagName === 'SELECT') {
       var gs = state.g;
       gs[t.name] = t.name === 'sort' ? t.value : Number(t.value);
       return gs.done && (gs.q || gs.category) ? garimpar(1) : render();
     }
-    if (t.id === 'f-free') { state.onlyFree = t.checked; return render(); }
+    if (t.id === 'f-ship') { state.shipFilter = t.value; return render(); }
     if (t.dataset.upload && t.files[0]) {
       var id = t.dataset.upload;
       return uploadFile(t.files[0]).then(function (r) { return saveQueue(id, { media_type: r.media_type, media_url: r.url }); }).then(function () { toast('Mídia atualizada'); return reload(); });
@@ -1027,7 +1056,7 @@
       e.preventDefault();
       var f = Object.fromEntries(new FormData(e.target).entries());
       var url = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; return reload(); }); })
+      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; return reload(); }); })
         .catch(function (err) { var el = $('#auth-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'ig-form') {
       e.preventDefault();
@@ -1045,6 +1074,13 @@
       var btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true; btn.textContent = 'Testando…';
       api('PUT', '/api/connections/shopee', s).then(function () { toast('Shopee conectada'); return reload(); })
         .catch(function (err) { btn.disabled = false; btn.textContent = 'Salvar e testar'; var el = $('#sh-err'); if (el) el.textContent = err.message; });
+    } else if (e.target.id === 'ship-form') {
+      e.preventDefault();
+      api('PUT', '/api/auth/shipping', { zip: $('#ship-zip').value }).then(function (r) {
+        state.shipZip = r.ship_zip;
+        toast(r.ship_zip ? 'CEP salvo. Use "Atualizar todos os preços" em Produtos para recalcular o frete.' : 'CEP removido: o frete não será estimado.');
+        render();
+      }).catch(function (err) { var el = $('#ship-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'mlcom-form') {
       e.preventDefault();
       var table = Object.fromEntries(new FormData(e.target).entries());
@@ -1078,7 +1114,7 @@
   if (mlBack || location.hash) history.replaceState(null, '', location.pathname);
 
   api('GET', '/api/auth/me').then(function (m) {
-    state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand;
+    state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null;
     return loadAll();
   }).catch(function () { state.user = null; return fetch('/api/health').catch(function () {}); }).then(function () {
     state.loading = false;

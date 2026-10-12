@@ -132,8 +132,9 @@ function oauth({ clientId, clientSecret, fetchImpl = fetch }) {
   };
 }
 
-function createMercadoLivreClient({ token, defaultCommission = null, commissionTable = null, fetchImpl = fetch }) {
+function createMercadoLivreClient({ token, defaultCommission = null, commissionTable = null, zip = null, fetchImpl = fetch }) {
   const commissionFor = commissionRule(commissionTable, defaultCommission);
+  const shipCache = new Map();
   async function get(path, params = {}) {
     const u = new URL(API + path);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
@@ -175,9 +176,30 @@ function createMercadoLivreClient({ token, defaultCommission = null, commissionT
     return rootCache.get(categoryId);
   }
 
-  /** Produto de catálogo completo: oferta + categoria principal (para a comissão). */
+  /**
+   * Frete mais barato da oferta até o CEP de referência (/items/{id}/shipping_options).
+   * Frete grátis = 0 sem consultar. Sem CEP ou se a consulta falhar = null (desconhecido).
+   */
+  function shippingCost(offer) {
+    if (!zip || !offer?.item_id) return Promise.resolve(null);
+    if (offer.shipping?.free_shipping === true) return Promise.resolve(0);
+    if (!shipCache.has(offer.item_id)) {
+      shipCache.set(offer.item_id, get(`/items/${offer.item_id}/shipping_options`, { zip_code: zip })
+        .then((d) => {
+          const costs = (d.options || []).map((o) => num(o.cost)).filter((n) => n !== null && n >= 0);
+          return costs.length ? Math.min(...costs) : null;
+        })
+        .catch(() => null));
+    }
+    return shipCache.get(offer.item_id);
+  }
+
+  /** Produto de catálogo completo: oferta + categoria principal (para a comissão) + frete até o CEP de referência. */
   async function catalogItem(prod, offer, rank = null) {
-    return fromCatalog(prod, offer, commissionFor, rank, await rootOf(offer.category_id));
+    const [root, ship] = await Promise.all([rootOf(offer.category_id), shippingCost(offer)]);
+    const item = fromCatalog(prod, offer, commissionFor, rank, root);
+    if (ship !== null) { item.shipping_cost = ship; item.shipping_zip = zip; }
+    return item;
   }
 
   /** Mais vendidos de uma categoria (até 20, em ordem), já com detalhes e a oferta mais barata. */

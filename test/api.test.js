@@ -82,7 +82,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
         ], paging: { total: 2 } });
       }
       if (u.pathname === '/products/MLB9001/items') {
-        return json(200, { paging: { total: 3 }, results: [{ item_id: 'MLB5', category_id: 'MLB456045', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }, { item_id: 'MLB7', price: 99, shipping: { free_shipping: true } }] });
+        return json(200, { paging: { total: 3 }, results: [{ item_id: 'MLB5', category_id: 'MLB456045', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: !ml.notFree, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }, { item_id: 'MLB7', price: 99, shipping: { free_shipping: true } }] });
       }
       if (u.pathname === '/products/MLB9002/items') return json(200, { results: [] });
       if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }, { url: 'http://http2.mlstatic.com/D_9001b-F.jpg' }], main_features: [{ text: 'Capacidade de 4,2 L para porções individuais.' }, { text: 'Potência de 1400 W.' }], attributes: [{ id: 'BRAND', value_name: 'Elgin' }] });
@@ -92,6 +92,10 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       if (u.pathname === '/trends/MLB' || u.pathname.startsWith('/trends/MLB/')) return json(200, [{ keyword: 'air fryer' }, { keyword: u.pathname.length > 11 ? 'trend da categoria' : 'fone bluetooth' }]);
       if (u.pathname === '/categories/MLB456045') return json(200, { id: 'MLB456045', path_from_root: [{ id: 'MLB5726', name: 'Eletrodomésticos' }, { id: 'MLB456045', name: 'De Ar' }] });
       if (u.pathname === '/sites/MLB/categories') return json(200, [{ id: 'MLB5726', name: 'Eletrodomésticos' }, { id: 'MLB1648', name: 'Informática' }]);
+      if (/^\/items\/[^/]+\/shipping_options$/.test(u.pathname)) {
+        ml.shipCalls = (ml.shipCalls || []).concat(u.searchParams.get('zip_code'));
+        return json(200, { options: [{ cost: ml.shipCost ?? 42.99 }, { cost: (ml.shipCost ?? 42.99) - 2 }] });
+      }
       if (u.pathname.startsWith('/items/')) return json(200, item(u.pathname.split('/')[2], ml.itemPrice || 229.9));
     }
     return json(404, {});
@@ -1144,5 +1148,51 @@ test('capa: repasse de imagem só para lojas/armazenamento, cor e @ da marca, @ 
     await t.pool.query('update connections set ig_username = null');
     assert.equal((await api('GET', '/api/connections/instagram')).data.username, 'loja_teste');
     assert.equal((await t.pool.query('select ig_username from connections')).rows[0].ig_username, 'loja_teste');
+  } finally { t.close(); }
+});
+test('frete: CEP de referência, frete e total por produto, filtros "grátis" e "barato"', async () => {
+  const opts = { ml: { search403: true, notFree: true } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/connections/mercadolivre', { client_id: '1234567890123', client_secret: 'segredo-do-ml-abc' });
+    const auth = await api('GET', '/api/connections/mercadolivre/authorize');
+    await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=${new URL(auth.location).searchParams.get('state')}`);
+
+    // sem CEP: frete desconhecido e nenhuma consulta
+    let r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    assert.equal(r.data.items[0].shipping_cost, undefined);
+    assert.equal(opts.ml.shipCalls, undefined);
+
+    assert.equal((await api('PUT', '/api/auth/shipping', { zip: '123' })).status, 400);
+    assert.equal((await api('PUT', '/api/auth/shipping', { zip: '17032-690' })).data.ship_zip, '17032690');
+    assert.equal((await api('GET', '/api/auth/me')).data.ship_zip, '17032690');
+
+    // com CEP: o frete mais barato até o CEP e o CEP usado
+    r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    const p = r.data.items[0];
+    assert.deepEqual([p.free_shipping, p.shipping_cost, p.shipping_zip], [false, 40.99, '17032690']);
+    assert.ok(opts.ml.shipCalls.every((z) => z === '17032690'));
+
+    // filtros: "só grátis" tira; "barato" (até 15% do preço: 299,90 x 0,15 = 44,99) mantém
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer', shipping: 'free' })).data.items.length, 0);
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer', shipping: 'cheap' })).data.items.length, 1);
+    opts.ml.shipCost = 62;
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'fryer', shipping: 'cheap' })).data.items.length, 0);
+
+    // salvo e atualizado: o frete vai junto e é recalculado
+    const saved = (await api('POST', '/api/garimpo/save', { items: [p] })).data.products[0];
+    assert.equal(saved.shipping_cost, 60);
+    opts.ml.shipCost = 30;
+    const ref = await api('POST', `/api/products/${saved.id}/refresh`);
+    assert.equal(ref.data.product.shipping_cost, 28);
+
+    // oferta com frete grátis: 0 sem consultar
+    opts.ml.notFree = false;
+    const n = opts.ml.shipCalls.length;
+    r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'airfryer grátis' });
+    assert.equal(r.data.items[0].shipping_cost, 0);
+    assert.equal(opts.ml.shipCalls.length, n);
   } finally { t.close(); }
 });

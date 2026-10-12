@@ -76,10 +76,19 @@ function authRoutes({ pool, cfg }) {
   });
 
   r.get('/me', requireAuth(cfg), async (req, res) => {
-    const { rows } = await pool.query('select id, email, name, brand_color, brand_handle from users where id = $1', [req.uid]);
+    const { rows } = await pool.query('select id, email, name, brand_color, brand_handle, ship_zip from users where id = $1', [req.uid]);
     if (!rows.length) throw new HttpError(401, 'Conta não encontrada.');
     res.json({ user: clean(rows[0]), signup: cfg.allowSignup, ai: Boolean(cfg.anthropicKey),
-      brand: { color: rows[0].brand_color || null, handle: rows[0].brand_handle || null } });
+      brand: { color: rows[0].brand_color || null, handle: rows[0].brand_handle || null },
+      ship_zip: rows[0].ship_zip || null });
+  });
+
+  /** CEP de referência para estimar o frete dos produtos (o frete muda por região). Vazio = não calcula. */
+  r.put('/shipping', requireAuth(cfg), async (req, res) => {
+    const zip = String(req.body?.zip || '').replace(/\D/g, '');
+    if (zip && zip.length !== 8) throw new HttpError(400, 'CEP inválido. Use 8 números.');
+    await pool.query('update users set ship_zip = $1 where id = $2', [zip || null, req.uid]);
+    res.json({ ship_zip: zip || null });
   });
 
   /** Identidade visual das capas: cor da marca (#rrggbb) e @ que aparece no rodapé. */

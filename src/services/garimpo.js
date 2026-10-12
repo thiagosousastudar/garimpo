@@ -66,7 +66,8 @@ async function clientFor({ pool, cfg, fetchImpl, uid, marketplace }) {
   }
   const token = await mercadoLivreToken({ pool, cfg, fetchImpl, conn });
   const com = conn.default_commission === null ? null : Number(conn.default_commission);
-  return createMercadoLivreClient({ token, defaultCommission: com, commissionTable: commissionTableOf(conn), fetchImpl });
+  const zip = (await pool.query('select ship_zip from users where id = $1', [uid])).rows[0]?.ship_zip || null;
+  return createMercadoLivreClient({ token, defaultCommission: com, commissionTable: commissionTableOf(conn), zip, fetchImpl });
 }
 
 /** Tabela de comissão do Mercado Livre por categoria principal: { "MLB5726": 6, ... }. */
@@ -99,6 +100,20 @@ async function applyCommissionTable(pool, uid) {
     updated++;
   }
   return updated;
+}
+
+/** Frete que não pesa: até 15% do preço do produto. */
+const CHEAP_SHIPPING = 0.15;
+
+/**
+ * Filtro de frete: false/'' = qualquer; 'free' (ou true) = só frete grátis; 'cheap' = grátis ou até 15% do preço.
+ * Frete desconhecido (sem CEP de referência) só passa em "qualquer".
+ */
+function shippingOk(p, mode) {
+  if (!mode) return true;
+  const free = p.free_shipping || p.shipping_cost === 0;
+  if (mode === true || mode === 'free') return free;
+  return free || (p.shipping_cost !== null && p.shipping_cost !== undefined && p.shipping_cost <= p.price * CHEAP_SHIPPING);
 }
 
 const SORTERS = {
@@ -139,7 +154,7 @@ async function search({ pool, cfg, fetchImpl, uid, marketplace, q, category, pag
     .filter((p) => p.desc >= (minDiscount || 0))
     .filter((p) => !minCommission || (p.commission_pct || 0) >= minCommission)
     .filter((p) => !minRating || (p.rating || 0) >= minRating)
-    .filter((p) => !freeShipping || p.free_shipping);
+    .filter((p) => shippingOk(p, freeShipping));
   if (SORTERS[sort]) items = items.sort(SORTERS[sort]);
   return { items, has_more: out.hasMore, page: Number(page) || 1 };
 }

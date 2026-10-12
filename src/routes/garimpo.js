@@ -27,7 +27,7 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
       minDiscount: parseNum(b.min_discount) || 0,
       minCommission: parseNum(b.min_commission) || 0,
       minRating: parseNum(b.min_rating) || 0,
-      freeShipping: b.free_shipping === true,
+      freeShipping: b.shipping === 'free' || b.shipping === 'cheap' ? b.shipping : b.free_shipping === true,
     });
     res.json(out);
   });
