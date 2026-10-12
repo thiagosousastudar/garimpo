@@ -315,7 +315,7 @@
         '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div></article>';
     }).join('');
     return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos, ordenados pela nota de prioridade.</p></div>' +
-      '<div class="toolbar"><button class="btn primary" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button>' +
+      '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button>' +
       (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
       '<div class="rule">Nota de 0 a 100: 30% desconto, 30% comissão, 20% avaliação, 20% volume de vendas.</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
@@ -643,6 +643,82 @@
       return r.previous_price !== r.product.price ? 'Preço atualizado: ' + brl(r.previous_price) + ' → ' + brl(r.product.price) + '. ' : null;
     }).catch(function (e) { return 'Não consegui conferir o preço (' + e.message + '). '; });
   }
+
+  /* ---------- Cadastrar por links (Shopee sem API: prévia do link; Mercado Livre: dados completos) ---------- */
+  var links = null; // { text, items: [...], busy, saving }
+
+  function renderLinks() {
+    if (!links) return;
+    var it = links.items;
+    var body;
+    if (!it) {
+      body = '<p class="hint">Cole os links dos produtos, um por linha (até 20). Vale link curto de afiliado da Shopee (s.shopee.com.br/…) e link do Mercado Livre. O link colado fica salvo como o seu link de afiliado.</p>' +
+        '<textarea id="links-text" placeholder="https://s.shopee.com.br/…&#10;https://mercadolivre.com/sec/…" aria-label="Links dos produtos">' + esc(links.text || '') + '</textarea>' +
+        '<div class="row end"><button type="button" class="btn" data-act="links-close">Cancelar</button><button type="button" class="btn primary" data-act="links-fetch"' + (links.busy ? ' disabled' : '') + '>' + (links.busy ? 'Buscando…' : 'Buscar produtos') + '</button></div>';
+    } else {
+      var ok = it.filter(function (x) { return !x.error && !x.saved_id; });
+      var needPrice = ok.some(function (x) { return x.marketplace === 'SH'; });
+      body = (needPrice ? '<p class="hint">A prévia da Shopee não informa o preço: preencha <b>preço</b>, <b>preço "de"</b> (se tiver desconto) e a <b>comissão</b> que aparece no seu painel de afiliados.</p>' +
+          '<div class="row"><label class="field" style="flex:0 0 auto"><span class="hint">Comissão para todos da Shopee (%)</span><input id="links-com-all" type="text" inputmode="decimal" style="width:110px" placeholder="Ex.: 8"></label><button type="button" class="btn small" data-act="links-com-all">Aplicar</button></div>' : '') +
+        '<div class="linklist">' + it.map(function (x, i) {
+          var img = safeUrl(x.image_url);
+          var head = '<div class="linkhead">' + (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span class="noimg"></span>') +
+            '<div class="grow"><div class="meta">' + (x.marketplace ? mktTag(x.marketplace) : '') + (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
+            (x.saved_id ? '<span class="pill posted">Já cadastrado</span>' : '') + '</div>' +
+            (x.error ? '<p class="err small">' + esc(x.error) + '</p><p class="hint">' + esc(x.link) + '</p>' : '<input type="text" data-li="' + i + '" data-lf="title" value="' + esc(x.title || '') + '" aria-label="Nome do produto">') + '</div></div>';
+          if (x.error || x.saved_id) return '<div class="linkitem off">' + head + '</div>';
+          var num = function (f, label, ph) {
+            return '<label class="field"><span class="hint">' + label + '</span><input type="text" inputmode="decimal" data-li="' + i + '" data-lf="' + f + '" value="' + esc(x[f] == null ? '' : String(x[f]).replace('.', ',')) + '" placeholder="' + ph + '"></label>';
+          };
+          return '<div class="linkitem">' + head + '<div class="cols3">' + num('price', 'Preço (R$)', '0,00') + num('original_price', 'Preço "de" (R$)', 'opcional') + num('commission_pct', 'Comissão (%)', 'Ex.: 8') + '</div></div>';
+        }).join('') + '</div>' +
+        '<p class="err" id="links-err" role="alert"></p>' +
+        '<div class="row end"><button type="button" class="btn" data-act="links-back">Colar outros links</button>' +
+        '<button type="button" class="btn primary" data-act="links-save"' + (ok.length && !links.saving ? '' : ' disabled') + '>' + (links.saving ? 'Salvando…' : 'Salvar ' + ok.length + ' produto' + (ok.length === 1 ? '' : 's')) + '</button></div>';
+    }
+    dlg.innerHTML = '<h2>Cadastrar por links</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' + body + '</div>';
+  }
+
+  /** "64,50", "1.234,56" ou "64.50" -> número (null se vazio/inválido). */
+  function linkNum(v) {
+    var s = String(v == null ? '' : v).replace(/[R$\s%]/g, '');
+    if (!s) return null;
+    if (s.indexOf(',') >= 0) s = s.replace(/\./g, '').replace(',', '.');
+    var n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  Object.assign(actions, {
+    'links-open': function () { links = { text: '' }; renderLinks(); if (!dlg.open) dlg.showModal(); var ta = $('#links-text'); if (ta) ta.focus(); },
+    'links-close': function () { links = null; dlg.close(); },
+    'links-back': function () { links.items = null; renderLinks(); },
+    'links-fetch': function () {
+      links.text = ($('#links-text') || {}).value || '';
+      var list = links.text.split(/\s+/).filter(function (s) { return /^https?:\/\//i.test(s); });
+      if (!list.length) throw new Error('Cole pelo menos um link (começando com https://).');
+      links.busy = true; renderLinks();
+      return api('POST', '/api/garimpo/from-links', { links: list }).then(function (r) { links.items = r.items; })
+        .finally(function () { if (links) { links.busy = false; renderLinks(); } });
+    },
+    'links-com-all': function () {
+      var v = ($('#links-com-all') || {}).value;
+      if (linkNum(v) == null) throw new Error('Digite a comissão, por exemplo 8.');
+      links.items.forEach(function (x) { if (x.marketplace === 'SH' && !x.error && !x.saved_id) x.commission_pct = linkNum(v); });
+      renderLinks();
+    },
+    'links-save': function () {
+      var ok = links.items.filter(function (x) { return !x.error && !x.saved_id; });
+      var missing = ok.filter(function (x) { return !(Number(x.price) > 0); });
+      if (missing.length) { var el = $('#links-err'); if (el) el.textContent = 'Falta o preço de ' + missing.length + ' produto(s).'; return null; }
+      links.saving = true; renderLinks();
+      return api('POST', '/api/garimpo/save', { items: ok }).then(function (r) {
+        toast(r.saved + ' cadastrado' + (r.saved === 1 ? '' : 's') + (r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro: ' + r.errors[0].error : ''));
+        links = null; dlg.close();
+        state.tab = 'descobrir';
+        return reload();
+      }).finally(function () { if (links) { links.saving = false; renderLinks(); } });
+    },
+  });
 
   /* ---------- Postar agora: direto do produto, sem fila e sem agendador ---------- */
   // { products, product, group, channel, caption, media: [{type,url}], uploads, busy, sending, status, permalink, note, error, waOpened, customMedia }
@@ -1063,6 +1139,11 @@
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (t.dataset && t.dataset.caption) { var c = $('#cnt-' + t.dataset.caption); if (c) c.textContent = t.value.length; }
+    // cadastro por links: guarda o que o usuário digita sem redesenhar (não perde o foco)
+    if (links && links.items && t.dataset && t.dataset.li !== undefined) {
+      var li = links.items[Number(t.dataset.li)];
+      if (li) li[t.dataset.lf] = t.dataset.lf === 'title' ? t.value : linkNum(t.value);
+    }
     if (t.id === 'post-cap' && post) { post.caption = t.value; var pc = $('#post-cnt'); if (pc) pc.textContent = t.value.length; }
     // editor de capa: atualiza a prévia sem redesenhar a janela (não perde o foco do campo)
     if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {

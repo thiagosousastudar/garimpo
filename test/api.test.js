@@ -58,6 +58,19 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     if (u.hostname === 'api.anthropic.com') {
       return json(200, { content: [{ type: 'text', text: 'Legenda gerada pela IA' }] });
     }
+    // links de produto: curto da Shopee (redireciona; prévia só para quem pede como gerador de prévia) e do Mercado Livre
+    const page = (status, html, location) => ({ ok: status < 400, status, url: String(url), headers: { get: (k) => (k.toLowerCase() === 'location' ? location || null : 'text/html') }, text: async () => html, json: async () => ({}) });
+    if (u.hostname === 's.shopee.com.br') {
+      if (u.pathname === '/fora') return page(301, '', 'https://evil.example.com/x');
+      if (opts.redirect === 'manual') return page(301, '', 'https://shopee.com.br/lojinha/111/222?__mobile__=1');
+      return page(200, '<html><head><meta property="og:title" content="Kit Marmita Infantil com Copo...">'
+        + '<meta name="description" content="Compre Kit Marmita Infantil com Copo 250ml e Talher na Shopee Brasil! KIT COMPLETO PARA A HORA DO LANCHE">'
+        + '<meta property="og:image" content="https://down-br.img.susercontent.com/file/abc"></head></html>');
+    }
+    if (u.hostname === 'shopee.com.br') return page(200, '<html><body>app</body></html>');
+    if (u.hostname === 'mercadolivre.com' && u.pathname === '/sec/abc') return page(301, '', 'https://www.mercadolivre.com.br/air-fryer/p/MLB9001');
+    if (u.hostname === 'www.mercadolivre.com.br') return page(200, '<html></html>');
+    if (u.hostname === 'evil.example.com') { ml.evilHit = true; return page(200, '<html></html>'); }
     if (u.hostname.endsWith('mlstatic.com')) {
       const isImg = u.pathname.endsWith('.jpg');
       return { ok: true, status: 200, url: String(url), headers: { get: (k) => (k.toLowerCase() === 'content-type' ? (isImg ? 'image/jpeg' : 'text/html; charset=utf-8') : null) },
@@ -1343,5 +1356,44 @@ test('Meta publica mas responde erro: o app confere, marca como postado e não d
     const again = await api('POST', `/api/queue/${f.data.item?.id || (await api('GET', '/api/queue')).data.items.find((i) => i.status === 'failed').id}/publish`);
     assert.equal(again.data.item.status, 'posted');
     assert.equal(publishes(), before, 'não chamou media_publish de novo');
+  } finally { t.close(); }
+});
+test('cadastrar por links: Shopee pela prévia (sem preço), Mercado Livre pela API, só lojas permitidas', async () => {
+  const opts = { ml: { search403: true } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/connections/mercadolivre', { client_id: '1234567890123', client_secret: 'segredo-do-ml-abc', default_commission: '8' });
+    const auth = await api('GET', '/api/connections/mercadolivre/authorize');
+    await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=${new URL(auth.location).searchParams.get('state')}`);
+
+    assert.equal((await api('POST', '/api/garimpo/from-links', { links: [] })).status, 400);
+    const r = await api('POST', '/api/garimpo/from-links', { links: [
+      'https://s.shopee.com.br/1gJKcHjxJh', 'https://mercadolivre.com/sec/abc', 'https://evil.example.com/x', 'https://s.shopee.com.br/fora', 'nada',
+    ] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const [sh, ml, evil, fora, nada] = r.data.items;
+    // Shopee: nome inteiro (da descrição), foto, código e o link colado como link de afiliado; preço a completar
+    assert.deepEqual([sh.marketplace, sh.external_id, sh.title, sh.price, sh.affiliate_url, sh.product_url],
+      ['SH', '111.222', 'Kit Marmita Infantil com Copo 250ml e Talher', null, 'https://s.shopee.com.br/1gJKcHjxJh', 'https://shopee.com.br/product/111/222']);
+    assert.equal(sh.image_url, 'https://down-br.img.susercontent.com/file/abc');
+    // Mercado Livre: dados completos da API (preço, comissão da tabela/padrão) e o link de afiliado colado
+    assert.deepEqual([ml.marketplace, ml.external_id, ml.price, ml.commission_pct, ml.source, ml.affiliate_url],
+      ['ML', 'MLB9001', 299.9, 8, 'api', 'https://mercadolivre.com/sec/abc']);
+    assert.match(evil.error, /Só links da Shopee ou do Mercado Livre/);
+    assert.match(nada.error, /Link inválido/);
+    assert.ok(fora.title || fora.error); // não segue para fora das lojas
+    assert.equal(opts.ml.evilHit, undefined, 'nunca acessou o endereço de fora das lojas');
+
+    // salva: Shopee com o preço digitado; Mercado Livre como veio
+    const save = await api('POST', '/api/garimpo/save', { items: [{ ...sh, price: '49,90', original_price: '79,90', commission_pct: '10' }, ml] });
+    assert.deepEqual([save.data.saved, save.data.errors.length], [2, 0], JSON.stringify(save.data));
+    const prods = (await api('GET', '/api/products')).data.products;
+    const ps = prods.find((x) => x.marketplace === 'SH');
+    assert.deepEqual([ps.price, ps.original_price, ps.commission_pct, ps.affiliate_url, ps.external_id], [49.9, 79.9, 10, 'https://s.shopee.com.br/1gJKcHjxJh', '111.222']);
+    // colar de novo: aparecem como já cadastrados
+    const again = await api('POST', '/api/garimpo/from-links', { links: ['https://s.shopee.com.br/1gJKcHjxJh', 'https://mercadolivre.com/sec/abc'] });
+    assert.ok(again.data.items.every((x) => x.saved_id));
   } finally { t.close(); }
 });

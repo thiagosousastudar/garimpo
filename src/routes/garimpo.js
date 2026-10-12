@@ -1,6 +1,8 @@
 const express = require('express');
 const { HttpError, parseNum } = require('../util');
-const { search, trends, categories, enrich } = require('../services/garimpo');
+const { search, trends, categories, enrich, clientFor, externalIdFrom } = require('../services/garimpo');
+const { previewLink } = require('../services/linkpreview');
+const { scoreProduct } = require('../services/score');
 const { serializeExtras } = require('../services/extras');
 const { parseBody, insertProduct, mapProduct } = require('./products');
 
@@ -37,6 +39,35 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     const category = req.query.category ? String(req.query.category) : null;
     if (category && !/^MLB\d+$/.test(category)) throw new HttpError(400, 'Categoria inválida.');
     res.json({ trends: await trends({ pool, cfg, fetchImpl, uid: req.uid, category }) });
+  });
+
+  /**
+   * Cadastro por link: recebe até 20 links (Shopee/Mercado Livre, inclusive curtos de afiliado) e devolve
+   * os produtos encontrados, sem salvar. Shopee vem sem preço (a prévia não informa): o usuário completa.
+   */
+  r.post('/from-links', async (req, res) => {
+    const links = [...new Set((Array.isArray(req.body?.links) ? req.body.links : String(req.body?.links || '').split(/\s+/))
+      .map((s) => String(s).trim()).filter(Boolean))];
+    if (!links.length) throw new HttpError(400, 'Cole pelo menos um link.');
+    if (links.length > 20) throw new HttpError(400, 'Cole no máximo 20 links por vez.');
+    let mlClient = null;
+    try { mlClient = await clientFor({ pool, cfg, fetchImpl, uid: req.uid, marketplace: 'ML' }); } catch (_) { /* sem ML: usa a prévia */ }
+    const out = new Array(links.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, links.length) }, async () => {
+      while (next < links.length) {
+        const i = next++;
+        try { out[i] = await previewLink(links[i], { fetchImpl, mlClient, externalIdFrom }); } catch (e) { out[i] = { link: links[i], error: e.message }; }
+      }
+    }));
+    // marca os que já estão salvos (mesmo código da loja)
+    for (const it of out) {
+      if (!it.external_id || it.error) continue;
+      const { rows } = await pool.query('select id from products where user_id = $1 and marketplace = $2 and external_id = $3', [req.uid, it.marketplace, it.external_id]);
+      it.saved_id = rows[0]?.id || null;
+      if (it.price) Object.assign(it, scoreProduct(it));
+    }
+    res.json({ items: out });
   });
 
   r.get('/categories', async (req, res) => {
