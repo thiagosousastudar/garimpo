@@ -120,4 +120,70 @@ async function buildCaption(p, channel, { ai, cfg, fetchImpl }) {
   return { caption: templateCopy(p, channel), source: 'modelo', warning };
 }
 
-module.exports = { buildCaption, templateCopy, PLACEHOLDER };
+const NUMS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+/** Linha curta de um produto num post com vários: preço, desconto e frete grátis. */
+function groupLine(p) {
+  const { desc } = scoreProduct(p);
+  const d = details(p);
+  return `${p.title} por ${brl(p.price)}${desc > 0 && p.original_price ? ` (−${desc}%)` : ''}${d.free_shipping ? ' · frete grátis' : ''}`;
+}
+
+/** Texto de um post com vários produtos (carrossel no Instagram, lista no WhatsApp). */
+function templateGroupCopy(list, channel) {
+  if (channel === 'whatsapp') {
+    return [
+      `🔥 ${list.length} achados de hoje:`,
+      '',
+      ...list.flatMap((p, i) => [`${NUMS[i]} ${groupLine(p)}`, `👉 ${p.affiliate_url || PLACEHOLDER}`, '']),
+      '(Confere os preços nos links, eles podem mudar)',
+    ].join('\n');
+  }
+  const tags = [...new Set(list.flatMap((p) => hashtags(p).split(' ')))].slice(0, 12).join(' ');
+  return [
+    `🔥 ${list.length} achados imperdíveis! Arrasta pro lado ➡️`,
+    '',
+    ...list.map((p, i) => `${NUMS[i]} ${groupLine(p)}`),
+    '',
+    '👉 Link na bio! Comenta o NÚMERO do produto que eu te mando o link.',
+    'Preços e estoque podem mudar.',
+    tags,
+  ].join('\n');
+}
+
+async function aiGroupCopy(list, channel, { cfg, fetchImpl }) {
+  const dados = list.map((p, i) => ({
+    numero: i + 1, produto: p.title, marketplace: marketplaceName(p), preco: Number(p.price),
+    preco_original: p.original_price ? Number(p.original_price) : null, frete_gratis: details(p).free_shipping || null,
+    link: channel === 'whatsapp' ? p.affiliate_url || PLACEHOLDER : undefined,
+  }));
+  const formato = channel === 'whatsapp'
+    ? 'Mensagem de WhatsApp listando os produtos numerados (1️⃣, 2️⃣...), cada um com preço e, na linha de baixo, "👉 " seguido do link exato informado. Tom de amigo, emojis moderados.'
+    : 'Legenda de Instagram para um carrossel: gancho curto dizendo para arrastar pro lado, lista numerada (1️⃣, 2️⃣...) com nome curto e preço de cada produto, chamada "comenta o número que eu te mando o link", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
+  const prompt = `Escreva em português do Brasil. ${formato}\nUse SOMENTE os dados abaixo, na mesma ordem. Não invente especificações, cupons, prazos nem urgência.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
+  const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: cfg.anthropicModel, max_tokens: 1200, messages: [{ role: 'user', content: prompt }] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error?.message || `Erro HTTP ${res.status}`);
+  const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  if (!text) throw new Error('Resposta vazia da IA');
+  return text;
+}
+
+/** Texto para vários produtos. Mesmas regras do buildCaption: IA se pedida e configurada, senão modelo. */
+async function buildGroupCaption(list, channel, { ai, cfg, fetchImpl }) {
+  if (ai && cfg.anthropicKey) {
+    try {
+      return { caption: await aiGroupCopy(list, channel, { cfg, fetchImpl }), source: 'ia' };
+    } catch (e) {
+      return { caption: templateGroupCopy(list, channel), source: 'modelo', warning: `IA indisponível (${e.message}). Usei o modelo padrão.` };
+    }
+  }
+  const warning = ai && !cfg.anthropicKey ? 'ANTHROPIC_API_KEY não configurada. Usei o modelo padrão.' : undefined;
+  return { caption: templateGroupCopy(list, channel), source: 'modelo', warning };
+}
+
+module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, PLACEHOLDER };

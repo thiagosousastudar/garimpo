@@ -27,9 +27,10 @@ function clean(e) {
     // categoria principal na loja (para aplicar a comissão da tabela) e se a comissão foi preenchida pelo app
     category_id: /^MLB\d+$/.test(String(e.category_id || '')) ? String(e.category_id) : null,
     commission_auto: e.commission_auto === true,
+    has_video: e.has_video === true,
   };
   const empty = !out.images.length && !out.features.length && !out.free_shipping && !out.full && !out.official_store
-    && !out.warranty && !out.sellers && !out.brand && !out.best_seller_rank && !out.category_id && !out.commission_auto;
+    && !out.warranty && !out.sellers && !out.brand && !out.best_seller_rank && !out.category_id && !out.commission_auto && !out.has_video;
   return empty ? null : out;
 }
 
@@ -48,7 +49,7 @@ function merge(oldRaw, fresh) {
     if (Array.isArray(v) ? v.length : v !== null && v !== undefined) out[k] = v;
   }
   // selos booleanos refletem a oferta atual (frete grátis pode acabar)
-  if (fresh && typeof fresh === 'object') for (const k of ['free_shipping', 'full', 'official_store', 'commission_auto']) if (k in fresh) out[k] = fresh[k] === true;
+  if (fresh && typeof fresh === 'object') for (const k of ['free_shipping', 'full', 'official_store', 'commission_auto', 'has_video']) if (k in fresh) out[k] = fresh[k] === true;
   const c = clean(out);
   return c ? JSON.stringify(c) : null;
 }

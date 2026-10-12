@@ -11,16 +11,20 @@ function absoluteMediaUrl(cfg, url) {
   return url.startsWith('/') ? cfg.appUrl + url : url;
 }
 
-function validate(item, cfg) {
-  if (item.channel !== 'instagram') throw new HttpError(400, 'Só é possível publicar automaticamente no Instagram.');
-  if (!item.caption || !item.caption.trim()) throw new HttpError(400, 'A legenda está vazia.');
-  if (item.caption.length > 2200) throw new HttpError(400, 'A legenda passa de 2.200 caracteres.');
-  const tags = (item.caption.match(/#[\p{L}\p{N}_]+/gu) || []).length;
-  if (tags > 30) throw new HttpError(400, 'O Instagram aceita no máximo 30 hashtags.');
-  if (item.media_type !== 'image' && item.media_type !== 'video') {
-    throw new HttpError(400, 'Adicione uma foto ou um vídeo antes de publicar no Instagram.');
-  }
-  const url = absoluteMediaUrl(cfg, item.media_url);
+const MAX_CAROUSEL = 10;
+
+/** Lista de mídias de um carrossel ([{ type: 'image'|'video', url }]) gravada como JSON. */
+function parseMediaItems(raw) {
+  if (!raw) return [];
+  try {
+    const list = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(list) ? list : [];
+  } catch (_) { return []; }
+}
+
+/** Confere uma mídia: URL pública e, para foto, JPEG. Devolve a URL absoluta. */
+function checkMedia(cfg, rawUrl, kind) {
+  const url = absoluteMediaUrl(cfg, rawUrl);
   if (!url) throw new HttpError(400, 'Falta a URL da mídia.');
   let host;
   try { host = new URL(url).hostname; } catch (_) { throw new HttpError(400, 'URL da mídia inválida.'); }
@@ -29,11 +33,57 @@ function validate(item, cfg) {
   }
   // Fotos das lojas (ex.: Shopee) costumam vir sem extensão; só recusa quando a extensão é claramente outra.
   const ext = (new URL(url).pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
-  if (item.media_type === 'image' && ext && !/^jpe?g$/i.test(ext)) {
+  if (kind === 'image' && ext && !/^jpe?g$/i.test(ext)) {
     throw new HttpError(400, 'Para foto, o Instagram aceita apenas JPEG (.jpg).');
   }
   return url;
 }
+
+/**
+ * Valida o post antes de enviar. Devolve a URL da mídia (post simples) ou a lista
+ * [{ kind, url }] do carrossel (2 a 10 fotos/vídeos).
+ */
+function validate(item, cfg) {
+  if (item.channel !== 'instagram') throw new HttpError(400, 'Só é possível publicar automaticamente no Instagram.');
+  if (!item.caption || !item.caption.trim()) throw new HttpError(400, 'A legenda está vazia.');
+  if (item.caption.length > 2200) throw new HttpError(400, 'A legenda passa de 2.200 caracteres.');
+  const tags = (item.caption.match(/#[\p{L}\p{N}_]+/gu) || []).length;
+  if (tags > 30) throw new HttpError(400, 'O Instagram aceita no máximo 30 hashtags.');
+  if (item.media_type === 'carousel') {
+    const list = parseMediaItems(item.media_items);
+    if (list.length < 2) throw new HttpError(400, 'O carrossel precisa de pelo menos 2 fotos ou vídeos.');
+    if (list.length > MAX_CAROUSEL) throw new HttpError(400, 'O Instagram aceita no máximo 10 fotos ou vídeos no carrossel.');
+    return list.map((m) => {
+      const kind = m.type === 'video' ? 'video' : 'image';
+      return { kind, url: checkMedia(cfg, m.url, kind) };
+    });
+  }
+  if (item.media_type !== 'image' && item.media_type !== 'video') {
+    throw new HttpError(400, 'Adicione uma foto ou um vídeo antes de publicar no Instagram.');
+  }
+  return checkMedia(cfg, item.media_url, item.media_type);
+}
+
+/** Situação conjunta dos itens do carrossel: FINISHED (todos prontos), ERROR (algum falhou) ou IN_PROGRESS. */
+async function childrenStatus(client, token, ids) {
+  const all = await Promise.all(ids.map((id) => client.containerStatus({ containerId: id, token })));
+  if (all.some((s) => s === 'ERROR' || s === 'EXPIRED')) return 'ERROR';
+  return all.every((s) => s === 'FINISHED' || s === 'PUBLISHED') ? 'FINISHED' : 'IN_PROGRESS';
+}
+
+/** Cria o container do carrossel com os itens prontos e publica. */
+async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, children, caption }) {
+  const carousel = await client.createCarousel({ igUserId, token, children, caption });
+  for (let i = 0; i < Math.max(1, cfg.videoInlinePolls); i++) {
+    const st = await client.containerStatus({ containerId: carousel.id, token });
+    if (st === 'FINISHED') break;
+    if (st === 'ERROR' || st === 'EXPIRED') throw new Error('O Instagram não conseguiu montar o carrossel.');
+    await sleep(cfg.videoPollMs);
+  }
+  return markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId: carousel.id }));
+}
+
+const CHILDREN = 'children:';
 
 async function credentialsFor(pool, cfg, userId) {
   const conn = (await pool.query('select ig_user_id, ig_token_enc from connections where user_id = $1', [userId])).rows[0];
@@ -81,6 +131,28 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     const mediaUrl = validate(item, cfg);
     const { igUserId, token } = await credentialsFor(pool, cfg, userId);
     const client = createInstagramClient({ cfg, fetchImpl });
+
+    // Carrossel: cria cada item (foto/vídeo), espera os vídeos ficarem prontos e publica o conjunto.
+    // Se os vídeos demorarem, fica em "processing" com os itens anotados e é concluído depois (Verificar/agendador).
+    if (item.media_type === 'carousel') {
+      const children = [];
+      for (const m of mediaUrl) {
+        children.push((await client.createContainer({ igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true })).id);
+      }
+      if (mediaUrl.some((m) => m.kind === 'video')) {
+        await pool.query(`update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2`,
+          [CHILDREN + children.join(','), item.id]);
+        for (let i = 0; i < cfg.videoInlinePolls; i++) {
+          const st = await childrenStatus(client, token, children);
+          if (st === 'FINISHED') return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
+          if (st === 'ERROR') throw new Error('O Instagram não conseguiu processar um dos vídeos do carrossel.');
+          await sleep(cfg.videoPollMs);
+        }
+        return (await pool.query('select * from queue_items where id = $1', [item.id])).rows[0];
+      }
+      return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
+    }
+
     const container = await client.createContainer({ igUserId, token, kind: item.media_type, mediaUrl, caption: item.caption });
 
     if (item.media_type === 'image') {
@@ -110,7 +182,9 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
   try {
     const { igUserId, token } = await credentialsFor(pool, cfg, item.user_id);
     const client = createInstagramClient({ cfg, fetchImpl });
-    const st = await client.containerStatus({ containerId: item.container_id, token });
+    const isCarousel = String(item.container_id || '').startsWith(CHILDREN);
+    const children = isCarousel ? item.container_id.slice(CHILDREN.length).split(',').filter(Boolean) : [];
+    const st = isCarousel ? await childrenStatus(client, token, children) : await client.containerStatus({ containerId: item.container_id, token });
     if (st === 'FINISHED') {
       const claim = await pool.query(
         `update queue_items set status = 'publishing', claimed_at = now() where id = $1 and status = 'processing' returning id`,
@@ -118,6 +192,7 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
       );
       if (!claim.rows.length) return (await pool.query('select * from queue_items where id = $1', [item.id])).rows[0];
       try {
+        if (isCarousel) return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
         return await markPosted(pool, item.id, await client.publishContainer({ igUserId, token, containerId: item.container_id }));
       } catch (e) {
         await markFailed(pool, item.id, e.message);
@@ -201,4 +276,4 @@ function startScheduler({ pool, cfg, fetchImpl, log = console }) {
   return { stop: () => clearInterval(timer), tick };
 }
 
-module.exports = { publishItem, finishItem, processDue, startScheduler, EDITABLE, validate, credentialsFor };
+module.exports = { publishItem, finishItem, processDue, startScheduler, EDITABLE, validate, credentialsFor, parseMediaItems, MAX_CAROUSEL };

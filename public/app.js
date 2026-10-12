@@ -55,6 +55,7 @@
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
     g: { mkt: 'ML', q: '', category: '', freeShip: false, sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
     onlyFree: false,
+    psel: {}, // produtos marcados para postar juntos (carrossel)
   };
 
   var ICONS = {
@@ -158,6 +159,7 @@
     if (p.full) b.push('<span class="tag full">⚡ Full</span>');
     if (p.official_store) b.push('<span class="tag off">Loja oficial</span>');
     if (p.sellers > 1) b.push('<span class="tag plain">' + p.sellers + ' vendedores</span>');
+    if (p.has_video) b.push('<span class="tag plain" title="O anúncio tem vídeo no Mercado Livre; a API não libera o arquivo">🎬 anúncio com vídeo</span>');
     return b.length ? '<div class="badges">' + b.join('') + '</div>' : '';
   }
   /** Comparação com o histórico: menor preço do período, caiu/subiu desde a última conferência, "de" inflado. */
@@ -238,6 +240,16 @@
     }).finally(function () { g.busy = false; render(); });
   }
 
+  /** Produtos marcados com "Juntar", na ordem da lista. */
+  function groupSelected() { return state.products.filter(function (p) { return state.psel[p.id]; }); }
+  function groupBar() {
+    var n = groupSelected().length;
+    if (!n) return '';
+    return '<div class="gbar"><span class="hint">' + n + ' selecionado' + (n > 1 ? 's' : '') + (n === 1 ? ' · marque mais um para juntar' : '') + '</span><span class="grow"></span>' +
+      '<button class="btn small" data-act="psel-clear">Limpar</button>' +
+      '<button class="btn small primary" data-act="psel-post"' + (n < 2 ? ' disabled' : '') + '>Postar ' + n + ' juntos</button></div>';
+  }
+
   function viewDescobrir() {
     var cats = ['todas'].concat(Array.from(new Set(state.products.map(function (p) { return p.category; }).filter(Boolean))));
     var list = state.products.filter(function (p) {
@@ -263,7 +275,8 @@
         (p.price_stats && p.price_stats.count > 1 ? ' · <button class="link" data-history="' + p.id + '">Histórico</button>' : '') +
         (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
         (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
-        '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button><span class="grow"></span>' +
+        '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button>' +
+        '<label class="pick" title="Marque vários para postar juntos num carrossel"><input type="checkbox" data-psel="' + p.id + '"' + (state.psel[p.id] ? ' checked' : '') + '> Juntar</label><span class="grow"></span>' +
         (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' : '') +
         '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div>' +
         '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div></article>';
@@ -277,7 +290,7 @@
       sel('f-com', 'Comissão mínima', [[0, 'Qualquer comissão'], [8, 'A partir de 8%'], [10, 'A partir de 10%'], [12, 'A partir de 12%']], state.comMin) +
       sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) +
       '<label class="pick"><input type="checkbox" id="f-free"' + (state.onlyFree ? ' checked' : '') + '> Só frete grátis</label></div>' +
-      (list.length ? '<div class="grid three">' + cards + '</div>' :
+      (list.length ? '<div class="grid three">' + cards + '</div>' + groupBar() :
         '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Use a aba Garimpar, Novo produto ou importe um CSV.') + '</div>');
   }
 
@@ -288,14 +301,24 @@
       var editable = q.status === 'draft' || q.status === 'scheduled' || q.status === 'failed';
       var isIg = q.channel === 'instagram';
       var media = '';
-      if (isIg) {
+      var items = [];
+      try { items = q.media_items ? JSON.parse(q.media_items) : []; } catch (_) { items = []; }
+      if (isIg && q.media_type === 'carousel') {
+        media = '<div class="gallery" aria-label="Carrossel">' + items.map(function (m, i) {
+          var s = esc(safeUrl(m.url));
+          return '<span class="gpic">' + (m.type === 'video' ? '<video src="' + s + '" muted playsinline preload="metadata"></video><span class="vtag">▶</span>' : '<img src="' + s + '" alt="" loading="lazy" referrerpolicy="no-referrer">') + '<span class="ord">' + (i + 1) + '</span></span>';
+        }).join('') + '</div><p class="hint">Carrossel com ' + items.length + ' itens' + (editable ? ' · "Trocar mídia" transforma em post simples' : '') + '</p>' +
+          (editable ? '<label class="btn small" for="up-' + q.id + '">Trocar mídia</label><input id="up-' + q.id + '" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-upload="' + q.id + '" hidden>' : '');
+      } else if (isIg) {
         var u = safeUrl(q.media_url);
         media = '<div class="qmedia"><div class="thumb">' +
           (q.media_type === 'video' && u ? '<video src="' + esc(u) + '" muted playsinline preload="metadata"></video>' : (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer">' : '<span class="hint" style="padding:8px">sem mídia</span>')) +
           '</div><div class="stack" style="display:flex;flex-direction:column;gap:6px"><span class="hint">' + (q.media_type === 'none' ? 'O Instagram exige foto (JPEG) ou vídeo.' : (q.media_type === 'video' ? 'Reels em vídeo' : 'Foto')) + '</span>' +
           (editable ? '<label class="btn small" for="up-' + q.id + '">Trocar mídia</label><input id="up-' + q.id + '" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-upload="' + q.id + '" hidden>' : '') + '</div></div>';
       }
-      return '<article class="card qitem" data-q="' + q.id + '"><header><div><h3>' + esc(q.product_title || 'Produto removido') + '</h3>' +
+      var nProd = 1;
+      try { nProd = q.product_ids ? JSON.parse(q.product_ids).length : 1; } catch (_) { nProd = 1; }
+      return '<article class="card qitem" data-q="' + q.id + '"><header><div><h3>' + esc(q.product_title || 'Produto removido') + (nProd > 1 ? ' <span class="hint">+ ' + (nProd - 1) + ' produto' + (nProd > 2 ? 's' : '') + '</span>' : '') + '</h3>' +
         '<div class="meta">' + (q.product_marketplace ? mktTag(q.product_marketplace) : '') + '<span>' + (isIg ? 'Instagram' : 'WhatsApp') + '</span>' +
         (q.scheduled_at && q.status === 'scheduled' ? '<span class="num">· ' + fmtWhen(q.scheduled_at) + '</span>' : '') + '</div></div>' +
         '<span class="pill ' + q.status + '">' + STATUS[q.status] + '</span></header>' + media +
@@ -562,29 +585,61 @@
   }
 
   /* ---------- Postar agora: direto do produto, sem fila e sem agendador ---------- */
-  var post = null; // { product, channel, caption, media_type, media_url, busy, sending, status, permalink, note, error, waOpened, customMedia }
+  // { products, product, group, channel, caption, media: [{type,url}], uploads, busy, sending, status, permalink, note, error, waOpened, customMedia }
+  var post = null;
+  var MAX_MEDIA = 10;
 
   function waLink(text) { return 'https://wa.me/?text=' + encodeURIComponent(text); }
   function copyText(text) {
     try { return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; }); } catch (_) { return Promise.resolve(false); }
   }
 
-  function openPost(p) {
-    post = { product: p, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', busy: true };
+  /** Abre o Postar agora para um produto ou para vários (carrossel com um texto numerado). */
+  function openPost(arg) {
+    var list = (Array.isArray(arg) ? arg : [arg]).filter(Boolean);
+    if (!list.length) return null;
+    post = { products: list, product: list[0], group: list.length > 1, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', media: [], uploads: [], busy: true };
     renderPost();
     if (!dlg.open) dlg.showModal();
-    return freshBeforeQueue(p).then(function (msg) { if (post) post.note = msg; return loadPreview(false); });
+    return (post.group ? Promise.resolve(null) : freshBeforeQueue(list[0])).then(function (msg) { if (post) post.note = msg; return loadPreview(false); });
   }
 
   function loadPreview(ai) {
     if (!post) return null;
     post.busy = true; post.error = null; renderPost();
-    return api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai }).then(function (r) {
+    var req = post.group
+      ? api('POST', '/api/queue/preview-group', { product_ids: post.products.map(function (p) { return p.id; }), channel: post.channel, ai: ai })
+      : api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai });
+    return req.then(function (r) {
       if (!post) return;
       post.caption = r.caption;
-      if (!post.customMedia) { post.media_type = r.media_type; post.media_url = r.media_url; }
+      if (!post.customMedia) {
+        post.media = post.group ? (r.media_items || []).slice(0, MAX_MEDIA)
+          : (r.media_type !== 'none' && r.media_url ? [{ type: r.media_type, url: r.media_url }] : []);
+      }
       if (r.warning) post.note = (post.note || '') + r.warning;
     }).catch(function (e) { if (post) post.error = e.message; }).finally(function () { if (post) { post.busy = false; renderPost(); } });
+  }
+
+  /** Tudo o que pode entrar no post: fotos de cada produto (galeria da loja), vídeo cadastrado e o que foi enviado agora. */
+  function mediaPool() {
+    var seen = {}, out = [];
+    function add(type, url) { if (url && !seen[url]) { seen[url] = 1; out.push({ type: type, url: url }); } }
+    post.products.forEach(function (p) {
+      ((p.images && p.images.length) ? p.images : [p.image_url]).forEach(function (u) { add('image', u); });
+      add('video', p.video_url);
+    });
+    post.uploads.forEach(function (m) { add(m.type, m.url); });
+    return out;
+  }
+  function mediaIndex(url) { for (var i = 0; i < post.media.length; i++) if (post.media[i].url === url) return i; return -1; }
+  function toggleMedia(type, url) {
+    var i = mediaIndex(url);
+    if (i >= 0) post.media.splice(i, 1);
+    else if (post.media.length >= MAX_MEDIA) throw new Error('O Instagram aceita no máximo 10 fotos ou vídeos por post.');
+    else post.media.push({ type: type, url: url });
+    post.customMedia = true;
+    renderPost();
   }
 
   function renderPost() {
@@ -593,15 +648,23 @@
     var igOk = Boolean(state.conn && state.conn.connected);
     var p = post.product;
     var locked = post.busy || Boolean(post.status);
-    var u = safeUrl(post.media_url);
-    var media = ig ? '<div class="qmedia"><div class="thumb">' +
-      (post.media_type === 'video' && u ? '<video src="' + esc(u) + '" muted playsinline preload="metadata"></video>' : (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer">' : '<span class="hint" style="padding:8px">sem mídia</span>')) +
-      '</div><div style="display:flex;flex-direction:column;gap:6px"><span class="hint">' + (post.media_type === 'video' ? 'Reels em vídeo' : post.media_type === 'image' ? 'Foto' : 'O Instagram exige foto (JPEG) ou vídeo.') + '</span>' +
-      (locked ? '' : '<label class="btn small" for="post-up">Enviar outra</label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" hidden>') + '</div></div>' +
-      // galeria do produto (Mercado Livre traz até 12 fotos): escolher qual vai no post
-      ((p.images || []).length > 1 && !locked ? '<div class="gallery" role="group" aria-label="Escolher foto">' + p.images.map(function (src, i) {
-        return '<button type="button" class="gpic' + (post.media_url === src ? ' on' : '') + '" data-pimg="' + esc(src) + '" aria-label="Foto ' + (i + 1) + '"><img src="' + esc(safeUrl(src)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
-      }).join('') + '</div>' : '') : '';
+    var sel = post.media;
+    var nVideo = sel.filter(function (m) { return m.type === 'video'; }).length;
+    var summary = !sel.length ? 'Nada marcado: o Instagram exige pelo menos 1 foto ou vídeo.'
+      : sel.length === 1 ? (nVideo ? 'Reels com 1 vídeo' : 'Post com 1 foto')
+      : 'Carrossel com ' + sel.length + ' itens' + (nVideo ? ' (' + nVideo + ' vídeo' + (nVideo > 1 ? 's' : '') + ')' : '');
+    // galeria: toque marca/desmarca; a ordem dos toques é a ordem no carrossel
+    var media = ig ? '<div class="mediabox"><div class="row"><b>Fotos e vídeos</b><span class="hint">' + summary + '</span></div>' +
+      '<p class="hint">Toque para marcar até 10. A ordem dos toques é a ordem no post; 2 ou mais viram carrossel.</p>' +
+      '<div class="gallery wrap" role="group" aria-label="Escolher fotos e vídeos">' + mediaPool().map(function (m, k) {
+        var i = mediaIndex(m.url), src = esc(safeUrl(m.url));
+        return '<button type="button" class="gpic' + (i >= 0 ? ' on' : '') + '" data-pmedia="' + esc(m.url) + '" data-ptype="' + m.type + '"' + (locked ? ' disabled' : '') + ' aria-pressed="' + (i >= 0) + '" aria-label="' + (m.type === 'video' ? 'Vídeo ' : 'Foto ') + (k + 1) + '">' +
+          (m.type === 'video' ? '<video src="' + src + '" muted playsinline preload="metadata"></video><span class="vtag">▶</span>' : '<img src="' + src + '" alt="" loading="lazy" referrerpolicy="no-referrer">') +
+          (i >= 0 ? '<span class="ord">' + (i + 1) + '</span>' : '') + '</button>';
+      }).join('') +
+      (locked ? '' : '<label class="gpic add" for="post-up" title="Enviar fotos ou vídeos do aparelho">+<small>foto/vídeo</small></label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" multiple hidden>') + '</div>' +
+      (post.products.some(function (x) { return x.has_video; }) && !nVideo ? '<p class="hint">🎬 O anúncio no Mercado Livre tem vídeo, mas a API não libera o arquivo. Para postar vídeo, grave ou baixe e envie em "+ foto/vídeo" (MP4).</p>' : '') +
+      '</div>' : '';
     var actions;
     if (post.status === 'posted') {
       actions = '<p class="ok">' + (ig ? 'Publicado no Instagram!' + (post.permalink ? ' <a href="' + esc(safeUrl(post.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver o post</a>' : '') : 'Registrado no histórico como postado.') + '</p>' +
@@ -619,11 +682,15 @@
         (post.waOpened ? '<button class="btn" data-act="post-wa">Abrir de novo</button><button class="btn primary" data-act="post-wa-done"' + (post.busy ? ' disabled' : '') + '>Já enviei</button>'
           : '<button class="btn primary" data-act="post-wa"' + (post.busy ? ' disabled' : '') + '>Abrir no WhatsApp</button>') + '</div>';
     }
-    dlg.innerHTML = '<h2>Postar agora</h2><p class="hint">' + esc(p.title) + ' · ' + brl(p.price) + '</p>' +
+    var noLink = post.products.filter(function (x) { return !x.affiliate_url; }).length;
+    var head = post.group
+      ? '<h2>Postar ' + post.products.length + ' produtos juntos</h2><ol class="hint plist">' + post.products.map(function (x) { return '<li>' + esc(x.title) + ' · ' + brl(x.price) + '</li>'; }).join('') + '</ol>'
+      : '<h2>Postar agora</h2><p class="hint">' + esc(p.title) + ' · ' + brl(p.price) + '</p>';
+    dlg.innerHTML = head +
       '<div class="seg" role="group" aria-label="Canal" style="margin:10px 0"><button type="button" data-pchan="instagram" aria-pressed="' + ig + '"' + (locked ? ' disabled' : '') + '>Instagram</button><button type="button" data-pchan="whatsapp" aria-pressed="' + !ig + '"' + (locked ? ' disabled' : '') + '>WhatsApp</button></div>' +
       '<div style="display:flex;flex-direction:column;gap:10px">' +
       (post.note ? '<p class="hint">' + esc(post.note) + '</p>' : '') +
-      (p.affiliate_url ? '' : '<p class="err small">Este produto não tem link de afiliado: o texto vai com um espaço reservado. Cole o link em Editar antes de postar.</p>') +
+      (noLink ? '<p class="err small">' + (post.group ? noLink + ' produto(s) sem link de afiliado' : 'Este produto não tem link de afiliado') + ': o texto vai com um espaço reservado. Cole o link em Editar antes de postar.</p>' : '') +
       media +
       '<textarea id="post-cap" aria-label="Texto do post"' + (locked ? ' readonly' : '') + '>' + esc(post.busy && !post.caption ? 'Preparando o texto…' : post.caption) + '</textarea>' +
       (ig ? '<p class="hint"><span id="post-cnt">' + post.caption.length + '</span>/2200 caracteres</p>' : '') +
@@ -676,6 +743,8 @@
   }
 
   Object.assign(actions, {
+    'psel-clear': function () { state.psel = {}; render(); },
+    'psel-post': function () { return openPost(groupSelected()); },
     'refresh-all': function (btn) {
       if (btn) { btn.disabled = true; btn.textContent = 'Atualizando preços…'; }
       return api('POST', '/api/products/refresh-all').then(function (r) {
@@ -688,16 +757,17 @@
         return reload();
       }).catch(function (e) { return reload().then(function () { throw e; }); });
     },
-    'post-close': function () { dlg.close(); },
+    'post-close': function () { dlg.close(); afterPostClosed(); },
     'post-copy': function () { return copyText(post.caption).then(function (ok) { toast(ok ? 'Texto copiado' : 'Não consegui copiar. Selecione o texto e copie.'); }); },
     'post-regen': function () { return loadPreview(false); },
     'post-regen-ai': function () { return loadPreview(true); },
     'post-ig': function () {
-      if (post.media_type === 'none' || !post.media_url) throw new Error('Adicione uma foto ou um vídeo antes de publicar no Instagram.');
+      if (!post.media.length) throw new Error('Marque pelo menos uma foto ou um vídeo antes de publicar no Instagram.');
       post.busy = true; post.sending = true; post.error = null; renderPost();
-      return api('POST', '/api/queue/post-now', {
-        product_id: post.product.id, channel: 'instagram', caption: post.caption, media_type: post.media_type, media_url: post.media_url,
-      }).then(function (r) {
+      var body = { product_ids: post.products.map(function (x) { return x.id; }), channel: 'instagram', caption: post.caption };
+      if (post.media.length === 1) { body.media_type = post.media[0].type; body.media_url = post.media[0].url; }
+      else { body.media_type = 'carousel'; body.media_items = post.media; }
+      return api('POST', '/api/queue/post-now', body).then(function (r) {
         post.itemId = r.item.id; post.status = r.item.status === 'posted' ? 'posted' : 'processing'; post.permalink = r.item.permalink;
         if (post.status === 'posted') toast('Publicado no Instagram'); else pollPost(r.item.id, 60);
       }).catch(function (e) {
@@ -711,7 +781,7 @@
     },
     'post-wa-done': function () {
       post.busy = true; renderPost();
-      return api('POST', '/api/queue/post-now', { product_id: post.product.id, channel: 'whatsapp', caption: post.caption })
+      return api('POST', '/api/queue/post-now', { product_ids: post.products.map(function (x) { return x.id; }), channel: 'whatsapp', caption: post.caption })
         .then(function () { post.status = 'posted'; toast('Registrado como postado'); })
         .catch(function (e) { post.error = e.message; })
         .finally(function () { if (post) { post.busy = false; renderPost(); } });
@@ -719,7 +789,15 @@
   });
 
   // Ao fechar a janela (botão ou Esc), descarta a prévia e atualiza as listas.
-  dlg.addEventListener('close', function () { if (post) { post = null; reload().catch(function () {}); } });
+  // Ao fechar a janela, descarta a prévia e atualiza as listas. Chamado pelos botões e, para o Esc, pelo evento
+  // "close" (que nem todo navegador dispara de forma confiável em segundo plano; por isso os botões chamam direto).
+  function afterPostClosed() {
+    if (!post) return;
+    if (post.group && post.status) state.psel = {}; // grupo publicado: limpa a seleção
+    post = null;
+    reload().catch(function () {});
+  }
+  dlg.addEventListener('close', afterPostClosed);
 
   function queueItem(id) { return state.queue.filter(function (q) { return q.id === Number(id); })[0]; }
   function capValue(id) { var el = $('#cap-' + id); return el ? el.value : ''; }
@@ -734,7 +812,7 @@
     if (d.mkt) { state.mkt = d.mkt; return render(); }
     if (d.trend) { state.g.q = d.trend; state.g.category = ''; return garimpar(1); }
     if (d.history) return showHistory(state.products.filter(function (x) { return x.id === Number(d.history); })[0]);
-    if (d.pimg && post) { post.media_type = 'image'; post.media_url = d.pimg; post.customMedia = true; return renderPost(); }
+    if (d.pmedia && post) return toggleMedia(d.ptype === 'video' ? 'video' : 'image', d.pmedia);
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
@@ -789,10 +867,25 @@
     if (t.id === 'f-ord') { state.ordem = t.value; return render(); }
     if (t.id === 'f-days') { state.days = Number(t.value); return reload(); }
     if (t.dataset.earnStatus) return api('PATCH', '/api/earnings/' + t.dataset.earnStatus, { status: t.value }).then(reload);
-    if (t.dataset.pupload && t.files[0] && post) {
+    if (t.dataset.pupload && t.files.length && post) {
+      // envia um arquivo por vez; cada um entra marcado no post (até o limite de 10)
+      var files = Array.prototype.slice.call(t.files);
       post.busy = true; renderPost();
-      return uploadFile(t.files[0]).then(function (r) { if (post) { post.media_type = r.media_type; post.media_url = r.url; post.customMedia = true; } })
-        .finally(function () { if (post) { post.busy = false; renderPost(); } });
+      return files.reduce(function (chain, f) {
+        return chain.then(function () {
+          return uploadFile(f).then(function (r) {
+            if (!post) return;
+            post.uploads.push({ type: r.media_type, url: r.url });
+            if (post.media.length < MAX_MEDIA) post.media.push({ type: r.media_type, url: r.url });
+            post.customMedia = true;
+          });
+        });
+      }, Promise.resolve()).finally(function () { if (post) { post.busy = false; renderPost(); } });
+    }
+    if (t.dataset.psel) {
+      if (t.checked && groupSelected().length >= MAX_MEDIA) { t.checked = false; throw new Error('Dá para juntar no máximo 10 produtos num carrossel.'); }
+      state.psel[t.dataset.psel] = t.checked;
+      return render();
     }
     if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
     if (t.id === 'g-cat') {

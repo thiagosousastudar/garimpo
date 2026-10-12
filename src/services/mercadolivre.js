@@ -84,6 +84,8 @@ function fromCatalog(p, offer, commissionFor, rank = null, root = null) {
     official_store: Boolean(offer?.official_store_id),
     warranty: offer?.warranty || null,
     sellers: offer?.sellers || null,
+    // o anúncio tem vídeo no Mercado Livre (a API não libera o arquivo; serve de aviso)
+    has_video: (offer?.tags || []).includes('has_published_clips'),
   };
 }
 

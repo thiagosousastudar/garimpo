@@ -37,16 +37,26 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
       return call('GET', `/${igUserId}`, { fields: 'username' }, token);
     },
 
-    /** Cria o container. kind: 'image' | 'video' (Reels). Devolve { id }. */
-    async createContainer({ igUserId, token, kind, mediaUrl, caption }) {
-      const params = { caption };
+    /**
+     * Cria o container. kind: 'image' | 'video' (Reels). Devolve { id }.
+     * Com carouselItem, vira um item de carrossel: sem legenda, e vídeo usa media_type VIDEO.
+     */
+    async createContainer({ igUserId, token, kind, mediaUrl, caption, carouselItem = false }) {
+      const params = {};
+      if (!carouselItem && caption !== undefined) params.caption = caption;
+      if (carouselItem) params.is_carousel_item = 'true';
       if (kind === 'video') {
-        params.media_type = 'REELS';
+        params.media_type = carouselItem ? 'VIDEO' : 'REELS';
         params.video_url = mediaUrl;
       } else {
         params.image_url = mediaUrl;
       }
       return call('POST', `/${igUserId}/media`, params, token);
+    },
+
+    /** Container do carrossel a partir dos itens já criados (2 a 10). Devolve { id }. */
+    async createCarousel({ igUserId, token, children, caption }) {
+      return call('POST', `/${igUserId}/media`, { media_type: 'CAROUSEL', children: children.join(','), caption }, token);
     },
 
     /** Devolve IN_PROGRESS, FINISHED, ERROR, EXPIRED ou PUBLISHED. */

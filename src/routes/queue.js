@@ -4,8 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const { HttpError, isoOrNull } = require('../util');
-const { buildCaption } = require('../services/copy');
-const { publishItem, finishItem, EDITABLE, validate, credentialsFor } = require('../services/publisher');
+const { buildCaption, buildGroupCaption } = require('../services/copy');
+const { publishItem, finishItem, EDITABLE, validate, credentialsFor, MAX_CAROUSEL } = require('../services/publisher');
 
 const CHANNELS = ['instagram', 'whatsapp'];
 const MEDIA_TYPES = ['none', 'image', 'video'];
@@ -55,12 +55,43 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     return { product: p, channel, caption: out.caption, media_type, media_url, warning: out.warning };
   }
 
+  const okUrl = (u) => u.startsWith('/uploads/') || /^https?:\/\//i.test(u);
+
+  /**
+   * Mídia do post: uma foto/vídeo (media_type + media_url) ou carrossel
+   * (media_type "carousel" + media_items [{ type, url }], de 2 a 10).
+   */
   function cleanMedia(b) {
+    if (b.media_type === 'carousel') {
+      const list = Array.isArray(b.media_items) ? b.media_items : [];
+      if (list.length < 2) throw new HttpError(400, 'O carrossel precisa de pelo menos 2 fotos ou vídeos.');
+      if (list.length > MAX_CAROUSEL) throw new HttpError(400, 'O Instagram aceita no máximo 10 fotos ou vídeos no carrossel.');
+      const items = list.map((m) => {
+        const type = m?.type === 'video' ? 'video' : 'image';
+        const url = String(m?.url || '').trim();
+        if (!url || !okUrl(url) || url.length > 2000) throw new HttpError(400, 'Endereço de mídia inválido no carrossel.');
+        return { type, url };
+      });
+      return { media_type: 'carousel', media_url: items[0].url, media_items: JSON.stringify(items) };
+    }
     const media_type = b.media_type === undefined ? 'none' : b.media_type;
     if (!MEDIA_TYPES.includes(media_type)) throw new HttpError(400, 'Tipo de mídia inválido.');
     const media_url = String(b.media_url || '').trim() || null;
-    if (media_url && !media_url.startsWith('/uploads/') && !/^https?:\/\//i.test(media_url)) throw new HttpError(400, 'Endereço da mídia inválido.');
-    return { media_type: media_url ? media_type : 'none', media_url };
+    if (media_url && !okUrl(media_url)) throw new HttpError(400, 'Endereço da mídia inválido.');
+    return { media_type: media_url ? media_type : 'none', media_url, media_items: null };
+  }
+
+  /** Produtos do usuário na ordem pedida (1 a 10). */
+  async function productsFor(uid, ids) {
+    const list = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!list.length) throw new HttpError(400, 'Selecione pelo menos um produto.');
+    if (list.length > MAX_CAROUSEL) throw new HttpError(400, 'Selecione no máximo 10 produtos por post.');
+    const { rows } = await pool.query(
+      `select * from products where user_id = $1 and id in (${list.map((_, i) => `$${i + 2}`).join(',')})`, [uid, ...list]
+    );
+    if (rows.length !== list.length) throw new HttpError(404, 'Produto não encontrado.');
+    const by = new Map(rows.map((r) => [r.id, r]));
+    return list.map((id) => by.get(id));
   }
 
   r.post('/', async (req, res) => {
@@ -85,26 +116,35 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
    *    Reels que o Instagram ainda está processando voltam em "processing"; a tela confere até publicar.
    *  - WhatsApp: o envio é feito pelo usuário no próprio WhatsApp; aqui só registra como postado.
    */
+  /** Prévia de um post com vários produtos: texto numerado e a foto principal de cada um. Nada é gravado. */
+  r.post('/preview-group', async (req, res) => {
+    const channel = String(req.body?.channel || '');
+    if (!CHANNELS.includes(channel)) throw new HttpError(400, 'Canal deve ser instagram ou whatsapp.');
+    const list = await productsFor(req.uid, req.body?.product_ids);
+    const out = await buildGroupCaption(list, channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl });
+    const media_items = list.filter((p) => p.image_url).map((p) => ({ type: 'image', url: p.image_url }));
+    res.json({ caption: out.caption, media_items, warning: out.warning });
+  });
+
   r.post('/post-now', async (req, res) => {
     const b = req.body || {};
     const channel = String(b.channel || '');
     if (!CHANNELS.includes(channel)) throw new HttpError(400, 'Canal deve ser instagram ou whatsapp.');
-    const prod = await pool.query('select id from products where id = $1 and user_id = $2', [Number(b.product_id), req.uid]);
-    if (!prod.rows.length) throw new HttpError(404, 'Produto não encontrado.');
+    const products = await productsFor(req.uid, Array.isArray(b.product_ids) ? b.product_ids : [b.product_id]);
     const caption = String(b.caption || '');
     if (!caption.trim()) throw new HttpError(400, 'O texto do post está vazio.');
     if (caption.length > 5000) throw new HttpError(400, 'Texto muito longo.');
-    const m = channel === 'instagram' ? cleanMedia(b) : { media_type: 'none', media_url: null };
+    const m = channel === 'instagram' ? cleanMedia(b) : { media_type: 'none', media_url: null, media_items: null };
     if (channel === 'instagram') {
       // Erros de preenchimento e falta de conexão voltam antes de gravar; só falhas da Meta ficam na Fila.
       validate({ channel, caption, ...m }, cfg);
       await credentialsFor(pool, cfg, req.uid);
     }
     const ins = await pool.query(
-      `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, status, posted_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-      [req.uid, prod.rows[0].id, channel, caption, m.media_type, m.media_url,
-        channel === 'whatsapp' ? 'posted' : 'draft', channel === 'whatsapp' ? new Date().toISOString() : null]
+      `insert into queue_items (user_id, product_id, product_ids, channel, caption, media_type, media_url, media_items, status, posted_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+      [req.uid, products[0].id, products.length > 1 ? JSON.stringify(products.map((p) => p.id)) : null, channel, caption,
+        m.media_type, m.media_url, m.media_items, channel === 'whatsapp' ? 'posted' : 'draft', channel === 'whatsapp' ? new Date().toISOString() : null]
     );
     const id = ins.rows[0].id;
     if (channel === 'instagram') {
@@ -129,6 +169,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     if (b.media_type !== undefined) {
       if (!MEDIA_TYPES.includes(b.media_type)) throw new HttpError(400, 'Tipo de mídia inválido.');
       add('media_type', b.media_type);
+      add('media_items', null); // trocar a mídia na Fila transforma o carrossel em post simples
     }
     if (b.media_url !== undefined) {
       const s = String(b.media_url || '').trim();

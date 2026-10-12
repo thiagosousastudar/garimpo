@@ -13,7 +13,8 @@ const { createStorage } = require('../src/services/storage');
 
 const TOKEN = 'EAAB-super-secret-token-1234567890';
 
-function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, ml = {} } = {}) {
+function makeMockFetch(log, { failMedia = false, videoStates = [], childStates = [], shopee = {}, ml = {} } = {}) {
+  let child = 0;
   return async (url, opts = {}) => {
     const u = new URL(String(url));
     const body = opts.body instanceof URLSearchParams ? Object.fromEntries(opts.body) : null;
@@ -23,9 +24,13 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, 
       if (u.pathname.endsWith('/media_publish')) return json(200, { id: 'MEDIA_1' });
       if (u.pathname.endsWith('/media')) {
         if (failMedia) return json(400, { error: { message: `Invalid token ${body.access_token}` } });
+        if (body.is_carousel_item) return json(200, { id: `CHILD_${++child}` });
+        if (body.media_type === 'CAROUSEL') return json(200, { id: 'CAROUSEL_1' });
         return json(200, { id: 'CONTAINER_1' });
       }
       if (u.pathname.endsWith('/MEDIA_1')) return json(200, { permalink: 'https://instagram.com/p/abc' });
+      if (/\/CHILD_\d+$/.test(u.pathname)) return json(200, { status_code: childStates.length ? childStates.shift() : 'FINISHED' });
+      if (u.pathname.endsWith('/CAROUSEL_1')) return json(200, { status_code: 'FINISHED' });
       if (u.pathname.endsWith('/CONTAINER_1')) return json(200, { status_code: videoStates.length ? videoStates.shift() : 'FINISHED' });
       return json(200, { username: 'loja_teste' });
     }
@@ -962,5 +967,74 @@ test('comissão: Shopee vem da loja; Mercado Livre pela tabela por categoria, se
     await api('PUT', '/api/connections/mercadolivre', { default_commission: '4' });
     r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
     assert.equal(r.data.items[0].commission_pct, 4);
+  } finally { t.close(); }
+});
+test('carrossel: várias fotos do mesmo produto, vários produtos juntos e vídeo que demora para processar', async () => {
+  const opts = { childStates: [] };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const a = (await api('POST', '/api/products', PRODUTO)).data.product;
+    const b = (await api('POST', '/api/products', { ...PRODUTO, title: 'Fone Bluetooth', price: '59,90', original_price: 99.9, affiliate_url: 'https://mercadolivre.com/sec/fone', image_url: 'https://img.exemplo.com/fone.jpg' })).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const fotos = ['https://img.exemplo.com/1.jpg', 'https://img.exemplo.com/2.jpg', 'https://img.exemplo.com/3.jpg'].map((url) => ({ type: 'image', url }));
+
+    // validações antes de gravar
+    const um = await api('POST', '/api/queue/post-now', { product_id: a.id, channel: 'instagram', caption: 'x', media_type: 'carousel', media_items: fotos.slice(0, 1) });
+    assert.equal(um.status, 400);
+    const onze = await api('POST', '/api/queue/post-now', { product_id: a.id, channel: 'instagram', caption: 'x', media_type: 'carousel', media_items: Array(11).fill(fotos[0]) });
+    assert.equal(onze.status, 400);
+    const png = await api('POST', '/api/queue/post-now', { product_id: a.id, channel: 'instagram', caption: 'x', media_type: 'carousel', media_items: [fotos[0], { type: 'image', url: 'https://img.exemplo.com/x.png' }] });
+    assert.equal(png.status, 400);
+    assert.match(png.data.error, /JPEG/);
+    assert.equal((await api('GET', '/api/queue')).data.items.length, 0);
+
+    // várias fotos do mesmo produto
+    const r = await api('POST', '/api/queue/post-now', { product_id: a.id, channel: 'instagram', caption: 'Três fotos', media_type: 'carousel', media_items: fotos });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.item.status, 'posted');
+    assert.equal(r.data.item.media_type, 'carousel');
+    assert.equal(JSON.parse(r.data.item.media_items).length, 3);
+    const posts = t.calls.filter((c) => c.method === 'POST' && c.path.endsWith('/media'));
+    const kids = posts.filter((c) => c.body.is_carousel_item === 'true');
+    assert.equal(kids.length, 3);
+    assert.ok(kids.every((c) => !('caption' in c.body)));
+    const car = posts.find((c) => c.body.media_type === 'CAROUSEL');
+    assert.deepEqual([car.body.children, car.body.caption], ['CHILD_1,CHILD_2,CHILD_3', 'Três fotos']);
+    assert.equal(t.calls.filter((c) => c.path.endsWith('/media_publish')).pop().body.creation_id, 'CAROUSEL_1');
+
+    // vários produtos juntos: texto numerado com os dois e a foto de cada um
+    const g = await api('POST', '/api/queue/preview-group', { product_ids: [b.id, a.id], channel: 'instagram' });
+    assert.equal(g.status, 200);
+    assert.match(g.data.caption, /2 achados/);
+    assert.match(g.data.caption, /1️⃣ Fone Bluetooth por R\$\s?59,90 \(−40%\)/);
+    assert.match(g.data.caption, /2️⃣ Air Fryer/);
+    assert.deepEqual(g.data.media_items.map((m) => m.url), ['https://img.exemplo.com/fone.jpg', PRODUTO.image_url]);
+    const gw = await api('POST', '/api/queue/preview-group', { product_ids: [a.id, b.id], channel: 'whatsapp' });
+    assert.match(gw.data.caption, /👉 https:\/\/mercadolivre\.com\/sec\/abc[\s\S]*👉 https:\/\/mercadolivre\.com\/sec\/fone/);
+    assert.equal((await api('POST', '/api/queue/preview-group', { product_ids: [a.id, 99999], channel: 'instagram' })).status, 404);
+    const gp = await api('POST', '/api/queue/post-now', { product_ids: [b.id, a.id], channel: 'instagram', caption: g.data.caption, media_type: 'carousel', media_items: g.data.media_items });
+    assert.equal(gp.status, 201, JSON.stringify(gp.data));
+    assert.equal(gp.data.item.status, 'posted');
+    assert.deepEqual(JSON.parse(gp.data.item.product_ids), [b.id, a.id]);
+    assert.equal(gp.data.item.product_id, b.id);
+
+    // carrossel com vídeo: fica processando e o "Verificar" publica quando o vídeo fica pronto
+    opts.childStates.push(...Array(30).fill('IN_PROGRESS'));
+    const v = await api('POST', '/api/queue/post-now', { product_id: a.id, channel: 'instagram', caption: 'Com vídeo', media_type: 'carousel', media_items: [fotos[0], { type: 'video', url: 'https://cdn.exemplo.com/v.mp4' }] });
+    assert.equal(v.status, 201, JSON.stringify(v.data));
+    assert.equal(v.data.item.status, 'processing');
+    const vid = t.calls.filter((c) => c.body && c.body.is_carousel_item === 'true').pop();
+    assert.deepEqual([vid.body.media_type, vid.body.video_url], ['VIDEO', 'https://cdn.exemplo.com/v.mp4']);
+    opts.childStates.length = 0;
+    const ck = await api('POST', `/api/queue/${v.data.item.id}/check`);
+    assert.equal(ck.data.item.status, 'posted');
+
+    // na Fila, trocar a mídia de um carrossel vira post simples
+    const draft = (await api('POST', '/api/queue', { product_id: a.id, channel: 'instagram' })).data.item;
+    await t.pool.query(`update queue_items set media_type = 'carousel', media_items = $1 where id = $2`, [JSON.stringify(fotos), draft.id]);
+    const ch = await api('PATCH', `/api/queue/${draft.id}`, { media_type: 'image', media_url: 'https://img.exemplo.com/9.jpg' });
+    assert.deepEqual([ch.data.item.media_type, ch.data.item.media_items], ['image', null]);
   } finally { t.close(); }
 });
