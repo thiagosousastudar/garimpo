@@ -661,7 +661,10 @@
     } else {
       var ok = it.filter(function (x) { return !x.error && !x.saved_id; });
       var needPrice = ok.some(function (x) { return x.marketplace === 'SH'; });
-      body = (needPrice ? '<p class="hint">A prévia da Shopee não informa o preço: preencha <b>preço</b>, <b>preço "de"</b> (se tiver desconto) e a <b>comissão</b> que aparece no seu painel de afiliados.</p>' +
+      var fromSheet = ok.length && ok.every(function (x) { return x.source === 'planilha'; });
+      body = (needPrice ? '<p class="hint">' + (fromSheet
+          ? 'Preço e comissão vieram da planilha. Use <b>Ver na Shopee ↗</b> para conferir o preço atual e preencher o <b>preço "de"</b> dos que estão com desconto.'
+          : 'A prévia da Shopee não informa o preço: use <b>Ver na Shopee ↗</b> e preencha <b>preço</b>, <b>preço "de"</b> (se tiver desconto) e a <b>comissão</b> que aparece no seu painel de afiliados.') + '</p>' +
           '<div class="row"><label class="field" style="flex:0 0 auto"><span class="hint">Comissão para todos da Shopee (%)</span><input id="links-com-all" type="text" inputmode="decimal" style="width:110px" placeholder="Ex.: 8"></label><button type="button" class="btn small" data-act="links-com-all">Aplicar</button></div>' : '') +
         '<div class="linklist">' + it.map(function (x, i) {
           var img = safeUrl(x.image_url);
@@ -670,6 +673,8 @@
             (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source === 'planilha' ? '<span class="tag free">planilha da Shopee</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
             (x.sales_k ? '<span class="hint">' + (x.sales_k >= 1 ? x.sales_k + ' mil' : Math.round(x.sales_k * 1000)) + ' vendidos</span>' : '') +
             (x.shop ? '<span class="hint">· ' + esc(x.shop) + '</span>' : '') +
+            // abre a página do produto (não o link de afiliado, para não gerar clique na própria conta)
+            (safeUrl(x.product_url || x.link) ? '<a class="seeprod" href="' + esc(safeUrl(x.product_url || x.link)) + '" target="_blank" rel="noopener noreferrer">Ver na ' + (x.marketplace === 'ML' ? 'loja' : 'Shopee') + ' ↗</a>' : '') +
             (x.saved_id ? '<span class="pill posted">Já cadastrado</span>' : '') + '</div>' +
             (x.error ? '<p class="err small">' + esc(x.error) + '</p><p class="hint">' + esc(x.link) + '</p>' : '<input type="text" data-li="' + i + '" data-lf="title" value="' + esc(x.title || '') + '" aria-label="Nome do produto">') + '</div></div>';
           if (x.error || x.saved_id) return '<div class="linkitem off">' + head + '</div>';
