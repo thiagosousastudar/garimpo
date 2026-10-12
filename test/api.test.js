@@ -13,7 +13,7 @@ const { createStorage } = require('../src/services/storage');
 
 const TOKEN = 'EAAB-super-secret-token-1234567890';
 
-function makeMockFetch(log, { failMedia = false, videoStates = [], childStates = [], shopee = {}, ml = {} } = {}) {
+function makeMockFetch(log, { failMedia = false, videoStates = [], childStates = [], carouselStates = [], shopee = {}, ml = {} } = {}) {
   let child = 0;
   return async (url, opts = {}) => {
     const u = new URL(String(url));
@@ -33,7 +33,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       }
       if (u.pathname.endsWith('/MEDIA_1')) return json(200, { permalink: 'https://instagram.com/p/abc' });
       if (/\/CHILD_\d+$/.test(u.pathname)) return json(200, { status_code: childStates.length ? childStates.shift() : 'FINISHED' });
-      if (u.pathname.endsWith('/CAROUSEL_1')) return json(200, { status_code: 'FINISHED' });
+      if (u.pathname.endsWith('/CAROUSEL_1')) return json(200, { status_code: carouselStates.length ? carouselStates.shift() : 'FINISHED' });
       if (u.pathname.endsWith('/CONTAINER_1')) return json(200, { status_code: videoStates.length ? videoStates.shift() : 'FINISHED' });
       return json(200, { username: 'loja_teste' });
     }
@@ -837,6 +837,8 @@ test('postar agora: falha da Meta fica na fila como Falhou, sem o token', async 
     const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Oferta', media_type: 'image', media_url: PRODUTO.image_url });
     assert.equal(r.status, 502);
     assert.ok(!r.data.error.includes(TOKEN));
+    // o motivo da falha aparece para o usuário (não só "Erro interno")
+    assert.match(r.data.error, /Falha ao publicar: Invalid token/);
     const items = (await api('GET', '/api/queue')).data.items;
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'failed');
@@ -1076,5 +1078,27 @@ test('Instagram pelo login do Instagram: chave IG usa graph.instagram.com e é r
     await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
     await t.pool.query(`update connections set updated_at = now() - interval '8 days'`);
     assert.equal(await refreshInstagramTokens({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl }), 0);
+  } finally { t.close(); }
+});
+test('carrossel com vídeo: se o Instagram ainda prepara o carrossel, fica processando e publica depois (sem "Media ID is not available")', async () => {
+  const opts = { carouselStates: [] };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    opts.carouselStates.push(...Array(10).fill('IN_PROGRESS'));
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Com vídeo', media_type: 'carousel',
+      media_items: [{ type: 'video', url: 'https://cdn.exemplo.com/v.mp4' }, { type: 'image', url: 'https://img.exemplo.com/1.jpg' }] });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.item.status, 'processing');
+    assert.equal(r.data.item.container_id, 'CAROUSEL_1');
+    // não tentou publicar antes de o carrossel ficar pronto
+    assert.equal(t.calls.filter((c) => c.path.endsWith('/media_publish')).length, 0);
+    opts.carouselStates.length = 0;
+    const ck = await api('POST', `/api/queue/${r.data.item.id}/check`);
+    assert.equal(ck.data.item.status, 'posted');
+    assert.equal(t.calls.filter((c) => c.path.endsWith('/media_publish')).pop().body.creation_id, 'CAROUSEL_1');
   } finally { t.close(); }
 });

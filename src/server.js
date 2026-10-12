@@ -73,7 +73,9 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON inválido.' });
     const status = err.status || 500;
     if (status >= 500) console.error(err);
-    res.status(status).json({ error: status >= 500 ? 'Erro interno do servidor.' : err.message });
+    // Erros previstos (HttpError, com status) têm mensagem para o usuário, inclusive 502 com o motivo da Meta/loja.
+    // Erros inesperados (sem status) ficam genéricos para não vazar detalhes internos.
+    res.status(status).json({ error: err.status ? err.message : 'Erro interno do servidor.' });
   });
 
   return app;

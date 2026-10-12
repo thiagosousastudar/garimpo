@@ -71,16 +71,27 @@ async function childrenStatus(client, token, ids) {
   return all.every((s) => s === 'FINISHED' || s === 'PUBLISHED') ? 'FINISHED' : 'IN_PROGRESS';
 }
 
-/** Cria o container do carrossel com os itens prontos e publica. */
+/**
+ * Cria o container do carrossel com os itens prontos e publica quando o Instagram terminar de prepará-lo.
+ * Com vídeo, o carrossel demora mais que os itens; publicar antes disso dá "Media ID is not available".
+ * Se não ficar pronto a tempo, o item fica em "processing" com o id do carrossel e é publicado depois
+ * (botão Verificar, janela do Postar agora ou agendador), pelo mesmo caminho do Reels.
+ */
 async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, children, caption }) {
   const carousel = await client.createCarousel({ igUserId, token, children, caption });
   for (let i = 0; i < Math.max(1, cfg.videoInlinePolls); i++) {
     const st = await client.containerStatus({ containerId: carousel.id, token });
-    if (st === 'FINISHED') break;
+    if (st === 'FINISHED') {
+      return markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId: carousel.id }));
+    }
     if (st === 'ERROR' || st === 'EXPIRED') throw new Error('O Instagram não conseguiu montar o carrossel.');
     await sleep(cfg.videoPollMs);
   }
-  return markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId: carousel.id }));
+  const { rows } = await pool.query(
+    `update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2 returning *`,
+    [carousel.id, itemId]
+  );
+  return rows[0];
 }
 
 const CHILDREN = 'children:';
