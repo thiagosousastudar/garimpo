@@ -61,9 +61,21 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, 
         if (ml.search403) return json(403, { message: 'forbidden' });
         return json(200, { results: [item('MLB111', 249.9), item('MLB222', 199.9)], paging: { total: 2 } });
       }
+      // Como na conta real: catálogo sem preço; preço pelos vendedores do produto; ranking de mais vendidos.
       if (u.pathname === '/products/search') {
-        return json(200, { results: [{ id: 'MLB9001', name: 'Air Fryer Catálogo', buy_box_winner: { price: 279.9 }, pictures: [{ url: 'https://http2.mlstatic.com/D_9001-O.jpg' }] }], paging: { total: 1 } });
+        return json(200, { results: [
+          { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }] },
+          { id: 'MLB9002', name: 'Air Fryer Sem Vendedor', pictures: [] },
+        ], paging: { total: 2 } });
       }
+      if (u.pathname === '/products/MLB9001/items') {
+        return json(200, { results: [{ item_id: 'MLB5', price: ml.catalogPrice || 299.9, original_price: 399.9 }, { item_id: 'MLB6', price: 319.9 }] });
+      }
+      if (u.pathname === '/products/MLB9002/items') return json(200, { results: [] });
+      if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }] });
+      if (u.pathname.startsWith('/products/')) return json(404, { message: 'not found' });
+      if (u.pathname === '/sites/MLB/domain_discovery/search') return json(200, [{ category_id: 'MLB456045' }]);
+      if (u.pathname === '/highlights/MLB/category/MLB456045') return json(200, { content: [{ id: 'MLB9001', position: 3, type: 'PRODUCT' }] });
       if (u.pathname.startsWith('/items/')) return json(200, item(u.pathname.split('/')[2], ml.itemPrice || 229.9));
     }
     return json(404, {});
@@ -580,7 +592,7 @@ const { externalIdFrom } = require('../src/services/garimpo');
 
 test('garimpo: código do produto tirado do link', () => {
   assert.equal(externalIdFrom('ML', 'https://produto.mercadolivre.com.br/MLB-1234567890-air-fryer-_JM'), 'MLB1234567890');
-  assert.equal(externalIdFrom('ML', 'https://www.mercadolivre.com.br/air-fryer/p/MLB19876543?pdp_filters=item_id:MLB5551234567'), 'MLB5551234567');
+  assert.equal(externalIdFrom('ML', 'https://www.mercadolivre.com.br/air-fryer/p/MLB19876543?pdp_filters=item_id:MLB5551234567'), 'MLB19876543');
   assert.equal(externalIdFrom('ML', 'https://www.mercadolivre.com.br/air-fryer/p/MLB19876543'), 'MLB19876543');
   assert.equal(externalIdFrom('SH', 'https://shopee.com.br/Fone-Bluetooth-i.77.1001'), '77.1001');
   assert.equal(externalIdFrom('SH', 'https://shopee.com.br/product/77/1001'), '77.1001');
@@ -726,8 +738,16 @@ test('garimpo Mercado Livre: autorização com PKCE, busca com comissão padrão
     opts.ml.search403 = true;
     const cat = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
     assert.equal(cat.status, 200, JSON.stringify(cat.data));
-    assert.equal(cat.data.items[0].external_id, 'MLB9001');
-    assert.equal(cat.data.items[0].price, 279.9);
+    // só o produto que tem vendedor; preço = oferta mais barata; ranking de mais vendidos
+    assert.equal(cat.data.items.length, 1);
+    const c0 = cat.data.items[0];
+    assert.deepEqual([c0.external_id, c0.price, c0.original_price, c0.best_seller_rank, c0.commission_pct], ['MLB9001', 299.9, 399.9, 3, 8]);
+    assert.equal(c0.product_url, 'https://www.mercadolivre.com.br/p/MLB9001');
+    const savedCat = await api('POST', '/api/garimpo/save', { items: [c0] });
+    opts.ml.catalogPrice = 259.9;
+    const refCat = await api('POST', `/api/products/${savedCat.data.products[0].id}/refresh`);
+    assert.equal(refCat.status, 200, JSON.stringify(refCat.data));
+    assert.equal(refCat.data.product.price, 259.9);
     opts.ml.search403 = false;
 
     const save = await api('POST', '/api/garimpo/save', { items: [p] });

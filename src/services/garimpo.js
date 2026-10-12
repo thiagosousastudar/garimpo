@@ -8,14 +8,14 @@ const NAMES = { ML: 'Mercado Livre', SH: 'Shopee' };
 /**
  * Identificador do produto na loja, tirado do link. Serve para não cadastrar o mesmo produto duas vezes
  * e para buscar o preço atual depois.
- *  - Mercado Livre: MLB123... (prefere o item_id do anúncio quando o link é de catálogo)
+ *  - Mercado Livre: MLB123... (prefere o código de catálogo /p/MLB..., que é o que dá para consultar o preço)
  *  - Shopee: "shopId.itemId" (links ...-i.SHOP.ITEM ou /product/SHOP/ITEM)
  */
 function externalIdFrom(marketplace, url) {
   const s = decodeURIComponent(String(url || ''));
   if (!s) return null;
   if (marketplace === 'ML') {
-    const m = s.match(/item_id[:=](MLB)-?(\d+)/i) || s.match(/\/p\/(MLB)(\d+)/i) || s.match(/(MLB)-?(\d{6,})/i);
+    const m = s.match(/\/p\/(MLB)(\d+)/i) || s.match(/item_id[:=](MLB)-?(\d+)/i) || s.match(/(MLB)-?(\d{6,})/i);
     return m ? `MLB${m[2]}` : null;
   }
   if (marketplace === 'SH') {
@@ -69,7 +69,8 @@ async function clientFor({ pool, cfg, fetchImpl, uid, marketplace }) {
 }
 
 const SORTERS = {
-  vendidos: (a, b) => (b.sales_k || 0) - (a.sales_k || 0),
+  // Ranking de mais vendidos do Mercado Livre primeiro (1º, 2º...), depois volume de vendas
+  vendidos: (a, b) => (a.best_seller_rank || 1e9) - (b.best_seller_rank || 1e9) || (b.sales_k || 0) - (a.sales_k || 0),
   comissao: (a, b) => (b.commission_pct || 0) - (a.commission_pct || 0),
   preco: (a, b) => a.price - b.price,
   nota: (a, b) => b.score - a.score,

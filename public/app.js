@@ -152,7 +152,7 @@
       (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
         selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) : '') + '</div></form>';
 
-    var note = g.mkt === 'ML' ? '<div class="rule">O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado. A comissão usa o padrão que você definiu em Conexões. Depois de salvar, gere o link no portal de Afiliados e cole no produto (botão Editar).</div>' : '';
+    var note = g.mkt === 'ML' ? '<div class="rule">Primeiro vêm os mais vendidos da categoria (com a posição no ranking), depois os demais produtos com vendedor ativo. O preço é o da oferta mais barata. O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado: a comissão usa o padrão de Conexões e o link você gera no portal de Afiliados e cola no produto (botão Editar).</div>' : '';
     if (!ready) {
       return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form +
         '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no ' + mktName(g.mkt) + ', conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
@@ -161,7 +161,7 @@
     var cards = g.results.map(function (p, i) {
       var picked = Boolean(g.sel[i]);
       return '<article class="card' + (picked ? ' picked' : '') + '">' + thumb(p) +
-        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
+        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.best_seller_rank ? '<span class="tag top">' + p.best_seller_rank + 'º mais vendido</span>' : '') + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
         priceBlock(p) + statsBlock(p) +
         '<div class="row">' + (p.saved_id ? '<span class="pill posted">Já salvo</span>' : '<label class="pick"><input type="checkbox" data-gpick="' + i + '"' + (picked ? ' checked' : '') + '> Selecionar</label>') +

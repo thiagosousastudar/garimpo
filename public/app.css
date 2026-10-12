@@ -59,3 +59,4 @@ code.copyable{display:inline-block;margin-top:4px;padding:4px 8px;border-radius:
 details.sched summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;margin-bottom:6px}
 .seg button[disabled]{opacity:.6}
 textarea{font:inherit;color:var(--ink)}
+.tag.top{background:var(--gold-soft);color:var(--gold)}
