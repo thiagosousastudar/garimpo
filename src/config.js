@@ -6,8 +6,7 @@ function loadConfig(env = process.env) {
     databaseUrl: env.DATABASE_URL || '',
     jwtSecret: env.JWT_SECRET || '',
     encryptionKey: env.ENCRYPTION_KEY || '',
-    // Na Render, RENDER_EXTERNAL_URL já traz o endereço público do serviço.
-    appUrl: (env.APP_URL || env.RENDER_EXTERNAL_URL || 'http://localhost:3000').replace(/\/$/, ''),
+    appUrl: (env.APP_URL || 'http://localhost:3000').replace(/\/$/, ''),
     uploadDir: env.UPLOAD_DIR || path.join(process.cwd(), 'data', 'uploads'),
     prod: env.NODE_ENV === 'production',
     cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : env.NODE_ENV === 'production',
