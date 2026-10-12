@@ -69,13 +69,15 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, 
         ], paging: { total: 2 } });
       }
       if (u.pathname === '/products/MLB9001/items') {
-        return json(200, { results: [{ item_id: 'MLB5', price: ml.catalogPrice || 299.9, original_price: 399.9 }, { item_id: 'MLB6', price: 319.9 }] });
+        return json(200, { paging: { total: 2 }, results: [{ item_id: 'MLB5', price: ml.catalogPrice || 299.9, original_price: 399.9, official_store_id: 2707, warranty: 'Garantia de fábrica: 12 meses', shipping: { free_shipping: true, logistic_type: 'fulfillment' } }, { item_id: 'MLB6', price: 319.9, shipping: { free_shipping: false } }] });
       }
       if (u.pathname === '/products/MLB9002/items') return json(200, { results: [] });
-      if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }] });
+      if (u.pathname === '/products/MLB9001') return json(200, { id: 'MLB9001', name: 'Air Fryer Catálogo', pictures: [{ url: 'https://http2.mlstatic.com/D_9001-F.jpg' }, { url: 'http://http2.mlstatic.com/D_9001b-F.jpg' }], main_features: [{ text: 'Capacidade de 4,2 L para porções individuais.' }, { text: 'Potência de 1400 W.' }], attributes: [{ id: 'BRAND', value_name: 'Elgin' }] });
       if (u.pathname.startsWith('/products/')) return json(404, { message: 'not found' });
       if (u.pathname === '/sites/MLB/domain_discovery/search') return json(200, [{ category_id: 'MLB456045' }]);
-      if (u.pathname === '/highlights/MLB/category/MLB456045') return json(200, { content: [{ id: 'MLB9001', position: 3, type: 'PRODUCT' }] });
+      if (u.pathname.startsWith('/highlights/MLB/category/')) return json(200, { content: [{ id: 'MLB9001', position: 3, type: 'PRODUCT' }, { id: 'MLB7777', position: 4, type: 'USER_PRODUCT' }] });
+      if (u.pathname === '/trends/MLB' || u.pathname.startsWith('/trends/MLB/')) return json(200, [{ keyword: 'air fryer' }, { keyword: u.pathname.length > 11 ? 'trend da categoria' : 'fone bluetooth' }]);
+      if (u.pathname === '/sites/MLB/categories') return json(200, [{ id: 'MLB5726', name: 'Eletrodomésticos' }, { id: 'MLB1648', name: 'Informática' }]);
       if (u.pathname.startsWith('/items/')) return json(200, item(u.pathname.split('/')[2], ml.itemPrice || 229.9));
     }
     return json(404, {});
@@ -829,5 +831,83 @@ test('postar agora: falha da Meta fica na fila como Falhou, sem o token', async 
     const items = (await api('GET', '/api/queue')).data.items;
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'failed');
+  } finally { t.close(); }
+});
+test('Mercado Livre profissional: tendências, categorias, selos, galeria, texto rico, histórico e atualizar todos', async () => {
+  const opts = { ml: { search403: true } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/connections/mercadolivre', { client_id: '1234567890123', client_secret: 'segredo-do-ml-abc', default_commission: '8' });
+    const auth = await api('GET', '/api/connections/mercadolivre/authorize');
+    await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=${new URL(auth.location).searchParams.get('state')}`);
+
+    const tr = await api('GET', '/api/garimpo/trends');
+    assert.deepEqual(tr.data.trends, ['air fryer', 'fone bluetooth']);
+    assert.equal((await api('GET', '/api/garimpo/trends?category=MLB1648')).data.trends[1], 'trend da categoria');
+    assert.equal((await api('GET', '/api/garimpo/trends?category=../x')).status, 400);
+    const cats = await api('GET', '/api/garimpo/categories');
+    assert.equal(cats.data.categories[0].name, 'Eletrodomésticos');
+
+    // mais vendidos de uma categoria, sem digitar nada (USER_PRODUCT fica de fora)
+    const byCat = await api('POST', '/api/garimpo/search', { marketplace: 'ML', category: 'MLB5726' });
+    assert.equal(byCat.status, 200, JSON.stringify(byCat.data));
+    assert.equal(byCat.data.items.length, 1);
+    const p = byCat.data.items[0];
+    assert.deepEqual([p.best_seller_rank, p.free_shipping, p.full, p.official_store, p.sellers, p.brand], [3, true, true, true, 2, 'Elgin']);
+    assert.equal(p.images.length, 2);
+    assert.ok(p.images.every((u) => u.startsWith('https://')));
+    assert.equal(p.features[0], 'Capacidade de 4,2 L para porções individuais.');
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'SH', category: 'MLB5726' })).status, 400);
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'ML', category: 'xyz' })).status, 400);
+
+    // só frete grátis: na busca por texto o item do catálogo tem frete grátis; filtro mantém
+    const free = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer', free_shipping: true });
+    assert.ok(free.data.items.length >= 1 && free.data.items.every((x) => x.free_shipping));
+
+    // salvar guarda os detalhes (mesmo enviando o item "magro", o servidor completa pela loja)
+    const save = await api('POST', '/api/garimpo/save', { items: [{ marketplace: 'ML', external_id: 'MLB9001', title: 'Air Fryer', price: 299.9, product_url: 'https://www.mercadolivre.com.br/p/MLB9001', commission_pct: 8 }] });
+    assert.equal(save.data.saved, 1, JSON.stringify(save.data));
+    const prod = save.data.products[0];
+    assert.equal(prod.features.length, 2);
+    assert.equal(prod.free_shipping, true);
+    assert.ok(!('extras' in prod));
+
+    // texto do post usa frete grátis/Full, loja oficial, ranking e características
+    const prev = await api('POST', '/api/queue/preview', { product_id: prod.id, channel: 'instagram' });
+    assert.match(prev.data.caption, /frete grátis com entrega Full/i);
+    assert.match(prev.data.caption, /loja oficial/i);
+    assert.match(prev.data.caption, /Capacidade de 4,2 L/);
+
+    // histórico: preço muda em duas conferências; "atualizar todos" informa o que mudou
+    opts.ml.catalogPrice = 279.9;
+    const ref = await api('POST', `/api/products/${prod.id}/refresh`);
+    assert.equal(ref.data.product.price, 279.9);
+    assert.equal(ref.data.product.price_stats.previous, 299.9);
+    opts.ml.catalogPrice = 259.9;
+    const all = await api('POST', '/api/products/refresh-all');
+    assert.equal(all.status, 200, JSON.stringify(all.data));
+    assert.deepEqual([all.data.checked, all.data.changed.length, all.data.changed[0].to, all.data.remaining], [1, 1, 259.9, 0]);
+    const hist = await api('GET', `/api/products/${prod.id}/history`);
+    assert.deepEqual(hist.data.history.map((h) => h.price), [299.9, 279.9, 259.9]);
+    const list = (await api('GET', '/api/products')).data.products[0];
+    assert.deepEqual([list.price_stats.min, list.price_stats.max, list.price_stats.count], [259.9, 299.9, 3]);
+    // "de R$ 399,90" nunca visto, mas o histórico ainda é curto: sem alerta
+    assert.equal(list.price_stats.inflated_original, false);
+    assert.equal((await api('GET', '/api/products/99999/history')).status, 404);
+
+    // com 10 dias de histórico e o "preço de" nunca visto, vira alerta de desconto suspeito
+    await t.pool.query(`update price_history set checked_at = now() - interval '10 days' where price = 299.9`);
+    const sus = (await api('GET', '/api/products')).data.products[0];
+    assert.equal(sus.price_stats.inflated_original, true);
+    // se o produto já custou perto do "preço de", não acusa
+    await t.pool.query('update products set original_price = 310 where id = $1', [prod.id]);
+    assert.equal((await api('GET', '/api/products')).data.products[0].price_stats.inflated_original, false);
+
+    // outra conta não vê o histórico
+    const api2 = t.client();
+    await signup(api2, 'b@exemplo.com');
+    assert.equal((await api2('GET', `/api/products/${prod.id}/history`)).status, 404);
   } finally { t.close(); }
 });

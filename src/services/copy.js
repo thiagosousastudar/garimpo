@@ -1,4 +1,5 @@
 const { scoreProduct } = require('./score');
+const { parseExtras } = require('./extras');
 
 const brl = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const PLACEHOLDER = '[SEU LINK DE AFILIADO]';
@@ -13,23 +14,38 @@ const TAGS = {
 };
 
 function hashtags(p) {
-  const base = TAGS[String(p.category || '').toLowerCase()] || '#ofertas';
-  return `${base} #achadinhos ${p.marketplace === 'ML' ? '#mercadolivre' : '#shopee'} #ofertas`;
+  const base = TAGS[String(p.category || '').toLowerCase()] || '';
+  const all = `${base} #achadinhos ${p.marketplace === 'ML' ? '#mercadolivre' : '#shopee'} #ofertas`.split(/\s+/).filter(Boolean);
+  return [...new Set(all)].join(' ');
 }
 
 function marketplaceName(p) {
   return p.marketplace === 'ML' ? 'Mercado Livre' : 'Shopee';
 }
 
+/** Detalhes extras do produto, venham eles da linha do banco (texto JSON) ou já abertos. */
+function details(p) {
+  return p.features || p.images ? p : { ...p, ...parseExtras(p.extras) };
+}
+
 /** Linhas de fatos que podem entrar no texto. Só usa o que está cadastrado. */
 function facts(p) {
   const { desc } = scoreProduct(p);
+  const d = details(p);
   const out = [];
   if (desc > 0 && p.original_price) out.push(`de ${brl(p.original_price)} por ${brl(p.price)} (−${desc}%)`);
   else out.push(`por ${brl(p.price)}`);
+  if (d.best_seller_rank && d.best_seller_rank <= 20) out.push(`${d.best_seller_rank}º mais vendido da categoria`);
   if (Number(p.rating)) out.push(`avaliação ★ ${Number(p.rating).toFixed(1)}`);
   if (Number(p.sales_k)) out.push(`mais de ${Math.floor(Number(p.sales_k))} mil vendidos`);
+  if (d.free_shipping) out.push(d.full ? 'frete grátis com entrega Full' : 'frete grátis');
+  if (d.official_store) out.push('vendido por loja oficial');
   return out;
+}
+
+/** Características principais (até 2), curtas, para o Instagram. */
+function highlights(p) {
+  return (details(p).features || []).slice(0, 2).map((f) => (f.length > 110 ? `${f.slice(0, 107).replace(/\s+\S*$/, '')}…` : f));
 }
 
 function templateCopy(p, channel) {
@@ -46,6 +62,7 @@ function templateCopy(p, channel) {
     'Achado do dia 👀',
     `${p.title} ${f[0]}.`,
     ...f.slice(1).map((x) => `✅ ${x[0].toUpperCase()}${x.slice(1)}`),
+    ...highlights(p).map((x) => `▫️ ${x}`),
     '👉 Link na bio! Comenta EU QUERO que eu te mando.',
     'Preços e estoque podem mudar.',
     hashtags(p),
@@ -61,6 +78,13 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
     preco_original: p.original_price ? Number(p.original_price) : null,
     avaliacao: p.rating ? Number(p.rating) : null,
     vendas_mil: p.sales_k ? Number(p.sales_k) : null,
+    marca: details(p).brand || null,
+    caracteristicas: details(p).features?.length ? details(p).features : null,
+    frete_gratis: details(p).free_shipping || null,
+    entrega_full: details(p).full || null,
+    loja_oficial: details(p).official_store || null,
+    garantia: details(p).warranty || null,
+    posicao_mais_vendidos: details(p).best_seller_rank || null,
   };
   const formato =
     channel === 'whatsapp'

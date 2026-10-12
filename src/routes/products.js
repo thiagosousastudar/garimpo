@@ -2,19 +2,86 @@ const express = require('express');
 const { HttpError, parseNum, parseCsv } = require('../util');
 const { scoreProduct } = require('../services/score');
 const { externalIdFrom, freshData } = require('../services/garimpo');
+const { parseExtras, mergeExtras } = require('../services/extras');
 
 const MARKETS = { ml: 'ML', 'mercado livre': 'ML', mercadolivre: 'ML', sh: 'SH', shopee: 'SH' };
+const HISTORY_DAYS = 90;
 
-function mapProduct(row) {
+/** Linha do banco -> produto da API: números, detalhes extras (fotos, selos), nota e, se houver, o histórico. */
+function mapProduct(row, stats) {
+  const { extras, ...rest } = row;
   const p = {
-    ...row,
+    ...rest,
     price: Number(row.price),
     original_price: row.original_price === null ? null : Number(row.original_price),
     rating: row.rating === null ? null : Number(row.rating),
     sales_k: row.sales_k === null ? null : Number(row.sales_k),
     commission_pct: row.commission_pct === null ? null : Number(row.commission_pct),
+    ...parseExtras(extras),
   };
-  return { ...p, ...scoreProduct(p) };
+  const out = { ...p, ...scoreProduct(p) };
+  if (stats) out.price_stats = stats;
+  return out;
+}
+
+/** Grava um ponto no histórico de preço. */
+async function recordPrice(pool, productId, price, originalPrice) {
+  await pool.query('insert into price_history (product_id, price, original_price) values ($1, $2, $3)', [productId, price, originalPrice ?? null]);
+}
+
+/**
+ * Resumo do histórico (últimos 90 dias) de cada produto do usuário:
+ * menor e maior preço, preço anterior e um alerta de "preço de" inflado
+ * (a loja anuncia um preço original que o produto não teve em nenhuma conferência).
+ */
+async function priceStats(pool, uid, products) {
+  if (!products.length) return new Map();
+  const since = new Date(Date.now() - HISTORY_DAYS * 864e5).toISOString();
+  const { rows } = await pool.query(
+    `select h.product_id, h.price, h.checked_at from price_history h join products p on p.id = h.product_id
+       where p.user_id = $1 and h.checked_at >= $2 order by h.checked_at, h.id`,
+    [uid, since]
+  );
+  const by = new Map();
+  for (const r of rows) {
+    if (!by.has(r.product_id)) by.set(r.product_id, []);
+    by.get(r.product_id).push({ price: Number(r.price), at: new Date(r.checked_at).getTime() });
+  }
+  const out = new Map();
+  for (const p of products) {
+    const hist = by.get(p.id) || [];
+    if (!hist.length) continue;
+    const list = hist.map((h) => h.price);
+    const orig = p.original_price === null ? null : Number(p.original_price);
+    const max = Math.max(...list);
+    // Só acusa com histórico de pelo menos 7 dias e 3 conferências; antes disso é cedo para afirmar.
+    const spanDays = (hist[hist.length - 1].at - hist[0].at) / 864e5;
+    out.set(p.id, {
+      min: Math.min(...list),
+      max,
+      count: list.length,
+      previous: list.length > 1 ? list[list.length - 2] : null,
+      inflated_original: Boolean(orig && list.length >= 3 && spanDays >= 7 && max < orig * 0.9),
+    });
+  }
+  return out;
+}
+
+/** Atualiza um produto com os dados atuais da loja e registra o preço no histórico. */
+async function refreshOne({ pool, cfg, fetchImpl, uid, cur }) {
+  const fresh = await freshData({ pool, cfg, fetchImpl, uid, product: cur });
+  const sets = ['price = $3', 'original_price = $4', 'price_checked_at = now()', 'extras = $5'];
+  const vals = [fresh.price, fresh.original_price, mergeExtras(cur.extras, fresh)];
+  // Só sobrescreve o que a loja informou; a comissão e a avaliação digitadas pelo usuário ficam se a loja não mandar.
+  for (const k of ['rating', 'sales_k', 'commission_pct']) {
+    if (fresh[k] !== null && fresh[k] !== undefined && !(k === 'commission_pct' && cur.marketplace === 'ML')) {
+      vals.push(fresh[k]); sets.push(`${k} = $${vals.length + 2}`);
+    }
+  }
+  if (!cur.image_url && fresh.image_url) { vals.push(fresh.image_url); sets.push(`image_url = $${vals.length + 2}`); }
+  const { rows } = await pool.query(`update products set ${sets.join(', ')} where id = $1 and user_id = $2 returning *`, [cur.id, uid, ...vals]);
+  await recordPrice(pool, cur.id, fresh.price, fresh.original_price);
+  return rows[0];
 }
 
 function cleanUrl(v, field) {
@@ -83,7 +150,7 @@ async function findDuplicate(pool, uid, { marketplace, external_id, product_url 
  * Cadastra um produto já validado. Calcula o código da loja pelo link (ou usa o informado pelo garimpo)
  * e recusa duplicados com 409. A data de conferência do preço começa agora.
  */
-async function insertProduct(pool, uid, d, externalId) {
+async function insertProduct(pool, uid, d, externalId, extras = null) {
   const ext = externalId || externalIdFrom(d.marketplace, d.product_url) || externalIdFrom(d.marketplace, d.affiliate_url);
   const dup = await findDuplicate(pool, uid, { ...d, external_id: ext });
   if (dup) { const e = new HttpError(409, DUPLICATE); e.existingId = dup; throw e; }
@@ -91,10 +158,11 @@ async function insertProduct(pool, uid, d, externalId) {
   const vals = cols.map((c) => d[c]);
   try {
     const { rows } = await pool.query(
-      `insert into products (user_id, external_id, price_checked_at, ${cols.join(',')})
-         values ($1, $2, now(), ${cols.map((_, i) => `$${i + 3}`).join(',')}) returning *`,
-      [uid, ext, ...vals]
+      `insert into products (user_id, external_id, extras, price_checked_at, ${cols.join(',')})
+         values ($1, $2, $3, now(), ${cols.map((_, i) => `$${i + 4}`).join(',')}) returning *`,
+      [uid, ext, extras, ...vals]
     );
+    await recordPrice(pool, rows[0].id, rows[0].price, rows[0].original_price);
     return rows[0];
   } catch (e) {
     if (e.code === '23505') throw new HttpError(409, DUPLICATE);
@@ -107,8 +175,52 @@ function productRoutes({ pool, cfg, fetchImpl }) {
 
   r.get('/', async (req, res) => {
     const { rows } = await pool.query('select * from products where user_id = $1 order by created_at desc, id desc', [req.uid]);
-    const items = rows.map(mapProduct).sort((a, b) => b.score - a.score);
+    const stats = await priceStats(pool, req.uid, rows);
+    const items = rows.map((row) => mapProduct(row, stats.get(row.id))).sort((a, b) => b.score - a.score);
     res.json({ products: items });
+  });
+
+  /**
+   * Confere o preço de todos os produtos que têm código da loja, os mais antigos primeiro.
+   * Para caber no tempo de uma requisição, para em ~40 s e informa quantos ficaram para a próxima rodada.
+   */
+  r.post('/refresh-all', async (req, res) => {
+    const { rows } = await pool.query(
+      `select * from products where user_id = $1 and external_id is not null
+         order by coalesce(price_checked_at, created_at), id limit 60`,
+      [req.uid]
+    );
+    const deadline = Date.now() + 40000;
+    const changed = [];
+    const failed = [];
+    let checked = 0;
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, rows.length) }, async () => {
+      while (next < rows.length && Date.now() < deadline) {
+        const cur = rows[next++];
+        try {
+          const row = await refreshOne({ pool, cfg, fetchImpl, uid: req.uid, cur });
+          checked++;
+          if (Number(row.price) !== Number(cur.price)) changed.push({ id: cur.id, title: cur.title, from: Number(cur.price), to: Number(row.price) });
+        } catch (e) {
+          failed.push({ id: cur.id, title: cur.title, error: e.message });
+        }
+      }
+    }));
+    res.json({ checked, changed, failed, remaining: rows.length - checked - failed.length });
+  });
+
+  /** Histórico de preço de um produto (últimos 180 dias). */
+  r.get('/:id/history', async (req, res) => {
+    const id = Number(req.params.id);
+    const own = await pool.query('select id from products where id = $1 and user_id = $2', [id, req.uid]);
+    if (!own.rows.length) throw new HttpError(404, 'Produto não encontrado.');
+    const since = new Date(Date.now() - 180 * 864e5).toISOString();
+    const { rows } = await pool.query(
+      'select price, original_price, checked_at from price_history where product_id = $1 and checked_at >= $2 order by checked_at, id',
+      [id, since]
+    );
+    res.json({ history: rows.map((h) => ({ price: Number(h.price), original_price: h.original_price === null ? null : Number(h.original_price), checked_at: h.checked_at })) });
   });
 
   r.post('/', async (req, res) => {
@@ -141,6 +253,7 @@ function productRoutes({ pool, cfg, fetchImpl }) {
       if (e.code === '23505') throw new HttpError(409, DUPLICATE);
       throw e;
     }
+    if (priceChanged) await recordPrice(pool, id, rows[0].price, rows[0].original_price);
     res.json({ product: mapProduct(rows[0]) });
   });
 
@@ -149,17 +262,9 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     const id = Number(req.params.id);
     const cur = (await pool.query('select * from products where id = $1 and user_id = $2', [id, req.uid])).rows[0];
     if (!cur) throw new HttpError(404, 'Produto não encontrado.');
-    const fresh = await freshData({ pool, cfg, fetchImpl, uid: req.uid, product: cur });
-    const sets = ['price = $3', 'original_price = $4', 'price_checked_at = now()'];
-    const vals = [fresh.price, fresh.original_price];
-    // Só sobrescreve o que a loja informou; a comissão e a avaliação digitadas pelo usuário ficam se a loja não mandar.
-    for (const k of ['rating', 'sales_k', 'commission_pct']) {
-      if (fresh[k] !== null && fresh[k] !== undefined && !(k === 'commission_pct' && cur.marketplace === 'ML')) {
-        vals.push(fresh[k]); sets.push(`${k} = $${vals.length + 2}`);
-      }
-    }
-    const { rows } = await pool.query(`update products set ${sets.join(', ')} where id = $1 and user_id = $2 returning *`, [id, req.uid, ...vals]);
-    res.json({ product: mapProduct(rows[0]), previous_price: Number(cur.price) });
+    const row = await refreshOne({ pool, cfg, fetchImpl, uid: req.uid, cur });
+    const stats = await priceStats(pool, req.uid, [row]);
+    res.json({ product: mapProduct(row, stats.get(row.id)), previous_price: Number(cur.price) });
   });
 
   r.delete('/:id', async (req, res) => {

@@ -53,7 +53,8 @@
     products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
     mkt: 'todos', cat: 'todas', comMin: 0, ordem: 'score', days: 14, authMode: 'login',
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
-    g: { mkt: 'ML', q: '', sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {} },
+    g: { mkt: 'ML', q: '', category: '', freeShip: false, sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
+    onlyFree: false,
   };
 
   var ICONS = {
@@ -81,7 +82,19 @@
     ]).then(function (r) {
       state.products = r[0].products; state.queue = r[1].items; state.summary = r[2];
       state.earnings = r[3].earnings; state.conn = r[4]; state.mkts = r[5];
+      loadMlExtras();
     });
+  }
+
+  /** Tendências e categorias do Mercado Livre: carregadas uma vez, em segundo plano, quando ele está conectado. */
+  function loadMlExtras() {
+    var g = state.g;
+    if (!mktReady('ML') || g.trends) return;
+    g.trends = [];
+    Promise.all([
+      api('GET', '/api/garimpo/trends').then(function (r) { g.trends = r.trends; }).catch(function () {}),
+      api('GET', '/api/garimpo/categories').then(function (r) { g.cats = r.categories; }).catch(function () {}),
+    ]).then(function () { if (state.tab === 'garimpar') render(); });
   }
   function reload() { return loadAll().then(render); }
 
@@ -133,6 +146,27 @@
   function statsBlock(p) {
     return '<div class="stats"><div><span>Comissão</span><b class="num">' + (p.commission_pct != null ? p.commission_pct + '%' : '—') + '</b></div><div><span>Ganho/venda</span><b class="num">' + brl(p.earn_per_sale) + '</b></div><div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>';
   }
+  /** Selos da oferta: ranking, frete grátis, Full, loja oficial, nº de vendedores. */
+  function badges(p) {
+    var b = [];
+    if (p.best_seller_rank) b.push('<span class="tag top">' + p.best_seller_rank + 'º mais vendido</span>');
+    if (p.free_shipping) b.push('<span class="tag free">Frete grátis</span>');
+    if (p.full) b.push('<span class="tag full">⚡ Full</span>');
+    if (p.official_store) b.push('<span class="tag off">Loja oficial</span>');
+    if (p.sellers > 1) b.push('<span class="tag plain">' + p.sellers + ' vendedores</span>');
+    return b.length ? '<div class="badges">' + b.join('') + '</div>' : '';
+  }
+  /** Comparação com o histórico: menor preço do período, caiu/subiu desde a última conferência, "de" inflado. */
+  function priceTrend(p) {
+    var s = p.price_stats;
+    if (!s || s.count < 2) return '';
+    var out = [];
+    if (p.price <= s.min && s.max > s.min) out.push('<span class="trend down">Menor preço em 90 dias</span>');
+    else if (s.previous != null && p.price < s.previous) out.push('<span class="trend down">↓ caiu de ' + brl(s.previous) + '</span>');
+    else if (s.previous != null && p.price > s.previous) out.push('<span class="trend up">↑ subiu de ' + brl(s.previous) + '</span>');
+    if (s.inflated_original) out.push('<span class="trend warn" title="Nas conferências dos últimos 90 dias o produto nunca custou o preço original anunciado">⚠ Desconto suspeito: o "preço de" nunca foi visto</span>');
+    return out.length ? '<div class="trends-line">' + out.join('') + '</div>' : '';
+  }
   function priceBlock(p) {
     return '<div class="price"><strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') + '</div>';
   }
@@ -150,7 +184,9 @@
       '<div class="filters" style="padding:0">' + selectEl('g-sort', 'sort', 'Ordenar por', sorts, g.sort) +
       selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
       (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
-        selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) : '') + '</div></form>';
+        selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) :
+        '<label class="pick"><input type="checkbox" id="g-free"' + (g.freeShip ? ' checked' : '') + '> Só frete grátis</label>') + '</div>' +
+      (g.mkt === 'ML' && ready ? mlExplore(g) : '') + '</form>';
 
     var note = g.mkt === 'ML' ? '<div class="rule">Primeiro vêm os mais vendidos da categoria (com a posição no ranking), depois os demais produtos com vendedor ativo. O preço é o da oferta mais barata. O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado: a comissão usa o padrão de Conexões e o link você gera no portal de Afiliados e cola no produto (botão Editar).</div>' : '';
     if (!ready) {
@@ -161,9 +197,9 @@
     var cards = g.results.map(function (p, i) {
       var picked = Boolean(g.sel[i]);
       return '<article class="card' + (picked ? ' picked' : '') + '">' + thumb(p) +
-        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.best_seller_rank ? '<span class="tag top">' + p.best_seller_rank + 'º mais vendido</span>' : '') + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
+        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        priceBlock(p) + statsBlock(p) +
+        badges(p) + priceBlock(p) + statsBlock(p) +
         '<div class="row">' + (p.saved_id ? '<span class="pill posted">Já salvo</span>' : '<label class="pick"><input type="checkbox" data-gpick="' + i + '"' + (picked ? ' checked' : '') + '> Selecionar</label>') +
         '<span class="grow"></span>' + (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Ver na loja</a>' : '') + '</div></article>';
     }).join('');
@@ -176,12 +212,22 @@
     return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form + note + results + bar;
   }
 
+  /** Atalhos do Mercado Livre: o que está em alta nas buscas e os mais vendidos de uma categoria. */
+  function mlExplore(g) {
+    var trends = (g.trends || []).slice(0, 14).map(function (k) {
+      return '<button type="button" class="chip small" data-trend="' + esc(k) + '">' + esc(k) + '</button>';
+    }).join('');
+    var cats = g.cats ? selectEl('g-cat', 'category', 'Mais vendidos por categoria', [['', 'Ou veja os mais vendidos de uma categoria…']].concat(g.cats.map(function (c) { return [c.id, c.name]; })), g.category) : '';
+    return (trends ? '<div class="trends"><span class="hint">🔥 Em alta no Mercado Livre:</span>' + trends + '</div>' : '') + (cats ? '<div class="filters" style="padding:0">' + cats + '</div>' : '');
+  }
+
   function garimpar(page) {
     var g = state.g;
     g.busy = true; render();
     return api('POST', '/api/garimpo/search', {
-      marketplace: g.mkt, q: g.q, page: page, sort: g.sort,
+      marketplace: g.mkt, q: g.q, category: g.mkt === 'ML' && g.category ? g.category : undefined, page: page, sort: g.sort,
       min_discount: g.minDesc, min_commission: g.mkt === 'SH' ? g.minCom : 0, min_rating: g.mkt === 'SH' ? g.minRat : 0,
+      free_shipping: g.mkt === 'ML' && g.freeShip,
     }).then(function (r) {
       if (page === 1) { g.results = r.items; g.sel = {}; } else g.results = g.results.concat(r.items);
       g.page = r.page; g.more = r.has_more; g.done = true;
@@ -191,7 +237,7 @@
   function viewDescobrir() {
     var cats = ['todas'].concat(Array.from(new Set(state.products.map(function (p) { return p.category; }).filter(Boolean))));
     var list = state.products.filter(function (p) {
-      return (state.mkt === 'todos' || p.marketplace === state.mkt) && (state.cat === 'todas' || p.category === state.cat) && (p.commission_pct || 0) >= state.comMin;
+      return (state.mkt === 'todos' || p.marketplace === state.mkt) && (state.cat === 'todas' || p.category === state.cat) && (p.commission_pct || 0) >= state.comMin && (!state.onlyFree || p.free_shipping);
     });
     list.sort(function (a, b) {
       if (state.ordem === 'ganho') return b.earn_per_sale - a.earn_per_sale;
@@ -208,8 +254,9 @@
       return '<article class="card">' + thumb(p) +
         '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        priceBlock(p) + statsBlock(p) +
+        badges(p) + priceBlock(p) + priceTrend(p) + statsBlock(p) +
         '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
+        (p.price_stats && p.price_stats.count > 1 ? ' · <button class="link" data-history="' + p.id + '">Histórico</button>' : '') +
         (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
         (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
         '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button><span class="grow"></span>' +
@@ -218,12 +265,14 @@
         '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div></article>';
     }).join('');
     return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos, ordenados pela nota de prioridade.</p></div>' +
-      '<div class="toolbar"><button class="btn primary" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button></div>' +
+      '<div class="toolbar"><button class="btn primary" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button>' +
+      (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
       '<div class="rule">Nota de 0 a 100: 30% desconto, 30% comissão, 20% avaliação, 20% volume de vendas.</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
       sel('f-cat', 'Categoria', cats.map(function (c) { return [c, c === 'todas' ? 'Todas as categorias' : c]; }), state.cat) +
       sel('f-com', 'Comissão mínima', [[0, 'Qualquer comissão'], [8, 'A partir de 8%'], [10, 'A partir de 10%'], [12, 'A partir de 12%']], state.comMin) +
-      sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) + '</div>' +
+      sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) +
+      '<label class="pick"><input type="checkbox" id="f-free"' + (state.onlyFree ? ' checked' : '') + '> Só frete grátis</label></div>' +
       (list.length ? '<div class="grid three">' + cards + '</div>' :
         '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Use a aba Garimpar, Novo produto ou importe um CSV.') + '</div>');
   }
@@ -525,7 +574,11 @@
     var media = ig ? '<div class="qmedia"><div class="thumb">' +
       (post.media_type === 'video' && u ? '<video src="' + esc(u) + '" muted playsinline preload="metadata"></video>' : (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer">' : '<span class="hint" style="padding:8px">sem mídia</span>')) +
       '</div><div style="display:flex;flex-direction:column;gap:6px"><span class="hint">' + (post.media_type === 'video' ? 'Reels em vídeo' : post.media_type === 'image' ? 'Foto' : 'O Instagram exige foto (JPEG) ou vídeo.') + '</span>' +
-      (locked ? '' : '<label class="btn small" for="post-up">Trocar mídia</label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" hidden>') + '</div></div>' : '';
+      (locked ? '' : '<label class="btn small" for="post-up">Enviar outra</label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" hidden>') + '</div></div>' +
+      // galeria do produto (Mercado Livre traz até 12 fotos): escolher qual vai no post
+      ((p.images || []).length > 1 && !locked ? '<div class="gallery" role="group" aria-label="Escolher foto">' + p.images.map(function (src, i) {
+        return '<button type="button" class="gpic' + (post.media_url === src ? ' on' : '') + '" data-pimg="' + esc(src) + '" aria-label="Foto ' + (i + 1) + '"><img src="' + esc(safeUrl(src)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
+      }).join('') + '</div>' : '') : '';
     var actions;
     if (post.status === 'posted') {
       actions = '<p class="ok">' + (ig ? 'Publicado no Instagram!' + (post.permalink ? ' <a href="' + esc(safeUrl(post.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver o post</a>' : '') : 'Registrado no histórico como postado.') + '</p>' +
@@ -556,6 +609,35 @@
       '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
   }
 
+  /** Janela com o histórico de preço do produto: gráfico de linha + últimas conferências. */
+  function showHistory(p) {
+    if (!p) return null;
+    return api('GET', '/api/products/' + p.id + '/history').then(function (r) {
+      var h = r.history;
+      var W = 520, H = 170, L = 56, R = 10, T = 12, B = 26;
+      var prices = h.map(function (x) { return x.price; });
+      var min = Math.min.apply(null, prices), max = Math.max.apply(null, prices);
+      var pad = (max - min) * 0.15 || max * 0.05 || 1; var lo = Math.max(0, min - pad), hi = max + pad;
+      var t0 = new Date(h[0].checked_at).getTime(), t1 = new Date(h[h.length - 1].checked_at).getTime();
+      var x = function (t) { return L + (t1 === t0 ? (W - L - R) / 2 : (W - L - R) * (t - t0) / (t1 - t0)); };
+      var y = function (v) { return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); };
+      var pts = h.map(function (e) { return x(new Date(e.checked_at).getTime()) + ',' + y(e.price); }).join(' ');
+      var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Histórico de preço">' +
+        [hi, (hi + lo) / 2, lo].map(function (v) { return '<line class="grid-l" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + brl(v).replace(/\s/g, ' ') + '</text>'; }).join('') +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>' +
+        h.map(function (e, i) { return '<circle cx="' + x(new Date(e.checked_at).getTime()) + '" cy="' + y(e.price) + '" r="' + (i === h.length - 1 ? 4.5 : 3) + '" fill="' + (i === h.length - 1 ? 'var(--gold)' : 'var(--accent)') + '"><title>' + fmtWhen(e.checked_at) + ': ' + brl(e.price) + '</title></circle>'; }).join('') +
+        '<text x="' + L + '" y="' + (H - 6) + '">' + new Date(t0).toLocaleDateString('pt-BR') + '</text><text x="' + (W - R) + '" y="' + (H - 6) + '" text-anchor="end">' + new Date(t1).toLocaleDateString('pt-BR') + '</text></svg>';
+      var rows = h.slice(-10).reverse().map(function (e) {
+        return '<tr><td class="num">' + fmtWhen(e.checked_at) + '</td><td class="r num">' + brl(e.price) + '</td><td class="r num">' + (e.original_price ? brl(e.original_price) : '—') + '</td></tr>';
+      }).join('');
+      dlg.innerHTML = '<h2>Histórico de preço</h2><p class="hint">' + esc(p.title) + '</p>' +
+        '<div class="kpis" style="margin:12px 0"><div class="kpi"><span>Agora</span><b class="num">' + brl(p.price) + '</b></div><div class="kpi"><span>Menor</span><b class="num">' + brl(min) + '</b></div><div class="kpi"><span>Maior</span><b class="num">' + brl(max) + '</b></div><div class="kpi"><span>Conferências</span><b class="num">' + h.length + '</b></div></div>' +
+        svg + '<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Quando</th><th class="r">Preço</th><th class="r">Preço "de"</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="row end" style="margin-top:12px"><button class="btn primary" data-act="close-dlg">Fechar</button></div>';
+      if (!dlg.open) dlg.showModal();
+    });
+  }
+
   /** Reels: confere a cada 5 s, por até 5 minutos, enquanto a janela estiver aberta. */
   function pollPost(id, tries) {
     setTimeout(function () {
@@ -571,6 +653,18 @@
   }
 
   Object.assign(actions, {
+    'refresh-all': function (btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Atualizando preços…'; }
+      return api('POST', '/api/products/refresh-all').then(function (r) {
+        var msg = r.checked + ' conferidos';
+        if (r.changed.length) msg += ', ' + r.changed.length + ' mudaram de preço (ex.: ' + r.changed[0].title.slice(0, 30) + ': ' + brl(r.changed[0].from) + ' → ' + brl(r.changed[0].to) + ')';
+        else msg += ', nenhum mudou de preço';
+        if (r.failed.length) msg += '. ' + r.failed.length + ' com erro: ' + r.failed[0].error;
+        if (r.remaining > 0) msg += '. Faltaram ' + r.remaining + ': clique de novo para continuar.';
+        toast(msg);
+        return reload();
+      }).catch(function (e) { return reload().then(function () { throw e; }); });
+    },
     'post-close': function () { dlg.close(); },
     'post-copy': function () { return copyText(post.caption).then(function (ok) { toast(ok ? 'Texto copiado' : 'Não consegui copiar. Selecione o texto e copie.'); }); },
     'post-regen': function () { return loadPreview(false); },
@@ -612,9 +706,12 @@
     var t = e.target.closest('button, label');
     if (!t) return;
     var d = t.dataset;
-    if (d.act && actions[d.act]) return actions[d.act]();
+    if (d.act && actions[d.act]) return actions[d.act](t);
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; return render(); }
+    if (d.trend) { state.g.q = d.trend; state.g.category = ''; return garimpar(1); }
+    if (d.history) return showHistory(state.products.filter(function (x) { return x.id === Number(d.history); })[0]);
+    if (d.pimg && post) { post.media_type = 'image'; post.media_url = d.pimg; post.customMedia = true; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
@@ -675,11 +772,19 @@
         .finally(function () { if (post) { post.busy = false; renderPost(); } });
     }
     if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
+    if (t.id === 'g-cat') {
+      state.g.category = t.value;
+      if (!t.value) return render();
+      state.g.q = '';
+      return garimpar(1);
+    }
+    if (t.id === 'g-free') { state.g.freeShip = t.checked; return state.g.done ? garimpar(1) : render(); }
     if (t.form && t.form.id === 'g-form' && t.tagName === 'SELECT') {
       var gs = state.g;
       gs[t.name] = t.name === 'sort' ? t.value : Number(t.value);
-      return gs.done && gs.q ? garimpar(1) : render();
+      return gs.done && (gs.q || gs.category) ? garimpar(1) : render();
     }
+    if (t.id === 'f-free') { state.onlyFree = t.checked; return render(); }
     if (t.dataset.upload && t.files[0]) {
       var id = t.dataset.upload;
       return uploadFile(t.files[0]).then(function (r) { return saveQueue(id, { media_type: r.media_type, media_url: r.url }); }).then(function () { toast('Mídia atualizada'); return reload(); });
@@ -707,6 +812,7 @@
     } else if (e.target.id === 'g-form') {
       e.preventDefault();
       state.g.q = $('#g-q').value.trim();
+      state.g.category = '';
       guard(function () { return garimpar(1); })();
     } else if (e.target.id === 'sh-form') {
       e.preventDefault();

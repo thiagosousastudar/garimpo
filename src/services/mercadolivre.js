@@ -44,6 +44,8 @@ function fromItem(it, defaultCommission) {
 function fromCatalog(p, offer, defaultCommission, rank = null) {
   const price = num(offer?.price) ?? num(p.buy_box_winner?.price);
   const orig = num(offer?.original_price) ?? num(p.buy_box_winner?.original_price);
+  const images = (p.pictures || []).map((x) => bigImage(x.secure_url || x.url)).filter(Boolean);
+  const brand = (p.attributes || []).find((a) => a.id === 'BRAND')?.value_name || null;
   return {
     marketplace: 'ML',
     external_id: p.id || null,
@@ -55,9 +57,18 @@ function fromCatalog(p, offer, defaultCommission, rank = null) {
     commission_pct: defaultCommission ?? null,
     product_url: p.permalink || (p.id ? `https://www.mercadolivre.com.br/p/${p.id}` : null),
     affiliate_url: null,
-    image_url: bigImage(p.pictures?.[0]?.secure_url || p.pictures?.[0]?.url),
+    image_url: images[0] || null,
     shop: null,
     best_seller_rank: rank,
+    // detalhes da oferta e do produto (selos, galeria, características)
+    images: images.slice(0, 12),
+    features: (p.main_features || []).map((f) => f.text).filter(Boolean).slice(0, 6),
+    brand,
+    free_shipping: offer?.shipping?.free_shipping === true,
+    full: offer?.shipping?.logistic_type === 'fulfillment',
+    official_store: Boolean(offer?.official_store_id),
+    warranty: offer?.warranty || null,
+    sellers: offer?.sellers || null,
   };
 }
 
@@ -122,30 +133,51 @@ function createMercadoLivreClient({ token, defaultCommission = null, fetchImpl =
   async function bestOffer(productId) {
     const d = await get(`/products/${productId}/items`, { limit: 10 });
     const offers = (d.results || []).filter((o) => num(o.price) > 0);
-    return offers.length ? offers.reduce((a, b) => (num(b.price) < num(a.price) ? b : a)) : null;
+    if (!offers.length) return null;
+    const best = offers.reduce((a, b) => (num(b.price) < num(a.price) ? b : a));
+    return { ...best, sellers: Number(d.paging?.total) || offers.length };
   }
 
-  /**
-   * Os mais vendidos da categoria da busca (até 20, em ordem de ranking), já com nome, foto e a oferta mais barata.
-   * Só entram os de tipo PRODUCT (catálogo), que são os que dá para consultar. Falha vira lista vazia.
-   */
+  /** Mais vendidos de uma categoria (até 20, em ordem), já com detalhes e a oferta mais barata. */
+  async function bestSellersOf(categoryId) {
+    const h = await get(`/highlights/MLB/category/${categoryId}`);
+    const top = (h.content || []).filter((c) => c.type === 'PRODUCT');
+    const full = await mapLimit(top, 8, (c) => Promise.all([get(`/products/${c.id}`), bestOffer(c.id)])
+      .then(([prod, offer]) => (offer ? fromCatalog(prod, offer, defaultCommission, Number(c.position) || null) : null))
+      .catch(() => null));
+    return full.filter(Boolean);
+  }
+
+  /** Mais vendidos da categoria da busca. Só entram os de tipo PRODUCT (catálogo). Falha vira lista vazia. */
   async function bestSellers(q) {
     try {
       const dd = await get('/sites/MLB/domain_discovery/search', { q, limit: 1 });
       const cat = Array.isArray(dd) ? dd[0]?.category_id : null;
-      if (!cat) return [];
-      const h = await get(`/highlights/MLB/category/${cat}`);
-      const top = (h.content || []).filter((c) => c.type === 'PRODUCT');
-      const full = await mapLimit(top, 8, (c) => Promise.all([get(`/products/${c.id}`), bestOffer(c.id)])
-        .then(([prod, offer]) => (offer ? fromCatalog(prod, offer, defaultCommission, Number(c.position) || null) : null))
-        .catch(() => null));
-      return full.filter(Boolean);
+      return cat ? await bestSellersOf(cat) : [];
     } catch (_) {
       return [];
     }
   }
 
   return {
+    /** O que as pessoas estão buscando agora no Mercado Livre (geral ou de uma categoria). */
+    async trends(categoryId) {
+      const d = await get(categoryId ? `/trends/MLB/${categoryId}` : '/trends/MLB');
+      return (Array.isArray(d) ? d : []).map((t) => String(t.keyword || '').trim()).filter(Boolean).slice(0, 20);
+    },
+
+    /** Categorias principais do Mercado Livre Brasil. */
+    async categories() {
+      const d = await get('/sites/MLB/categories');
+      return (Array.isArray(d) ? d : []).map((c) => ({ id: c.id, name: c.name }));
+    },
+
+    /** Mais vendidos de uma categoria, sem precisar digitar nada. */
+    async bestSellersOf(categoryId) {
+      if (!/^MLB\d+$/.test(String(categoryId))) throw new Error('Categoria inválida.');
+      return { items: await bestSellersOf(categoryId), hasMore: false };
+    },
+
     async search({ q, page = 1, limit = 50, sort = 'relevancia' }) {
       const p = Math.max(1, Number(page) || 1);
       try {

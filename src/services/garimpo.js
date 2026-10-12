@@ -80,11 +80,12 @@ const SORTERS = {
  * Busca na loja, na hora. Calcula a nota de prioridade, aplica os filtros mínimos e marca o que já está salvo.
  * Filtros e ordenação que a loja não suporta são aplicados aqui, sobre a página recebida.
  */
-async function search({ pool, cfg, fetchImpl, uid, marketplace, q, page, sort, minDiscount, minCommission, minRating }) {
+async function search({ pool, cfg, fetchImpl, uid, marketplace, q, category, page, sort, minDiscount, minCommission, minRating, freeShipping }) {
   const client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace });
+  if (category && !client.bestSellersOf) throw new HttpError(400, 'Explorar por categoria só está disponível no Mercado Livre.');
   let out;
   try {
-    out = await client.search({ q, page, sort });
+    out = category ? await client.bestSellersOf(category) : await client.search({ q, page, sort });
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw new HttpError(502, e.message);
@@ -104,9 +105,48 @@ async function search({ pool, cfg, fetchImpl, uid, marketplace, q, page, sort, m
     .map((p) => ({ ...p, ...scoreProduct(p), saved_id: saved.get(p.external_id) || null }))
     .filter((p) => p.desc >= (minDiscount || 0))
     .filter((p) => !minCommission || (p.commission_pct || 0) >= minCommission)
-    .filter((p) => !minRating || (p.rating || 0) >= minRating);
+    .filter((p) => !minRating || (p.rating || 0) >= minRating)
+    .filter((p) => !freeShipping || p.free_shipping);
   if (SORTERS[sort]) items = items.sort(SORTERS[sort]);
   return { items, has_more: out.hasMore, page: Number(page) || 1 };
+}
+
+/** Tendências de busca (só Mercado Livre). Sem conexão, devolve lista vazia em vez de erro. */
+async function trends({ pool, cfg, fetchImpl, uid, category }) {
+  const client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'ML' });
+  try { return await client.trends(category); } catch (e) { throw new HttpError(502, e.message); }
+}
+
+let categoryCache = null;
+async function categories({ pool, cfg, fetchImpl, uid }) {
+  if (categoryCache) return categoryCache;
+  const client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'ML' });
+  try { categoryCache = await client.categories(); } catch (e) { throw new HttpError(502, e.message); }
+  return categoryCache;
+}
+
+/**
+ * Antes de salvar itens do Mercado Livre, busca os detalhes completos (galeria, características, selos)
+ * e o preço do momento. Se a consulta falhar, salva com o que veio da busca.
+ */
+async function enrich({ pool, cfg, fetchImpl, uid, items }) {
+  const ml = items.filter((p) => p.marketplace === 'ML' && /^MLB\d+$/.test(String(p.external_id || '')));
+  if (!ml.length) return items;
+  let client;
+  try { client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'ML' }); } catch (_) { return items; }
+  const fresh = new Map();
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, ml.length) }, async () => {
+    while (next < ml.length) {
+      const p = ml[next++];
+      try { const f = await client.getItem(p.external_id); if (f && f.price) fresh.set(p.external_id, f); } catch (_) { /* mantém o da busca */ }
+    }
+  }));
+  return items.map((p) => {
+    const f = fresh.get(p.external_id);
+    // o garimpo pode ter pegado comissão/rank que a consulta individual não traz
+    return f ? { ...p, ...f, commission_pct: p.commission_pct ?? f.commission_pct, best_seller_rank: p.best_seller_rank ?? f.best_seller_rank } : p;
+  });
 }
 
 /** Preço atual do produto na loja. */
@@ -124,4 +164,4 @@ async function freshData({ pool, cfg, fetchImpl, uid, product }) {
   return item;
 }
 
-module.exports = { externalIdFrom, search, freshData, clientFor, saveMercadoLivreTokens, loadConnection, NAMES };
+module.exports = { externalIdFrom, search, trends, categories, enrich, freshData, clientFor, saveMercadoLivreTokens, loadConnection, NAMES };
