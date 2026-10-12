@@ -100,4 +100,5 @@ textarea{font:inherit;color:var(--ink)}
 .coverctl input[type=color]{width:100%;height:40px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.ship{margin:-4px 0 0;font-size:13px;color:var(--muted)}
 .ship.high{color:var(--warn);background:var(--gold-soft);border-radius:8px;padding:6px 8px}
 .ship.high .hint{color:inherit;opacity:.8}
-.shipzip{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+.shipzip{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}.theme-btn span{font-weight:600}
+@media (max-width:520px){.theme-btn span{display:none}}

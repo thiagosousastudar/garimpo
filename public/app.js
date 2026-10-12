@@ -113,7 +113,20 @@
       '<p class="err" id="auth-err" role="alert"></p>' +
       '<button class="btn primary" type="submit">' + (reg ? 'Criar conta' : 'Entrar') + '</button></form>' +
       (state.signup ? '<button class="link" data-act="toggle-auth">' + (reg ? 'Já tenho conta. Entrar' : 'Não tenho conta. Criar agora') + '</button>' : '') +
-      '</div>';
+      '<div class="row">' + themeButton() + '</div></div>';
+  }
+
+  /* ---------- tema: automático (segue o sistema) → claro → escuro ---------- */
+  var THEMES = { auto: ['◐', 'Tema automático', 'light'], light: ['☀', 'Tema claro', 'dark'], dark: ['☾', 'Tema escuro', 'auto'] };
+  function currentTheme() { var t = document.documentElement.getAttribute('data-theme'); return t === 'light' || t === 'dark' ? t : 'auto'; }
+  function themeButton() {
+    var t = THEMES[currentTheme()];
+    return '<button class="btn small ghost theme-btn" data-act="theme" title="Trocar tema (automático, claro, escuro)" aria-label="' + t[1] + '. Trocar tema">' + t[0] + ' <span>' + t[1].replace('Tema ', '') + '</span></button>';
+  }
+  function setTheme(t) {
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+    try { if (t === 'auto') localStorage.removeItem('garimpo-theme'); else localStorage.setItem('garimpo-theme', t); } catch (_) { /* só não lembra a escolha */ }
   }
 
   function shell(body) {
@@ -124,7 +137,7 @@
       ['ganhos', 'Ganhos', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
       ['conexoes', 'Conexões', '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 0011 18.7l1-1"/>']];
     return '<header class="top"><div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .8-4.4 4.2 1.1 6L12 16.7 6.7 19.6l1.1-6L3.4 9.4l6-.8z"/></svg></div><h1>Garimpo</h1></div>' +
-      '<div class="top-actions"><span class="who">' + esc(state.user.name || state.user.email) + '</span><button class="btn small ghost" data-act="logout">Sair</button></div></header>' +
+      '<div class="top-actions"><span class="who">' + esc(state.user.name || state.user.email) + '</span>' + themeButton() + '<button class="btn small ghost" data-act="logout">Sair</button></div></header>' +
       '<nav class="tabs" role="tablist" aria-label="Seções">' + tabs.map(function (t) {
         return '<button role="tab" aria-selected="' + (state.tab === t[0]) + '" data-tab="' + t[0] + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + t[2] + '</svg>' + t[1] + (t[0] === 'fila' && pend ? '<span class="badge">' + pend + '</span>' : '') + '</button>';
       }).join('') + '</nav><main>' + body + '</main>';
@@ -585,6 +598,12 @@
   /* ---------- ações ---------- */
   var actions = {
     'toggle-auth': function () { state.authMode = state.authMode === 'login' ? 'register' : 'login'; render(); },
+    'theme': function () {
+      var next = THEMES[currentTheme()][2];
+      setTheme(next);
+      render();
+      toast(THEMES[next][1] + (next === 'auto' ? ' (segue o sistema)' : ''));
+    },
     'logout': function () { return api('POST', '/api/auth/logout').then(function () { state.user = null; render(); }); },
     'new-product': function () { productDialog(); },
     'import-products': function () { importDialog('products'); },
