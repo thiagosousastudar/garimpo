@@ -750,3 +750,64 @@ test('garimpo Mercado Livre: autorização com PKCE, busca com comissão padrão
     assert.deepEqual([st.data.ML.authorized, st.data.ML.default_commission], [true, 10]);
   } finally { t.close(); }
 });
+test('postar agora: prévia sem gravar, Instagram na hora, WhatsApp registrado e erros sem lixo na fila', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+
+    const prev = await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram' });
+    assert.equal(prev.status, 200);
+    assert.match(prev.data.caption, /Air Fryer/);
+    assert.equal(prev.data.media_type, 'image');
+    assert.equal((await api('GET', '/api/queue')).data.items.length, 0);
+
+    // sem Instagram conectado: recusa antes de gravar
+    const semConexao = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Oferta', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(semConexao.status, 400);
+    assert.match(semConexao.data.error, /Conecte sua conta do Instagram/);
+    assert.equal((await api('GET', '/api/queue')).data.items.length, 0);
+
+    assert.equal((await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN })).status, 200);
+    // sem mídia: recusa antes de gravar
+    const semMidia = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Oferta' });
+    assert.equal(semMidia.status, 400);
+    assert.match(semMidia.data.error, /foto ou um vídeo/);
+    assert.equal((await api('GET', '/api/queue')).data.items.length, 0);
+
+    const ig = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Texto editado na hora', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(ig.status, 201, JSON.stringify(ig.data));
+    assert.equal(ig.data.item.status, 'posted');
+    assert.equal(ig.data.item.caption, 'Texto editado na hora');
+    assert.equal(ig.data.item.permalink, 'https://instagram.com/p/abc');
+    const media = t.calls.find((c) => c.path.endsWith('/media') && c.method === 'POST');
+    assert.equal(media.body.caption, 'Texto editado na hora');
+
+    const wa = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'whatsapp', caption: 'Oferta no grupo' });
+    assert.equal(wa.status, 201);
+    assert.equal(wa.data.item.status, 'posted');
+    assert.ok(wa.data.item.posted_at);
+
+    assert.equal((await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'whatsapp', caption: '  ' })).status, 400);
+    assert.equal((await api('POST', '/api/queue/post-now', { product_id: 99999, channel: 'whatsapp', caption: 'x' })).status, 404);
+    const items = (await api('GET', '/api/queue')).data.items;
+    assert.deepEqual(items.map((i) => i.status).sort(), ['posted', 'posted']);
+  } finally { t.close(); }
+});
+
+test('postar agora: falha da Meta fica na fila como Falhou, sem o token', async () => {
+  const t = await boot({}, { failMedia: true });
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Oferta', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(r.status, 502);
+    assert.ok(!r.data.error.includes(TOKEN));
+    const items = (await api('GET', '/api/queue')).data.items;
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'failed');
+  } finally { t.close(); }
+});

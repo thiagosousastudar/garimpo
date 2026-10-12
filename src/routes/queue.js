@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { HttpError, isoOrNull } = require('../util');
 const { buildCaption } = require('../services/copy');
-const { publishItem, finishItem, EDITABLE } = require('../services/publisher');
+const { publishItem, finishItem, EDITABLE, validate, credentialsFor } = require('../services/publisher');
 
 const CHANNELS = ['instagram', 'whatsapp'];
 const MEDIA_TYPES = ['none', 'image', 'video'];
@@ -38,25 +38,79 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     res.json({ items: rows });
   });
 
-  r.post('/', async (req, res) => {
-    const channel = String(req.body?.channel || '');
+  /** Texto e mídia sugeridos para um produto num canal. Não grava nada. */
+  async function draftFor(uid, body) {
+    const channel = String(body?.channel || '');
     if (!CHANNELS.includes(channel)) throw new HttpError(400, 'Canal deve ser instagram ou whatsapp.');
-    const prod = await pool.query('select * from products where id = $1 and user_id = $2', [Number(req.body?.product_id), req.uid]);
+    const prod = await pool.query('select * from products where id = $1 and user_id = $2', [Number(body?.product_id), uid]);
     if (!prod.rows.length) throw new HttpError(404, 'Produto não encontrado.');
     const p = prod.rows[0];
-    const out = await buildCaption(p, channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl });
+    const out = await buildCaption(p, channel, { ai: Boolean(body?.ai), cfg, fetchImpl });
     let media_type = 'none';
     let media_url = null;
     if (channel === 'instagram') {
       if (p.image_url) { media_type = 'image'; media_url = p.image_url; }
       else if (p.video_url) { media_type = 'video'; media_url = p.video_url; }
     }
+    return { product: p, channel, caption: out.caption, media_type, media_url, warning: out.warning };
+  }
+
+  function cleanMedia(b) {
+    const media_type = b.media_type === undefined ? 'none' : b.media_type;
+    if (!MEDIA_TYPES.includes(media_type)) throw new HttpError(400, 'Tipo de mídia inválido.');
+    const media_url = String(b.media_url || '').trim() || null;
+    if (media_url && !media_url.startsWith('/uploads/') && !/^https?:\/\//i.test(media_url)) throw new HttpError(400, 'Endereço da mídia inválido.');
+    return { media_type: media_url ? media_type : 'none', media_url };
+  }
+
+  r.post('/', async (req, res) => {
+    const d = await draftFor(req.uid, req.body);
     const { rows } = await pool.query(
       `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url)
          values ($1,$2,$3,$4,$5,$6) returning id`,
-      [req.uid, p.id, channel, out.caption, media_type, media_url]
+      [req.uid, d.product.id, d.channel, d.caption, d.media_type, d.media_url]
     );
-    res.status(201).json({ item: await getItem(rows[0].id, req.uid), warning: out.warning });
+    res.status(201).json({ item: await getItem(rows[0].id, req.uid), warning: d.warning });
+  });
+
+  /** Prévia do post para a tela "Postar agora". Nada entra na fila. */
+  r.post('/preview', async (req, res) => {
+    const d = await draftFor(req.uid, req.body);
+    res.json({ caption: d.caption, media_type: d.media_type, media_url: d.media_url, warning: d.warning });
+  });
+
+  /**
+   * Postar agora, sem agendador. O item é gravado já com o texto final (fica no histórico da Fila).
+   *  - Instagram: publica na hora. Se falhar, o item fica como "Falhou" na Fila, com o motivo.
+   *    Reels que o Instagram ainda está processando voltam em "processing"; a tela confere até publicar.
+   *  - WhatsApp: o envio é feito pelo usuário no próprio WhatsApp; aqui só registra como postado.
+   */
+  r.post('/post-now', async (req, res) => {
+    const b = req.body || {};
+    const channel = String(b.channel || '');
+    if (!CHANNELS.includes(channel)) throw new HttpError(400, 'Canal deve ser instagram ou whatsapp.');
+    const prod = await pool.query('select id from products where id = $1 and user_id = $2', [Number(b.product_id), req.uid]);
+    if (!prod.rows.length) throw new HttpError(404, 'Produto não encontrado.');
+    const caption = String(b.caption || '');
+    if (!caption.trim()) throw new HttpError(400, 'O texto do post está vazio.');
+    if (caption.length > 5000) throw new HttpError(400, 'Texto muito longo.');
+    const m = channel === 'instagram' ? cleanMedia(b) : { media_type: 'none', media_url: null };
+    if (channel === 'instagram') {
+      // Erros de preenchimento e falta de conexão voltam antes de gravar; só falhas da Meta ficam na Fila.
+      validate({ channel, caption, ...m }, cfg);
+      await credentialsFor(pool, cfg, req.uid);
+    }
+    const ins = await pool.query(
+      `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, status, posted_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+      [req.uid, prod.rows[0].id, channel, caption, m.media_type, m.media_url,
+        channel === 'whatsapp' ? 'posted' : 'draft', channel === 'whatsapp' ? new Date().toISOString() : null]
+    );
+    const id = ins.rows[0].id;
+    if (channel === 'instagram') {
+      await publishItem({ pool, cfg, fetchImpl, userId: req.uid, itemId: id });
+    }
+    res.status(201).json({ item: await getItem(id, req.uid) });
   });
 
   r.patch('/:id', async (req, res) => {

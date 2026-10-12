@@ -53,3 +53,9 @@ input[type=search]{background:var(--surface);border:1px solid var(--line);border
 .hint.stale{color:var(--warn)}
 .err.small{font-size:12px}
 code.copyable{display:inline-block;margin-top:4px;padding:4px 8px;border-radius:8px;background:var(--surface2);color:var(--ink);font-size:12px;word-break:break-all;user-select:all}.filters select{width:auto;flex:0 1 auto}
+
+.row.later{gap:4px;margin-top:-4px}
+.row.later .btn{padding:4px 8px}
+details.sched summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;margin-bottom:6px}
+.seg button[disabled]{opacity:.6}
+textarea{font:inherit;color:var(--ink)}

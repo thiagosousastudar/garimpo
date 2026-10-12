@@ -201,4 +201,4 @@ function startScheduler({ pool, cfg, fetchImpl, log = console }) {
   return { stop: () => clearInterval(timer), tick };
 }
 
-module.exports = { publishItem, finishItem, processDue, startScheduler, EDITABLE };
+module.exports = { publishItem, finishItem, processDue, startScheduler, EDITABLE, validate, credentialsFor };

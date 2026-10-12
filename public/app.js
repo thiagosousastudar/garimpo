@@ -212,9 +212,10 @@
         '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
         (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
         (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
-        '<div class="row"><button class="btn small primary" data-add="' + p.id + '" data-channel="instagram">+ Instagram</button><button class="btn small" data-add="' + p.id + '" data-channel="whatsapp">+ WhatsApp</button><span class="grow"></span>' +
+        '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button><span class="grow"></span>' +
         (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' : '') +
-        '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div></article>';
+        '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div>' +
+        '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div></article>';
     }).join('');
     return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos, ordenados pela nota de prioridade.</p></div>' +
       '<div class="toolbar"><button class="btn primary" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button></div>' +
@@ -251,16 +252,18 @@
         (q.error ? '<p class="err">' + esc(q.error) + '</p>' : '') +
         (q.permalink ? '<p class="ok"><a href="' + esc(safeUrl(q.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver no Instagram</a></p>' : '') +
         (editable ? '<div class="actions"><button class="btn small" data-save="' + q.id + '">Salvar texto</button><button class="btn small" data-regen="' + q.id + '">Refazer texto</button>' + (state.ai ? '<button class="btn small" data-regen="' + q.id + '" data-ai="1">Refazer com IA</button>' : '') + '</div>' : '') +
-        (editable ? '<div class="row"><input type="datetime-local" id="when-' + q.id + '" value="' + localInput(q.scheduled_at) + '" aria-label="Data e hora"><button class="btn small" data-schedule="' + q.id + '">' + (isIg ? 'Agendar' : 'Lembrar') + '</button></div>' : '') +
+        (editable && isIg ? '<details class="sched"' + (q.status === 'scheduled' ? ' open' : '') + '><summary>Agendar (opcional)</summary><div class="row"><input type="datetime-local" id="when-' + q.id + '" value="' + localInput(q.scheduled_at) + '" aria-label="Data e hora"><button class="btn small" data-schedule="' + q.id + '">Agendar</button>' +
+          (q.status === 'scheduled' ? '<button class="btn small ghost" data-unschedule="' + q.id + '">Tirar agendamento</button>' : '') + '</div></details>' : '') +
         '<div class="actions">' +
+        (!isIg && editable ? '<button class="btn small primary" data-wa="' + q.id + '">Abrir no WhatsApp</button>' : '') +
         '<button class="btn small" data-copy="' + q.id + '">Copiar texto</button>' +
         (editable && isIg ? '<button class="btn small primary" data-publish="' + q.id + '"' + (state.conn && state.conn.connected ? '' : ' disabled title="Conecte o Instagram na aba Conexões"') + '>Publicar agora</button>' : '') +
         (editable ? '<button class="btn small" data-posted="' + q.id + '">Marcar como postado</button>' : '') +
         (q.status === 'posted' && !q.external_id ? '<button class="btn small" data-reopen="' + q.id + '">Voltar para fila</button>' : '') +
         (q.status !== 'publishing' ? '<button class="btn small ghost danger" data-del-queue="' + q.id + '">Excluir</button>' : '') + '</div></article>';
     }).join('');
-    return '<div class="pagehead"><h2>Fila de divulgação</h2><p>Edite o texto, escolha o horário e publique. No WhatsApp, copie e cole no grupo.</p></div>' +
-      (items ? '<div class="grid">' + items + '</div>' : '<div class="empty centered-empty">A fila está vazia. Em Descobrir, use + Instagram ou + WhatsApp nos produtos que quer divulgar.</div>');
+    return '<div class="pagehead"><h2>Fila e histórico</h2><p>Posts guardados para depois e tudo o que já foi postado. Publique quando quiser; agendar é opcional. Para postar na hora, use Postar agora na aba Produtos.</p></div>' +
+      (items ? '<div class="grid">' + items + '</div>' : '<div class="empty centered-empty">Nada por aqui ainda. Em Produtos, use Postar agora, ou Fila Instagram/WhatsApp para guardar e publicar depois.</div>');
   }
 
   function viewGanhos() {
@@ -486,6 +489,121 @@
     }).catch(function (e) { return 'Não consegui conferir o preço (' + e.message + '). '; });
   }
 
+  /* ---------- Postar agora: direto do produto, sem fila e sem agendador ---------- */
+  var post = null; // { product, channel, caption, media_type, media_url, busy, sending, status, permalink, note, error, waOpened, customMedia }
+
+  function waLink(text) { return 'https://wa.me/?text=' + encodeURIComponent(text); }
+  function copyText(text) {
+    try { return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; }); } catch (_) { return Promise.resolve(false); }
+  }
+
+  function openPost(p) {
+    post = { product: p, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', busy: true };
+    renderPost();
+    if (!dlg.open) dlg.showModal();
+    return freshBeforeQueue(p).then(function (msg) { if (post) post.note = msg; return loadPreview(false); });
+  }
+
+  function loadPreview(ai) {
+    if (!post) return null;
+    post.busy = true; post.error = null; renderPost();
+    return api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai }).then(function (r) {
+      if (!post) return;
+      post.caption = r.caption;
+      if (!post.customMedia) { post.media_type = r.media_type; post.media_url = r.media_url; }
+      if (r.warning) post.note = (post.note || '') + r.warning;
+    }).catch(function (e) { if (post) post.error = e.message; }).finally(function () { if (post) { post.busy = false; renderPost(); } });
+  }
+
+  function renderPost() {
+    if (!post) return;
+    var ig = post.channel === 'instagram';
+    var igOk = Boolean(state.conn && state.conn.connected);
+    var p = post.product;
+    var locked = post.busy || Boolean(post.status);
+    var u = safeUrl(post.media_url);
+    var media = ig ? '<div class="qmedia"><div class="thumb">' +
+      (post.media_type === 'video' && u ? '<video src="' + esc(u) + '" muted playsinline preload="metadata"></video>' : (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer">' : '<span class="hint" style="padding:8px">sem mídia</span>')) +
+      '</div><div style="display:flex;flex-direction:column;gap:6px"><span class="hint">' + (post.media_type === 'video' ? 'Reels em vídeo' : post.media_type === 'image' ? 'Foto' : 'O Instagram exige foto (JPEG) ou vídeo.') + '</span>' +
+      (locked ? '' : '<label class="btn small" for="post-up">Trocar mídia</label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" hidden>') + '</div></div>' : '';
+    var actions;
+    if (post.status === 'posted') {
+      actions = '<p class="ok">' + (ig ? 'Publicado no Instagram!' + (post.permalink ? ' <a href="' + esc(safeUrl(post.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver o post</a>' : '') : 'Registrado no histórico como postado.') + '</p>' +
+        '<div class="row end"><button class="btn primary" data-act="post-close">Fechar</button></div>';
+    } else if (post.status === 'processing') {
+      actions = '<p class="hint">O Instagram está processando o vídeo. Deixe esta janela aberta: confiro a cada 5 segundos e publico assim que ficar pronto. Se fechar, o post continua na Fila e você confere por lá.</p>' +
+        '<div class="row end"><button class="btn" data-act="post-close">Fechar</button></div>';
+    } else if (ig) {
+      actions = (igOk ? '' : '<p class="err">Conecte o Instagram na aba Conexões para publicar daqui. Enquanto isso, copie o texto ou use o WhatsApp.</p>') +
+        '<div class="row end"><button class="btn" data-act="post-close">Cancelar</button><button class="btn" data-act="post-copy">Copiar texto</button>' +
+        '<button class="btn primary" data-act="post-ig"' + (igOk && !post.busy ? '' : ' disabled') + '>' + (post.sending ? 'Publicando…' : 'Publicar no Instagram') + '</button></div>';
+    } else {
+      actions = (post.waOpened ? '<p class="hint">Escolha o grupo ou contato no WhatsApp e envie (o texto também foi copiado). Depois toque em "Já enviei" para guardar no histórico.</p>' : '') +
+        '<div class="row end"><button class="btn" data-act="post-close">Cancelar</button>' +
+        (post.waOpened ? '<button class="btn" data-act="post-wa">Abrir de novo</button><button class="btn primary" data-act="post-wa-done"' + (post.busy ? ' disabled' : '') + '>Já enviei</button>'
+          : '<button class="btn primary" data-act="post-wa"' + (post.busy ? ' disabled' : '') + '>Abrir no WhatsApp</button>') + '</div>';
+    }
+    dlg.innerHTML = '<h2>Postar agora</h2><p class="hint">' + esc(p.title) + ' · ' + brl(p.price) + '</p>' +
+      '<div class="seg" role="group" aria-label="Canal" style="margin:10px 0"><button type="button" data-pchan="instagram" aria-pressed="' + ig + '"' + (locked ? ' disabled' : '') + '>Instagram</button><button type="button" data-pchan="whatsapp" aria-pressed="' + !ig + '"' + (locked ? ' disabled' : '') + '>WhatsApp</button></div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px">' +
+      (post.note ? '<p class="hint">' + esc(post.note) + '</p>' : '') +
+      (p.affiliate_url ? '' : '<p class="err small">Este produto não tem link de afiliado: o texto vai com um espaço reservado. Cole o link em Editar antes de postar.</p>') +
+      media +
+      '<textarea id="post-cap" aria-label="Texto do post"' + (locked ? ' readonly' : '') + '>' + esc(post.busy && !post.caption ? 'Preparando o texto…' : post.caption) + '</textarea>' +
+      (ig ? '<p class="hint"><span id="post-cnt">' + post.caption.length + '</span>/2200 caracteres</p>' : '') +
+      (post.status ? '' : '<div class="row"><button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
+        (state.ai ? '<button class="btn small" data-act="post-regen-ai"' + (post.busy ? ' disabled' : '') + '>Refazer com IA</button>' : '') + '</div>') +
+      '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
+  }
+
+  /** Reels: confere a cada 5 s, por até 5 minutos, enquanto a janela estiver aberta. */
+  function pollPost(id, tries) {
+    setTimeout(function () {
+      if (!post || post.itemId !== id || post.status !== 'processing') return;
+      api('POST', '/api/queue/' + id + '/check').then(function (r) {
+        if (!post || post.itemId !== id) return;
+        if (r.item.status === 'posted') { post.status = 'posted'; post.permalink = r.item.permalink; toast('Publicado no Instagram'); renderPost(); }
+        else if (r.item.status === 'failed') { post.status = null; post.error = (r.item.error || 'O Instagram não publicou.') + ' O post ficou na Fila como "Falhou".'; renderPost(); }
+        else if (tries > 1) pollPost(id, tries - 1);
+        else { post.error = 'O vídeo está demorando. Confira depois na Fila (botão Verificar).'; renderPost(); }
+      }).catch(function () { if (tries > 1) pollPost(id, tries - 1); });
+    }, 5000);
+  }
+
+  Object.assign(actions, {
+    'post-close': function () { dlg.close(); },
+    'post-copy': function () { return copyText(post.caption).then(function (ok) { toast(ok ? 'Texto copiado' : 'Não consegui copiar. Selecione o texto e copie.'); }); },
+    'post-regen': function () { return loadPreview(false); },
+    'post-regen-ai': function () { return loadPreview(true); },
+    'post-ig': function () {
+      if (post.media_type === 'none' || !post.media_url) throw new Error('Adicione uma foto ou um vídeo antes de publicar no Instagram.');
+      post.busy = true; post.sending = true; post.error = null; renderPost();
+      return api('POST', '/api/queue/post-now', {
+        product_id: post.product.id, channel: 'instagram', caption: post.caption, media_type: post.media_type, media_url: post.media_url,
+      }).then(function (r) {
+        post.itemId = r.item.id; post.status = r.item.status === 'posted' ? 'posted' : 'processing'; post.permalink = r.item.permalink;
+        if (post.status === 'posted') toast('Publicado no Instagram'); else pollPost(r.item.id, 60);
+      }).catch(function (e) {
+        post.error = e.message + (e.status === 502 ? ' O post ficou na Fila como "Falhou" para tentar de novo.' : '');
+      }).finally(function () { if (post) { post.busy = false; post.sending = false; renderPost(); } });
+    },
+    'post-wa': function () {
+      copyText(post.caption);
+      window.open(waLink(post.caption), '_blank', 'noopener');
+      post.waOpened = true; renderPost();
+    },
+    'post-wa-done': function () {
+      post.busy = true; renderPost();
+      return api('POST', '/api/queue/post-now', { product_id: post.product.id, channel: 'whatsapp', caption: post.caption })
+        .then(function () { post.status = 'posted'; toast('Registrado como postado'); })
+        .catch(function (e) { post.error = e.message; })
+        .finally(function () { if (post) { post.busy = false; renderPost(); } });
+    },
+  });
+
+  // Ao fechar a janela (botão ou Esc), descarta a prévia e atualiza as listas.
+  dlg.addEventListener('close', function () { if (post) { post = null; reload().catch(function () {}); } });
+
   function queueItem(id) { return state.queue.filter(function (q) { return q.id === Number(id); })[0]; }
   function capValue(id) { var el = $('#cap-' + id); return el ? el.value : ''; }
   function saveQueue(id, extra) { return api('PATCH', '/api/queue/' + id, Object.assign({ caption: capValue(id) }, extra || {})); }
@@ -497,6 +615,9 @@
     if (d.act && actions[d.act]) return actions[d.act]();
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; return render(); }
+    if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
+    if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.note = null; return loadPreview(false); }
+    if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
     if (d.gmkt) { var g = state.g; if (g.mkt !== d.gmkt) { g.mkt = d.gmkt; g.results = []; g.sel = {}; g.done = false; g.more = false; } return render(); }
     if (d.refresh) {
       t.disabled = true; t.textContent = 'Atualizando…';
@@ -521,6 +642,7 @@
       if (!v) throw new Error('Escolha a data e a hora.');
       return saveQueue(d.schedule, { scheduled_at: new Date(v).toISOString() }).then(function () { toast('Agendado'); return reload(); });
     }
+    if (d.unschedule) return saveQueue(d.unschedule, { scheduled_at: null }).then(function () { toast('Agendamento removido'); return reload(); });
     if (d.publish) {
       t.disabled = true; t.textContent = 'Publicando…';
       return saveQueue(d.publish).then(function () { return api('POST', '/api/queue/' + d.publish + '/publish'); })
@@ -547,6 +669,11 @@
     if (t.id === 'f-ord') { state.ordem = t.value; return render(); }
     if (t.id === 'f-days') { state.days = Number(t.value); return reload(); }
     if (t.dataset.earnStatus) return api('PATCH', '/api/earnings/' + t.dataset.earnStatus, { status: t.value }).then(reload);
+    if (t.dataset.pupload && t.files[0] && post) {
+      post.busy = true; renderPost();
+      return uploadFile(t.files[0]).then(function (r) { if (post) { post.media_type = r.media_type; post.media_url = r.url; post.customMedia = true; } })
+        .finally(function () { if (post) { post.busy = false; renderPost(); } });
+    }
     if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
     if (t.form && t.form.id === 'g-form' && t.tagName === 'SELECT') {
       var gs = state.g;
@@ -562,6 +689,7 @@
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (t.dataset && t.dataset.caption) { var c = $('#cnt-' + t.dataset.caption); if (c) c.textContent = t.value.length; }
+    if (t.id === 'post-cap' && post) { post.caption = t.value; var pc = $('#post-cnt'); if (pc) pc.textContent = t.value.length; }
   });
 
   document.addEventListener('submit', function (e) {

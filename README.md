@@ -10,8 +10,9 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 - **Garimpar sob demanda** (aba Garimpar): busca na Shopee (API de afiliados) e no Mercado Livre (API oficial) na hora em que você pede, com filtros de desconto, comissão e avaliação, nota de prioridade e salvamento só dos itens escolhidos. Não depende de agendamento.
 - **Produtos** com preço, desconto, comissão, avaliação, vendas, foto e vídeo. Cadastro manual, importação de CSV ou pelo garimpo. A **nota de prioridade** (0 a 100) pesa 30% desconto, 30% comissão, 20% avaliação e 20% vendas. O mesmo produto (mesmo código da loja ou mesmo link) não é cadastrado duas vezes.
 - **Preço conferido**: cada produto mostra quando o preço foi checado, tem o botão **Atualizar preço** e é conferido sozinho ao entrar na fila se tiver mais de 6 horas.
-- **Fila de divulgação** para Instagram e WhatsApp: texto gerado a partir dos dados do produto (ou por IA, se configurar a chave), edição, troca de foto/vídeo, agendamento e marcação de postado.
-- **Publicação no Instagram** pela API oficial da Meta: foto na hora; Reels em duas etapas (o Instagram processa o vídeo e o painel conclui a publicação sozinho). Imediata ou agendada.
+- **Postar agora** (botão em cada produto): prévia do texto e da mídia, edição e publicação na hora, sem fila e sem agendador. Instagram publica direto pela API; no Reels a própria tela acompanha o processamento até publicar. WhatsApp abre o app com o texto pronto (e copiado) para escolher o grupo, e registra no histórico. Nada é gravado se você cancelar.
+- **Fila e histórico** (opcional): guardar posts para depois, editar, publicar quando quiser e, se quiser, agendar. Tudo o que foi postado fica registrado.
+- **Publicação no Instagram** pela API oficial da Meta: foto na hora; Reels em duas etapas (o Instagram processa o vídeo e o painel conclui a publicação). O agendamento é opcional e depende do agendador (pg_cron) só para os posts agendados.
 - **Ganhos**: lançamentos manuais ou importação de CSV, com resumo por dia, canal e produto, valor a receber e já recebido.
 - **Segurança**: Postgres com RLS ligado, token do Instagram criptografado (AES-256-GCM), mídia enviada direto do navegador para o Supabase Storage.
 
@@ -19,8 +20,7 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 
 - Importação automática de comissões ganhas (relatórios) das plataformas.
 - Link de afiliado e comissão do Mercado Livre pela API: a API não oferece. A comissão usa um padrão definido em Conexões e o link é colado no produto (gerado no portal de Afiliados).
-- Lembrete de verdade para os itens do WhatsApp com horário marcado.
-- Envio automático para o WhatsApp. O painel prepara o texto e você copia e cola no grupo.
+- Envio automático para grupos do WhatsApp (não há API oficial para grupos); o painel abre o WhatsApp com o texto pronto.
 - Recuperação de senha por e-mail e vários usuários por conta.
 
 ## Publicar: Git, Supabase e Vercel
