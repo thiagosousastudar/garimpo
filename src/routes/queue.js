@@ -170,6 +170,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
       if (!MEDIA_TYPES.includes(b.media_type)) throw new HttpError(400, 'Tipo de mídia inválido.');
       add('media_type', b.media_type);
       add('media_items', null); // trocar a mídia na Fila transforma o carrossel em post simples
+      add('container_id', null); // e invalida os itens já enviados ao Instagram (não podem ser reaproveitados)
     }
     if (b.media_url !== undefined) {
       const s = String(b.media_url || '').trim();

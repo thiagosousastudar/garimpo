@@ -71,9 +71,24 @@ function validate(item, cfg) {
 async function childrenStatus(client, token, children) {
   const videos = children.filter((c) => c.video);
   const all = await Promise.all(videos.map((c) => client.containerStatus({ containerId: c.id, token })));
-  if (all.some((s) => s === 'ERROR' || s === 'EXPIRED')) return 'ERROR';
+  if (all.some((s) => s === 'EXPIRED')) return 'EXPIRED';
+  if (all.some((s) => s === 'ERROR')) return 'ERROR';
   return all.every((s) => s === 'FINISHED' || s === 'PUBLISHED') ? 'FINISHED' : 'IN_PROGRESS';
 }
+
+/** Motivo detalhado da Meta para o primeiro vídeo com erro (1 chamada; falha vira null). */
+async function videoErrorDetail(client, token, ids) {
+  for (const id of ids) {
+    try {
+      const d = await client.containerDetail({ containerId: id, token });
+      if (d.code === 'ERROR' || d.code === 'EXPIRED') return d.status;
+    } catch (_) { return null; }
+  }
+  return null;
+}
+
+const VIDEO_TIP = 'Dica: o Instagram aceita MP4 (H.264 e áudio AAC), de 3 a 60 segundos no carrossel (até 15 min no Reels), proporção entre 4:5 e 16:9 no carrossel, até 100 MB.';
+const RETRYING = 'O Instagram informou erro ao processar o vídeo; vou conferir de novo em 1 minuto.';
 
 /**
  * Itens do carrossel anotados no container_id: "children:123,v456" (v = vídeo). Só vai para "processing"
@@ -87,6 +102,7 @@ function decodeChildren(raw) {
 }
 
 const RATE_LIMIT_WAIT_MS = 20 * 60 * 1000;
+const REUSE_MS = 23 * 3600 * 1000; // containers da Meta expiram em 24 h
 const RECHECK_MS = 60 * 1000;
 const RATE_LIMIT_MSG = 'O Instagram limitou as chamadas do app (limite por hora da Meta). Espere cerca de 1 hora e tente de novo pela Fila.';
 const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG : e.message);
@@ -144,8 +160,12 @@ async function markFailed(pool, itemId, message) {
  * processando, deixa o item em "processing" para ser concluído pelo agendador (ou pelo botão Verificar).
  */
 async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
+  // Itens de carrossel já enviados numa tentativa anterior valem 24 h: dá para reaproveitar (menos chamadas à Meta).
+  const prev = (await pool.query('select container_id, claimed_at from queue_items where id = $1 and user_id = $2', [itemId, userId])).rows[0];
+  const reusable = prev && String(prev.container_id || '').startsWith(CHILDREN)
+    && Date.now() - new Date(prev.claimed_at || 0).getTime() < REUSE_MS ? decodeChildren(prev.container_id) : null;
   const { rows } = await pool.query(
-    `update queue_items set status = 'publishing', error = null, claimed_at = now(), container_id = null
+    `update queue_items set status = 'publishing', error = null, claimed_at = now(), container_id = null, next_check_at = null
        where id = $1 and user_id = $2 and status in ('draft','scheduled','failed')
        returning *`,
     [itemId, userId]
@@ -166,6 +186,12 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     // Carrossel: cria cada item (foto/vídeo), espera os vídeos ficarem prontos e publica o conjunto.
     // Se os vídeos demorarem, fica em "processing" com os itens anotados e é concluído depois (Verificar/agendador).
     if (item.media_type === 'carousel') {
+      if (reusable && reusable.length === mediaUrl.length) {
+        let st = null;
+        try { st = await childrenStatus(client, token, reusable); } catch (e) { if (e.rateLimited) throw e; } // itens antigos inválidos: reenvia abaixo
+        // só a conferência cai no reenvio; erro ao publicar sobe (reenviar poderia duplicar o post)
+        if (st === 'FINISHED') return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children: reusable, caption: item.caption });
+      }
       const children = [];
       for (const m of mediaUrl) {
         const made = await client.createContainer({ igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true });
@@ -177,7 +203,12 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
         for (let i = 0; i < cfg.videoInlinePolls; i++) {
           const st = await childrenStatus(client, token, children);
           if (st === 'FINISHED') return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
-          if (st === 'ERROR') throw new Error('O Instagram não conseguiu processar um dos vídeos do carrossel.');
+          if (st === 'ERROR' || st === 'EXPIRED') {
+            // pode ser passageiro: fica processando e a próxima conferência decide (desiste só se repetir)
+            await pool.query('update queue_items set error = $1, next_check_at = $2 where id = $3',
+              [RETRYING, new Date(Date.now() + RECHECK_MS).toISOString(), item.id]);
+            break;
+          }
           await sleep(cfg.videoPollMs);
         }
         return (await pool.query('select * from queue_items where id = $1', [item.id])).rows[0];
@@ -237,8 +268,14 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
         throw e;
       }
     }
-    if (st === 'ERROR' || st === 'EXPIRED') {
-      await markFailed(pool, item.id, 'O Instagram não conseguiu processar o vídeo.');
+    if (st === 'ERROR' && item.error !== RETRYING) {
+      // Erro pode ser passageiro (já vimos o mesmo vídeo ficar FINISHED depois): confere de novo antes de desistir.
+      await pool.query('update queue_items set error = $1, next_check_at = $2 where id = $3',
+        [RETRYING, new Date(Date.now() + RECHECK_MS).toISOString(), item.id]);
+    } else if (st === 'ERROR' || st === 'EXPIRED') {
+      const ids = isCarousel ? children.filter((c) => c.video).map((c) => c.id) : [item.container_id];
+      const detail = await videoErrorDetail(client, token, ids);
+      await markFailed(pool, item.id, `O Instagram não conseguiu processar o vídeo${detail ? ` (${detail})` : ''}. ${VIDEO_TIP}`);
     } else if (age > PROCESSING_TIMEOUT_MS) {
       await markFailed(pool, item.id, 'O vídeo demorou demais para processar. Tente publicar de novo.');
     } else {

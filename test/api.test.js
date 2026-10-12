@@ -37,7 +37,10 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       if (u.pathname.endsWith('/MEDIA_1')) return json(200, { permalink: 'https://instagram.com/p/abc' });
       if (/\/CHILD_\d+$/.test(u.pathname)) return json(200, { status_code: childStates.length ? childStates.shift() : 'FINISHED' });
       if (u.pathname.endsWith('/CAROUSEL_1')) return json(200, { status_code: carouselStates.length ? carouselStates.shift() : 'FINISHED' });
-      if (u.pathname.endsWith('/CONTAINER_1')) return json(200, { status_code: videoStates.length ? videoStates.shift() : 'FINISHED' });
+      if (u.pathname.endsWith('/CONTAINER_1')) {
+        const s = videoStates.length ? videoStates.shift() : 'FINISHED';
+        return json(200, { status_code: s, status: s === 'ERROR' ? 'Error: Media upload has failed with error code 2207026' : s });
+      }
       return json(200, { username: 'loja_teste' });
     }
     if (u.hostname === 'api.anthropic.com') {
@@ -530,17 +533,23 @@ test('Reels: botão Verificar conclui ou registra falha do Instagram', async () 
   assert.equal(chk.data.item.status, 'posted');
   t.close();
 
-  const t2 = await boot({ videoInlinePolls: 1 }, { videoStates: ['IN_PROGRESS', 'ERROR'] });
-  const b = t2.client();
-  await signup(b);
-  await conectarInstagram(b);
-  const p2 = (await b('POST', '/api/products', { ...PRODUTO, image_url: '', video_url: 'https://cdn.exemplo.com/v.mp4' })).data.product;
-  const it2 = (await b('POST', '/api/queue', { product_id: p2.id, channel: 'instagram' })).data.item;
-  await b('POST', `/api/queue/${it2.id}/publish`);
-  const chk2 = await b('POST', `/api/queue/${it2.id}/check`);
-  assert.equal(chk2.data.item.status, 'failed');
-  assert.match(chk2.data.item.error, /não conseguiu processar/);
-  t2.close();
+  // erro do Instagram: na 1ª vez confere de novo (pode ser passageiro); na 2ª desiste e mostra o motivo da Meta
+  const t2 = await boot({ videoInlinePolls: 1 }, { videoStates: ['IN_PROGRESS', 'ERROR', 'ERROR', 'ERROR'] });
+  try {
+    const b = t2.client();
+    await signup(b);
+    await conectarInstagram(b);
+    const p2 = (await b('POST', '/api/products', { ...PRODUTO, image_url: '', video_url: 'https://cdn.exemplo.com/v.mp4' })).data.product;
+    const it2 = (await b('POST', '/api/queue', { product_id: p2.id, channel: 'instagram' })).data.item;
+    await b('POST', `/api/queue/${it2.id}/publish`);
+    const chk1 = await b('POST', `/api/queue/${it2.id}/check`);
+    assert.equal(chk1.data.item.status, 'processing');
+    assert.match(chk1.data.item.error, /conferir de novo/);
+    await t2.pool.query('update queue_items set next_check_at = null where id = $1', [it2.id]);
+    const chk2 = await b('POST', `/api/queue/${it2.id}/check`);
+    assert.equal(chk2.data.item.status, 'failed');
+    assert.match(chk2.data.item.error, /não conseguiu processar o vídeo \(Error: Media upload has failed with error code 2207026\)\. Dica: o Instagram aceita MP4/);
+  } finally { t2.close(); }
 });
 
 test('agendador limpa itens presos em publicação', async () => {
@@ -1250,5 +1259,36 @@ test('cota da Meta: foto não é conferida, vídeo é conferido com pausa e limi
     assert.match(r.data.error, /limitou as chamadas do app/);
     const failed = (await api('GET', '/api/queue')).data.items.find((i) => i.status === 'failed');
     assert.match(failed.error, /Espere cerca de 1 hora/);
+  } finally { t.close(); }
+});
+test('carrossel que falhou: "Publicar agora" reaproveita os itens já enviados (vídeo ficou pronto depois)', async () => {
+  const opts = { childStates: [] };
+  const t = await boot({ videoInlinePolls: 1 }, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const media = [{ type: 'image', url: 'https://img.exemplo.com/1.jpg' }, { type: 'video', url: 'https://cdn.exemplo.com/v.mp4' }];
+    // vídeo responde erro duas vezes: falha
+    opts.childStates.push('ERROR', 'ERROR', 'ERROR');
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Patinete', media_type: 'carousel', media_items: media });
+    assert.equal(r.data.item.status, 'processing');
+    await t.pool.query('update queue_items set next_check_at = null');
+    const ck = await api('POST', `/api/queue/${r.data.item.id}/check`);
+    assert.equal(ck.data.item.status, 'failed');
+    const created = () => t.calls.filter((c) => c.body && c.body.is_carousel_item === 'true').length;
+    const before = created();
+    // depois o Instagram termina o vídeo: publicar de novo usa os mesmos itens, sem reenviar
+    opts.childStates.length = 0;
+    const again = await api('POST', `/api/queue/${r.data.item.id}/publish`);
+    assert.equal(again.status, 200, JSON.stringify(again.data));
+    assert.equal(again.data.item.status, 'posted');
+    assert.equal(created(), before, 'nenhum item reenviado');
+    // trocar a mídia na Fila invalida os itens antigos
+    const d = (await api('POST', '/api/queue', { product_id: p.id, channel: 'instagram' })).data.item;
+    await t.pool.query(`update queue_items set container_id = 'children:CHILD_1,vCHILD_2', claimed_at = now() where id = $1`, [d.id]);
+    const ch = await api('PATCH', `/api/queue/${d.id}`, { media_type: 'image', media_url: 'https://img.exemplo.com/9.jpg' });
+    assert.equal(ch.data.item.container_id, null);
   } finally { t.close(); }
 });

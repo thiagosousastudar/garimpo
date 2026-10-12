@@ -100,6 +100,12 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
       return st.status_code;
     },
 
+    /** Situação com o detalhe que a Meta dá quando há erro (ex.: "Error: ... 2207026"). */
+    async containerDetail({ containerId, token }) {
+      const st = await call('GET', `/${containerId}`, { fields: 'status_code,status' }, token);
+      return { code: st.status_code, status: st.status || null };
+    },
+
     /** Publica um container pronto. Devolve { id, permalink }. */
     async publishContainer({ igUserId, token, containerId }) {
       const pub = await call('POST', `/${igUserId}/media_publish`, { creation_id: containerId }, token);
