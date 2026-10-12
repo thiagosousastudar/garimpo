@@ -1436,3 +1436,28 @@ test('planilha "Obter link em massa" da Shopee: lê preço, comissão, vendas e 
     assert.deepEqual([imp.data.imported, imp.data.format], [3, 'shopee']);
   } finally { t.close(); }
 });
+test('texto do WhatsApp no estilo da Anninha: negrito, de/por riscado, destaques verdadeiros, link e sem prazo inventado', async () => {
+  const { templateCopy, templateGroupCopy } = require('../src/services/copy');
+  const p = { title: 'Air Fryer 4L', marketplace: 'ML', price: 239, original_price: 716.9, affiliate_url: 'https://meli.la/abc', sales_k: 12,
+    extras: JSON.stringify({ free_shipping: true, full: true, best_seller_rank: 6 }) };
+  for (let i = 0; i < 20; i++) { // as aberturas variam; todas seguem o formato
+    const t = templateCopy(p, 'whatsapp');
+    const lines = t.split('\n');
+    assert.match(lines[0], /^\S+ \*[^*]+\*$/, 'abertura em negrito com emoji');
+    assert.ok(t.includes('🛍️ *Air Fryer 4L*'));
+    assert.ok(t.includes('💸 De: ~R$') && t.includes('716,90~'));
+    assert.match(t, /💥 Por: \*R\$\s239,00\* \(−67% OFF\)/);
+    assert.ok(t.includes('🚚 *Frete grátis* com entrega Full!'));
+    assert.ok(t.includes('🏆 6º mais vendido da categoria'));
+    assert.ok(t.includes('⭐ Mais de 12 mil vendidos'));
+    assert.ok(t.includes('👉 https://meli.la/abc'));
+    assert.doesNotMatch(t, /tempo limitado|só hoje|últimas unidades/i);
+  }
+  // sem desconto e sem destaques: "Por apenas", sem linha de frete inventada
+  const s = templateCopy({ title: 'Garrafa', marketplace: 'SH', price: 20, affiliate_url: 'https://s.shopee.com.br/x' }, 'whatsapp');
+  assert.ok(s.includes('💥 Por apenas: *R$'));
+  assert.doesNotMatch(s, /Frete grátis|De: ~/);
+  const g = templateGroupCopy([p, { title: 'Garrafa', marketplace: 'SH', price: 20, affiliate_url: 'https://s.shopee.com.br/x' }], 'whatsapp');
+  assert.match(g, /1️⃣ \*Air Fryer 4L\*\n💥 \*R\$\s239,00\* ~R\$\s716,90~ \(−67%\) · 🚚 frete grátis\n👉 https:\/\/meli\.la\/abc/);
+  assert.match(g, /2️⃣ \*Garrafa\*\n💥 \*R\$\s20,00\*\n👉 https:\/\/s\.shopee\.com\.br\/x/);
+});

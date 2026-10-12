@@ -48,18 +48,56 @@ function highlights(p) {
   return (details(p).features || []).slice(0, 2).map((f) => (f.length > 110 ? `${f.slice(0, 107).replace(/\s+\S*$/, '')}…` : f));
 }
 
+/* ---------- voz da Anninha: amiga que achou algo incrível ---------- */
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+// Aberturas (variam a cada "Refazer texto" para o grupo não ver sempre a mesma mensagem)
+const WA_HOOKS = [
+  '🔥 *ACHEI ESSA E PRECISEI TE MOSTRAR!*',
+  '😍 *GENTE, OLHA O QUE EU ACHEI!*',
+  '🚨 *ACHADINHO IMPERDÍVEL NA ÁREA!*',
+  '💖 *SEPAREI ESSE ACHADO PRA VOCÊ!*',
+  '👀 *OLHA ESSE ACHADINHO QUE EU TROUXE!*',
+];
+const WA_HOOKS_DISCOUNT = ['🔥 *QUE DESCONTO É ESSE?!*', '😱 *NÃO ACREDITEI NESSE PREÇO!*', '💥 *PREÇO DE ACHADINHO, OLHA ISSO!*'];
+// Fechamento: chama para agir sem inventar prazo (o app não sabe quando a oferta acaba)
+const WA_CLOSERS = [
+  '⏰ Preço pode mudar a qualquer momento, aproveita! 😱',
+  '🏃‍♀️ Corre que preço bom assim some rapidinho! 😱',
+  '💬 Garante o seu e depois me conta! 💖',
+];
+const IG_HOOKS = ['Achado do dia 👀', 'Olha o que eu achei pra vocês 😍', 'Achadinho que vale a pena 💖', 'Gente, que achado! 🔥'];
+
+/** Linhas de destaque do WhatsApp: frete, ranking, vendas, loja oficial (só o que for verdade). */
+function waPerks(p) {
+  const d = details(p);
+  const out = [];
+  if (d.free_shipping) out.push(d.full ? '🚚 *Frete grátis* com entrega Full!' : '🚚 *Frete grátis!*');
+  if (d.best_seller_rank && d.best_seller_rank <= 20) out.push(`🏆 ${d.best_seller_rank}º mais vendido da categoria`);
+  if (Number(p.sales_k) >= 1) out.push(`⭐ Mais de ${Math.floor(Number(p.sales_k))} mil vendidos`);
+  if (d.official_store) out.push('🏪 Vendido por loja oficial');
+  return out;
+}
+
 function templateCopy(p, channel) {
   const f = facts(p);
   if (channel === 'whatsapp') {
+    const { desc } = scoreProduct(p);
+    const off = desc > 0 && p.original_price;
     return [
-      `🔥 ${p.title} ${f[0]} no ${marketplaceName(p)}.`,
-      ...(f.length > 1 ? [f.slice(1).join(' · ') + '. Vale conferir!'] : []),
+      off && desc >= 30 ? pick(WA_HOOKS_DISCOUNT) : pick(WA_HOOKS),
+      '',
+      `🛍️ *${p.title}*`,
+      '',
+      ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 Por: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 Por apenas: *${brl(p.price)}*`]),
+      ...waPerks(p),
+      '',
       `👉 ${p.affiliate_url || PLACEHOLDER}`,
-      '(Confere o preço no link, ele pode mudar)',
+      '',
+      pick(WA_CLOSERS),
     ].join('\n');
   }
   return [
-    'Achado do dia 👀',
+    pick(IG_HOOKS),
     `${p.title} ${f[0]}.`,
     ...f.slice(1).map((x) => `✅ ${x[0].toUpperCase()}${x.slice(1)}`),
     ...highlights(p).map((x) => `▫️ ${x}`),
@@ -88,7 +126,7 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
   };
   const formato =
     channel === 'whatsapp'
-      ? `Mensagem de WhatsApp com no máximo 5 linhas, tom de amigo indicando um achado, emojis moderados. Termine com a linha "👉 ${p.affiliate_url || PLACEHOLDER}".`
+      ? `Mensagem de WhatsApp da Anninha, como uma amiga animada que achou algo incrível: primeira linha em *negrito* e caixa alta com emoji, nome do produto em *negrito*, "De: ~preço original~" riscado (se houver) e "Por: *preço*", cada destaque numa linha com emoji (frete grátis, mais vendido etc., só se os dados disserem), depois a linha "👉 ${p.affiliate_url || PLACEHOLDER}" e um fechamento animado. Use a formatação do WhatsApp (*negrito*, ~riscado~). Sem prazos ou "tempo limitado" inventados; pode dizer que o preço pode mudar.`
       : 'Legenda de Instagram: gancho forte na primeira linha, 3 a 4 benefícios curtos com emojis, chamada para "link na bio", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
   const prompt = `Escreva em português do Brasil. ${formato}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
   const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
@@ -133,10 +171,19 @@ function groupLine(p) {
 function templateGroupCopy(list, channel) {
   if (channel === 'whatsapp') {
     return [
-      `🔥 ${list.length} achados de hoje:`,
+      pick([`🔥 *SEPAREI ${list.length} ACHADINHOS PRA VOCÊ!*`, `😍 *GENTE, OLHA ESSES ${list.length} ACHADOS!*`, `🚨 *${list.length} ACHADINHOS IMPERDÍVEIS NA ÁREA!*`]),
       '',
-      ...list.flatMap((p, i) => [`${NUMS[i]} ${groupLine(p)}`, `👉 ${p.affiliate_url || PLACEHOLDER}`, '']),
-      '(Confere os preços nos links, eles podem mudar)',
+      ...list.flatMap((p, i) => {
+        const { desc } = scoreProduct(p);
+        const off = desc > 0 && p.original_price;
+        return [
+          `${NUMS[i]} *${p.title}*`,
+          `💥 *${brl(p.price)}*${off ? ` ~${brl(p.original_price)}~ (−${desc}%)` : ''}${details(p).free_shipping ? ' · 🚚 frete grátis' : ''}`,
+          `👉 ${p.affiliate_url || PLACEHOLDER}`,
+          '',
+        ];
+      }),
+      pick(WA_CLOSERS),
     ].join('\n');
   }
   const tags = [...new Set(list.flatMap((p) => hashtags(p).split(' ')))].slice(0, 12).join(' ');
