@@ -1,6 +1,7 @@
 const express = require('express');
 const { HttpError, parseNum, parseCsv } = require('../util');
 const { scoreProduct } = require('../services/score');
+const { externalIdFrom, freshData } = require('../services/garimpo');
 
 const MARKETS = { ml: 'ML', 'mercado livre': 'ML', mercadolivre: 'ML', sh: 'SH', shopee: 'SH' };
 
@@ -65,7 +66,43 @@ function parseBody(b, partial = false) {
 const COLS = ['title', 'marketplace', 'category', 'price', 'original_price', 'rating', 'sales_k',
   'commission_pct', 'product_url', 'affiliate_url', 'image_url', 'video_url', 'notes'];
 
-function productRoutes({ pool }) {
+const DUPLICATE = 'Este produto já está cadastrado.';
+
+/** Procura o mesmo produto já cadastrado (mesmo código na loja ou mesmo link). */
+async function findDuplicate(pool, uid, { marketplace, external_id, product_url }, exceptId = 0) {
+  if (!external_id && !product_url) return null;
+  const { rows } = await pool.query(
+    `select id from products where user_id = $1 and id <> $2 and (
+       (marketplace = $3 and external_id = $4) or product_url = $5) limit 1`,
+    [uid, exceptId, marketplace, external_id || '', product_url || '']
+  );
+  return rows[0] ? rows[0].id : null;
+}
+
+/**
+ * Cadastra um produto já validado. Calcula o código da loja pelo link (ou usa o informado pelo garimpo)
+ * e recusa duplicados com 409. A data de conferência do preço começa agora.
+ */
+async function insertProduct(pool, uid, d, externalId) {
+  const ext = externalId || externalIdFrom(d.marketplace, d.product_url) || externalIdFrom(d.marketplace, d.affiliate_url);
+  const dup = await findDuplicate(pool, uid, { ...d, external_id: ext });
+  if (dup) { const e = new HttpError(409, DUPLICATE); e.existingId = dup; throw e; }
+  const cols = COLS.filter((c) => d[c] !== undefined);
+  const vals = cols.map((c) => d[c]);
+  try {
+    const { rows } = await pool.query(
+      `insert into products (user_id, external_id, price_checked_at, ${cols.join(',')})
+         values ($1, $2, now(), ${cols.map((_, i) => `$${i + 3}`).join(',')}) returning *`,
+      [uid, ext, ...vals]
+    );
+    return rows[0];
+  } catch (e) {
+    if (e.code === '23505') throw new HttpError(409, DUPLICATE);
+    throw e;
+  }
+}
+
+function productRoutes({ pool, cfg, fetchImpl }) {
   const r = express.Router();
 
   r.get('/', async (req, res) => {
@@ -75,27 +112,54 @@ function productRoutes({ pool }) {
   });
 
   r.post('/', async (req, res) => {
-    const d = parseBody(req.body || {});
-    const cols = COLS.filter((c) => d[c] !== undefined);
-    const vals = cols.map((c) => d[c]);
-    const { rows } = await pool.query(
-      `insert into products (user_id, ${cols.join(',')}) values ($1, ${cols.map((_, i) => `$${i + 2}`).join(',')}) returning *`,
-      [req.uid, ...vals]
-    );
-    res.status(201).json({ product: mapProduct(rows[0]) });
+    const row = await insertProduct(pool, req.uid, parseBody(req.body || {}));
+    res.status(201).json({ product: mapProduct(row) });
   });
 
   r.patch('/:id', async (req, res) => {
+    const id = Number(req.params.id);
     const d = parseBody(req.body || {}, true);
     const cols = COLS.filter((c) => d[c] !== undefined);
     if (!cols.length) throw new HttpError(400, 'Nada para atualizar.');
-    const sets = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
-    const { rows } = await pool.query(
-      `update products set ${sets} where id = $1 and user_id = $2 returning *`,
-      [Number(req.params.id), req.uid, ...cols.map((c) => d[c])]
-    );
-    if (!rows.length) throw new HttpError(404, 'Produto não encontrado.');
+    const cur = (await pool.query('select * from products where id = $1 and user_id = $2', [id, req.uid])).rows[0];
+    if (!cur) throw new HttpError(404, 'Produto não encontrado.');
+    const next = { ...cur, ...d };
+    const extra = {};
+    if (d.product_url !== undefined || d.affiliate_url !== undefined || d.marketplace !== undefined) {
+      extra.external_id = externalIdFrom(next.marketplace, next.product_url) || externalIdFrom(next.marketplace, next.affiliate_url)
+        || (d.marketplace === undefined ? cur.external_id : null);
+      if (await findDuplicate(pool, req.uid, { ...next, ...extra }, id)) throw new HttpError(409, DUPLICATE);
+    }
+    const priceChanged = (d.price !== undefined && Number(d.price) !== Number(cur.price))
+      || (d.original_price !== undefined && Number(d.original_price) !== Number(cur.original_price));
+    const all = [...cols.map((c) => [c, d[c]]), ...Object.entries(extra)];
+    const sets = all.map(([c], i) => `${c} = $${i + 3}`).concat(priceChanged ? ['price_checked_at = now()'] : []).join(', ');
+    let rows;
+    try {
+      ({ rows } = await pool.query(`update products set ${sets} where id = $1 and user_id = $2 returning *`, [id, req.uid, ...all.map(([, v]) => v)]));
+    } catch (e) {
+      if (e.code === '23505') throw new HttpError(409, DUPLICATE);
+      throw e;
+    }
     res.json({ product: mapProduct(rows[0]) });
+  });
+
+  /** Busca na loja o preço atual (e o desconto) e grava, para não divulgar preço velho. */
+  r.post('/:id/refresh', async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = (await pool.query('select * from products where id = $1 and user_id = $2', [id, req.uid])).rows[0];
+    if (!cur) throw new HttpError(404, 'Produto não encontrado.');
+    const fresh = await freshData({ pool, cfg, fetchImpl, uid: req.uid, product: cur });
+    const sets = ['price = $3', 'original_price = $4', 'price_checked_at = now()'];
+    const vals = [fresh.price, fresh.original_price];
+    // Só sobrescreve o que a loja informou; a comissão e a avaliação digitadas pelo usuário ficam se a loja não mandar.
+    for (const k of ['rating', 'sales_k', 'commission_pct']) {
+      if (fresh[k] !== null && fresh[k] !== undefined && !(k === 'commission_pct' && cur.marketplace === 'ML')) {
+        vals.push(fresh[k]); sets.push(`${k} = $${vals.length + 2}`);
+      }
+    }
+    const { rows } = await pool.query(`update products set ${sets.join(', ')} where id = $1 and user_id = $2 returning *`, [id, req.uid, ...vals]);
+    res.json({ product: mapProduct(rows[0]), previous_price: Number(cur.price) });
   });
 
   r.delete('/:id', async (req, res) => {
@@ -113,6 +177,7 @@ function productRoutes({ pool }) {
     const rows = parseCsv(req.body);
     if (!rows.length) throw new HttpError(400, 'O CSV está vazio.');
     let imported = 0;
+    let skipped = 0;
     const errors = [];
     for (let i = 0; i < rows.length; i++) {
       const c = rows[i];
@@ -131,20 +196,17 @@ function productRoutes({ pool }) {
           image_url: c.imagem,
           video_url: c.video,
         });
-        const cols = COLS.filter((k) => d[k] !== undefined);
-        await pool.query(
-          `insert into products (user_id, ${cols.join(',')}) values ($1, ${cols.map((_, j) => `$${j + 2}`).join(',')})`,
-          [req.uid, ...cols.map((k) => d[k])]
-        );
+        await insertProduct(pool, req.uid, d);
         imported++;
       } catch (e) {
-        errors.push({ line: i + 2, error: e.message });
+        if (e.status === 409) skipped++;
+        else errors.push({ line: i + 2, error: e.message });
       }
     }
-    res.json({ imported, errors });
+    res.json({ imported, skipped, errors });
   });
 
   return r;
 }
 
-module.exports = { productRoutes, mapProduct };
+module.exports = { productRoutes, mapProduct, parseBody, insertProduct };

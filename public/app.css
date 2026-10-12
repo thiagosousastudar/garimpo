@@ -41,3 +41,15 @@ dialog h2{font-size:20px;margin-bottom:12px}
 .file-input{font-size:13px}
 .centered-empty{margin-block:24px}
 .pill.processing{background:var(--gold-soft);color:var(--gold)}
+
+/* Garimpo sob demanda */
+input[type=search]{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;min-width:0;color:var(--ink)}
+.gq{flex:1 1 220px}
+.card.picked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.pick{display:inline-flex;gap:6px;align-items:center;font-weight:600;font-size:14px;cursor:pointer}
+.pick input{width:18px;height:18px;accent-color:var(--accent)}
+.gbar{position:sticky;bottom:calc(72px + env(safe-area-inset-bottom,0px));z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+@media (min-width:900px){.gbar{bottom:12px}}
+.hint.stale{color:var(--warn)}
+.err.small{font-size:12px}
+code.copyable{display:inline-block;margin-top:4px;padding:4px 8px;border-radius:8px;background:var(--surface2);color:var(--ink);font-size:12px;word-break:break-all;user-select:all}.filters select{width:auto;flex:0 1 auto}

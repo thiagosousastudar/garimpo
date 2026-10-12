@@ -13,7 +13,7 @@ const { createStorage } = require('../src/services/storage');
 
 const TOKEN = 'EAAB-super-secret-token-1234567890';
 
-function makeMockFetch(log, { failMedia = false, videoStates = [] } = {}) {
+function makeMockFetch(log, { failMedia = false, videoStates = [], shopee = {}, ml = {} } = {}) {
   return async (url, opts = {}) => {
     const u = new URL(String(url));
     const body = opts.body instanceof URLSearchParams ? Object.fromEntries(opts.body) : null;
@@ -31,6 +31,40 @@ function makeMockFetch(log, { failMedia = false, videoStates = [] } = {}) {
     }
     if (u.hostname === 'api.anthropic.com') {
       return json(200, { content: [{ type: 'text', text: 'Legenda gerada pela IA' }] });
+    }
+    if (u.hostname === 'open-api.affiliate.shopee.com.br') {
+      log[log.length - 1].headers = opts.headers;
+      log[log.length - 1].gql = JSON.parse(opts.body).query;
+      if (shopee.reject) return json(200, { errors: [{ message: 'Invalid Credential', extensions: { code: 10020 } }] });
+      const node = (id, price) => ({
+        itemId: id, shopId: 77, productName: `Fone Bluetooth ${id}`, price: String(price), priceMin: String(price),
+        priceMax: String(price), priceDiscountRate: 40, commissionRate: '0.12', sales: 15300, ratingStar: '4.83',
+        imageUrl: `https://cf.shopee.com.br/file/${id}`, productLink: `https://shopee.com.br/product/77/${id}`,
+        offerLink: `https://s.shopee.com.br/af${id}`, shopName: 'Loja Som',
+      });
+      const isItem = /itemId:/.test(log[log.length - 1].gql);
+      const nodes = isItem ? [node(1001, shopee.itemPrice || 59.9)] : [node(1001, 59.9), node(1002, 89.9)];
+      return json(200, { data: { productOfferV2: { nodes, pageInfo: { page: 1, hasNextPage: !isItem } } } });
+    }
+    if (u.hostname === 'api.mercadolibre.com') {
+      if (u.pathname === '/oauth/token') {
+        ml.tokenCalls = (ml.tokenCalls || 0) + 1;
+        if (ml.rejectToken) return json(400, { message: 'invalid_grant' });
+        return json(200, { access_token: `APP_USR-token-${ml.tokenCalls}`, refresh_token: `TG-refresh-${ml.tokenCalls}`, expires_in: 21600 });
+      }
+      log[log.length - 1].auth = opts.headers?.authorization;
+      const item = (id, price) => ({
+        id, title: `Air Fryer ${id}`, price, original_price: 399.9, permalink: `https://produto.mercadolivre.com.br/${id.replace('MLB', 'MLB-')}-air-fryer`,
+        thumbnail: `http://http2.mlstatic.com/D_${id}-I.jpg`, sold_quantity: 2500,
+      });
+      if (u.pathname === '/sites/MLB/search') {
+        if (ml.search403) return json(403, { message: 'forbidden' });
+        return json(200, { results: [item('MLB111', 249.9), item('MLB222', 199.9)], paging: { total: 2 } });
+      }
+      if (u.pathname === '/products/search') {
+        return json(200, { results: [{ id: 'MLB9001', name: 'Air Fryer Catálogo', buy_box_winner: { price: 279.9 }, pictures: [{ url: 'https://http2.mlstatic.com/D_9001-O.jpg' }] }], paging: { total: 1 } });
+      }
+      if (u.pathname.startsWith('/items/')) return json(200, item(u.pathname.split('/')[2], ml.itemPrice || 229.9));
     }
     return json(404, {});
   };
@@ -69,19 +103,24 @@ async function boot(overrides = {}, mockOpts, extra = {}) {
   const base = `http://127.0.0.1:${server.address().port}`;
 
   function client() {
-    let cookie = '';
+    const jar = new Map();
     return async function call(method, url, body, headers = {}) {
       const h = { ...headers };
-      if (cookie) h.cookie = cookie;
+      if (jar.size) h.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
       let payload;
       if (body instanceof FormData) payload = body;
       else if (typeof body === 'string') { h['content-type'] = 'text/csv'; payload = body; }
       else if (body !== undefined) { h['content-type'] = 'application/json'; payload = JSON.stringify(body); }
-      const res = await fetch(base + url, { method, headers: h, body: payload });
-      const set = res.headers.get('set-cookie');
-      if (set) cookie = set.split(';')[0];
+      const res = await fetch(base + url, { method, headers: h, body: payload, redirect: 'manual' });
+      for (const set of res.headers.getSetCookie()) {
+        const [pair, ...attrs] = set.split(';');
+        const i = pair.indexOf('=');
+        const name = pair.slice(0, i).trim();
+        const value = pair.slice(i + 1);
+        if (!value || attrs.some((a) => /expires=thu, 01 jan 1970/i.test(a))) jar.delete(name); else jar.set(name, value);
+      }
       const data = await res.json().catch(() => ({}));
-      return { status: res.status, data };
+      return { status: res.status, data, location: res.headers.get('location') };
     };
   }
   return { pool, cfg, calls, fetchImpl, server, client, close: () => { server.closeAllConnections(); server.close(); pool.end().catch(() => {}); } };
@@ -535,4 +574,179 @@ test('banco: RLS ligado nas tabelas do app (Supabase não expõe os dados pela A
   );
   assert.deepEqual(rows, []);
   t.close();
+});
+
+const { externalIdFrom } = require('../src/services/garimpo');
+
+test('garimpo: código do produto tirado do link', () => {
+  assert.equal(externalIdFrom('ML', 'https://produto.mercadolivre.com.br/MLB-1234567890-air-fryer-_JM'), 'MLB1234567890');
+  assert.equal(externalIdFrom('ML', 'https://www.mercadolivre.com.br/air-fryer/p/MLB19876543?pdp_filters=item_id:MLB5551234567'), 'MLB5551234567');
+  assert.equal(externalIdFrom('ML', 'https://www.mercadolivre.com.br/air-fryer/p/MLB19876543'), 'MLB19876543');
+  assert.equal(externalIdFrom('SH', 'https://shopee.com.br/Fone-Bluetooth-i.77.1001'), '77.1001');
+  assert.equal(externalIdFrom('SH', 'https://shopee.com.br/product/77/1001'), '77.1001');
+  assert.equal(externalIdFrom('SH', 'https://s.shopee.com.br/abc'), null);
+  assert.equal(externalIdFrom('ML', ''), null);
+});
+
+test('produtos: bloqueia duplicados no cadastro, na edição e na importação', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const link = 'https://produto.mercadolivre.com.br/MLB-1234567890-air-fryer-_JM';
+    const a = await api('POST', '/api/products', { ...PRODUTO, product_url: link });
+    assert.equal(a.status, 201);
+    assert.equal(a.data.product.external_id, 'MLB1234567890');
+    assert.ok(a.data.product.price_checked_at);
+    // mesmo anúncio com outro texto no link
+    const dup = await api('POST', '/api/products', { ...PRODUTO, title: 'Outro nome', product_url: 'https://produto.mercadolivre.com.br/MLB-1234567890-outro' });
+    assert.equal(dup.status, 409);
+    const b = await api('POST', '/api/products', { ...PRODUTO, product_url: 'https://produto.mercadolivre.com.br/MLB-999999999-x' });
+    assert.equal(b.status, 201);
+    const edit = await api('PATCH', `/api/products/${b.data.product.id}`, { product_url: link });
+    assert.equal(edit.status, 409);
+    // editar só o preço não conflita e renova a data de conferência
+    const ok = await api('PATCH', `/api/products/${b.data.product.id}`, { price: '150' });
+    assert.equal(ok.status, 200);
+    const csv = 'titulo;marketplace;preco;link\nAir Fryer;ML;189,90;' + link + '\nNovo;SH;20;https://shopee.com.br/x-i.1.2\n';
+    const imp = await api('POST', '/api/products/import', csv);
+    assert.deepEqual([imp.data.imported, imp.data.skipped, imp.data.errors.length], [1, 1, 0]);
+    // outra conta pode ter o mesmo produto
+    const api2 = t.client();
+    await signup(api2, 'b@exemplo.com');
+    assert.equal((await api2('POST', '/api/products', { ...PRODUTO, product_url: link })).status, 201);
+  } finally { t.close(); }
+});
+
+test('garimpo Shopee: conecta com teste, busca na hora, filtra, salva e atualiza preço', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const semConexao = await api('POST', '/api/garimpo/search', { marketplace: 'SH', q: 'fone' });
+    assert.equal(semConexao.status, 400);
+    assert.match(semConexao.data.error, /Conecte a Shopee/);
+
+    opts.shopee.reject = true;
+    const bad = await api('PUT', '/api/connections/shopee', { app_id: '18123456789', secret: 'segredo-da-shopee-123' });
+    assert.equal(bad.status, 400);
+    assert.match(bad.data.error, /recusou/);
+    opts.shopee.reject = false;
+    assert.equal((await api('PUT', '/api/connections/shopee', { app_id: '18123456789', secret: 'segredo-da-shopee-123' })).status, 200);
+    const call = t.calls.filter((c) => c.path === '/graphql').pop();
+    assert.match(call.headers.authorization, /^SHA256 Credential=18123456789, Timestamp=\d+, Signature=[0-9a-f]{64}$/);
+    const row = (await t.pool.query(`select secret_enc from marketplace_connections where marketplace = 'SH'`)).rows[0];
+    assert.ok(!row.secret_enc.includes('segredo-da-shopee'));
+
+    const st = await api('GET', '/api/connections/marketplaces');
+    assert.equal(st.data.SH.connected, true);
+
+    const r = await api('POST', '/api/garimpo/search', { marketplace: 'SH', q: 'fone "bluetooth"', sort: 'comissao' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.items.length, 2);
+    const p = r.data.items[0];
+    assert.equal(p.external_id, '77.1001');
+    assert.equal(p.commission_pct, 12);
+    assert.equal(p.rating, 4.8);
+    assert.equal(p.sales_k, 15.3);
+    assert.equal(p.desc, 40);
+    assert.equal(p.affiliate_url, 'https://s.shopee.com.br/af1001');
+    assert.ok(p.score > 0);
+    assert.match(t.calls.filter((c) => c.path === '/graphql').pop().gql, /keyword: "fone \\"bluetooth\\"", sortType: 5/);
+
+    const filtrado = await api('POST', '/api/garimpo/search', { marketplace: 'SH', q: 'fone', min_rating: 4.9 });
+    assert.equal(filtrado.data.items.length, 0);
+
+    const save = await api('POST', '/api/garimpo/save', { items: r.data.items });
+    assert.deepEqual([save.data.saved, save.data.skipped], [2, 0]);
+    const again = await api('POST', '/api/garimpo/save', { items: [r.data.items[0]] });
+    assert.deepEqual([again.data.saved, again.data.skipped], [0, 1]);
+    const r2 = await api('POST', '/api/garimpo/search', { marketplace: 'SH', q: 'fone' });
+    assert.ok(r2.data.items.every((x) => x.saved_id));
+
+    const prod = save.data.products.find((x) => x.external_id === '77.1001');
+    await t.pool.query(`update products set price_checked_at = now() - interval '3 days' where id = $1`, [prod.id]);
+    opts.shopee.itemPrice = 49.9;
+    const ref = await api('POST', `/api/products/${prod.id}/refresh`);
+    assert.equal(ref.status, 200, JSON.stringify(ref.data));
+    assert.equal(ref.data.previous_price, 59.9);
+    assert.equal(ref.data.product.price, 49.9);
+    assert.ok(Date.now() - new Date(ref.data.product.price_checked_at).getTime() < 60000);
+    assert.match(t.calls.filter((c) => c.path === '/graphql').pop().gql, /shopId: 77, itemId: 1001/);
+  } finally { t.close(); }
+});
+
+test('garimpo Mercado Livre: autorização com PKCE, busca com comissão padrão, catálogo e token renovado', async () => {
+  const opts = { ml: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const put = await api('PUT', '/api/connections/mercadolivre', { client_id: '1234567890123', client_secret: 'segredo-do-ml-abc', default_commission: '8' });
+    assert.equal(put.status, 200);
+    assert.equal(put.data.authorize, '/api/connections/mercadolivre/authorize');
+    let st = await api('GET', '/api/connections/marketplaces');
+    assert.deepEqual([st.data.ML.connected, st.data.ML.authorized, st.data.ML.default_commission], [true, false, 8]);
+    assert.equal(st.data.ML.redirect_uri, 'https://app.exemplo.com/api/connections/mercadolivre/callback');
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' })).status, 400);
+
+    const auth = await api('GET', '/api/connections/mercadolivre/authorize');
+    assert.equal(auth.status, 302);
+    const to = new URL(auth.location);
+    assert.equal(to.hostname, 'auth.mercadolivre.com.br');
+    assert.equal(to.searchParams.get('client_id'), '1234567890123');
+    assert.equal(to.searchParams.get('code_challenge_method'), 'S256');
+    const state = to.searchParams.get('state');
+
+    const forged = await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=outro`);
+    assert.match(forged.location, /ml=erro/);
+    // o cookie da tentativa foi apagado; uma nova autorização é necessária
+    const auth2 = await api('GET', '/api/connections/mercadolivre/authorize');
+    const state2 = new URL(auth2.location).searchParams.get('state');
+    assert.notEqual(state2, state);
+    const cb = await api('GET', `/api/connections/mercadolivre/callback?code=TG-1&state=${state2}`);
+    assert.equal(cb.location, '/?ml=ok#conexoes');
+    const tokenCall = t.calls.filter((c) => c.path === '/oauth/token').pop();
+    assert.equal(tokenCall.body.grant_type, 'authorization_code');
+    assert.ok(tokenCall.body.code_verifier.length >= 43);
+    st = await api('GET', '/api/connections/marketplaces');
+    assert.equal(st.data.ML.authorized, true);
+
+    const r = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer', sort: 'preco' });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(r.data.items.map((x) => x.external_id), ['MLB222', 'MLB111']);
+    const p = r.data.items[0];
+    assert.equal(p.commission_pct, 8);
+    assert.equal(p.sales_k, 2.5);
+    assert.equal(p.affiliate_url, null);
+    assert.equal(p.image_url, 'https://http2.mlstatic.com/D_MLB222-O.jpg');
+    assert.equal(t.calls.filter((c) => c.path === '/sites/MLB/search').pop().auth, 'Bearer APP_USR-token-1');
+
+    opts.ml.search403 = true;
+    const cat = await api('POST', '/api/garimpo/search', { marketplace: 'ML', q: 'air fryer' });
+    assert.equal(cat.status, 200, JSON.stringify(cat.data));
+    assert.equal(cat.data.items[0].external_id, 'MLB9001');
+    assert.equal(cat.data.items[0].price, 279.9);
+    opts.ml.search403 = false;
+
+    const save = await api('POST', '/api/garimpo/save', { items: [p] });
+    assert.equal(save.data.saved, 1);
+    const prod = save.data.products[0];
+
+    // token vencido: renova com o refresh token antes de consultar o preço
+    await t.pool.query(`update marketplace_connections set token_expires_at = now() - interval '1 hour'`);
+    opts.ml.itemPrice = 179.9;
+    const ref = await api('POST', `/api/products/${prod.id}/refresh`);
+    assert.equal(ref.status, 200, JSON.stringify(ref.data));
+    assert.equal(ref.data.product.price, 179.9);
+    assert.equal(ref.data.product.commission_pct, 8);
+    assert.equal(t.calls.filter((c) => c.path === '/oauth/token').pop().body.grant_type, 'refresh_token');
+    assert.equal(t.calls.filter((c) => c.path.startsWith('/items/')).pop().auth, 'Bearer APP_USR-token-2');
+
+    // atualizar só a comissão mantém a autorização
+    assert.equal((await api('PUT', '/api/connections/mercadolivre', { default_commission: '10' })).status, 200);
+    st = await api('GET', '/api/connections/marketplaces');
+    assert.deepEqual([st.data.ML.authorized, st.data.ML.default_commission], [true, 10]);
+  } finally { t.close(); }
 });

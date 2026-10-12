@@ -14,7 +14,7 @@
   function brl(v) { return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
   function toast(msg) {
     var t = $('#toast'); t.textContent = msg; t.hidden = false;
-    clearTimeout(toast.h); toast.h = setTimeout(function () { t.hidden = true; }, 2400);
+    clearTimeout(toast.h); toast.h = setTimeout(function () { t.hidden = true; }, Math.max(2400, String(msg).length * 60));
   }
   function mktTag(m) { return m === 'ML' ? '<span class="tag ml">Mercado Livre</span>' : '<span class="tag sh">Shopee</span>'; }
   function safeUrl(u) { return /^(https?:\/\/|\/uploads\/)/i.test(u || '') ? u : ''; }
@@ -49,9 +49,11 @@
 
   /* ---------- estado ---------- */
   var state = {
-    user: null, loading: true, tab: 'descobrir', signup: false, ai: false,
-    products: [], queue: [], summary: null, earnings: [], conn: null,
+    user: null, loading: true, tab: 'garimpar', signup: false, ai: false,
+    products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
     mkt: 'todos', cat: 'todas', comMin: 0, ordem: 'score', days: 14, authMode: 'login',
+    // garimpo sob demanda: filtros, resultados da última busca e itens marcados
+    g: { mkt: 'ML', q: '', sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {} },
   };
 
   var ICONS = {
@@ -75,10 +77,10 @@
     return Promise.all([
       api('GET', '/api/products'), api('GET', '/api/queue'),
       api('GET', '/api/earnings/summary?days=' + state.days), api('GET', '/api/earnings'),
-      api('GET', '/api/connections/instagram'),
+      api('GET', '/api/connections/instagram'), api('GET', '/api/connections/marketplaces'),
     ]).then(function (r) {
       state.products = r[0].products; state.queue = r[1].items; state.summary = r[2];
-      state.earnings = r[3].earnings; state.conn = r[4];
+      state.earnings = r[3].earnings; state.conn = r[4]; state.mkts = r[5];
     });
   }
   function reload() { return loadAll().then(render); }
@@ -100,7 +102,8 @@
 
   function shell(body) {
     var pend = state.queue.filter(function (q) { return q.status === 'draft' || q.status === 'scheduled' || q.status === 'failed'; }).length;
-    var tabs = [['descobrir', 'Descobrir', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'],
+    var tabs = [['garimpar', 'Garimpar', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'],
+      ['descobrir', 'Produtos', '<path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8V6a3 3 0 016 0v2"/>'],
       ['fila', 'Fila', '<path d="M4 6h16M4 12h16M4 18h10"/>'],
       ['ganhos', 'Ganhos', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
       ['conexoes', 'Conexões', '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 0011 18.7l1-1"/>']];
@@ -109,6 +112,80 @@
       '<nav class="tabs" role="tablist" aria-label="Seções">' + tabs.map(function (t) {
         return '<button role="tab" aria-selected="' + (state.tab === t[0]) + '" data-tab="' + t[0] + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + t[2] + '</svg>' + t[1] + (t[0] === 'fila' && pend ? '<span class="badge">' + pend + '</span>' : '') + '</button>';
       }).join('') + '</nav><main>' + body + '</main>';
+  }
+
+  function ago(iso) {
+    if (!iso) return 'nunca';
+    var h = (Date.now() - new Date(iso).getTime()) / 36e5;
+    if (h < 1) return 'agora há pouco';
+    if (h < 24) return 'há ' + Math.floor(h) + ' h';
+    var d = Math.floor(h / 24); return 'há ' + d + (d === 1 ? ' dia' : ' dias');
+  }
+  function staleHours(p) { return p.price_checked_at ? (Date.now() - new Date(p.price_checked_at).getTime()) / 36e5 : Infinity; }
+  function mktReady(m) {
+    var s = state.mkts || {};
+    return m === 'SH' ? Boolean(s.SH && s.SH.connected) : Boolean(s.ML && s.ML.authorized);
+  }
+  function mktName(m) { return m === 'ML' ? 'Mercado Livre' : 'Shopee'; }
+  function selectEl(id, name, label, opts, cur) {
+    return '<select id="' + id + '" name="' + name + '" aria-label="' + label + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
+  }
+  function statsBlock(p) {
+    return '<div class="stats"><div><span>Comissão</span><b class="num">' + (p.commission_pct != null ? p.commission_pct + '%' : '—') + '</b></div><div><span>Ganho/venda</span><b class="num">' + brl(p.earn_per_sale) + '</b></div><div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>';
+  }
+  function priceBlock(p) {
+    return '<div class="price"><strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') + '</div>';
+  }
+
+  function viewGarimpar() {
+    var g = state.g;
+    var ready = mktReady(g.mkt);
+    var chips = [['ML', 'Mercado Livre'], ['SH', 'Shopee']].map(function (m) {
+      return '<button type="button" class="chip" data-gmkt="' + m[0] + '" aria-pressed="' + (g.mkt === m[0]) + '">' + m[1] + (mktReady(m[0]) ? '' : ' · desconectado') + '</button>';
+    }).join('');
+    var sorts = [['relevancia', 'Mais relevantes'], ['vendidos', 'Mais vendidos'], ['comissao', 'Maior comissão'], ['preco', 'Menor preço'], ['nota', 'Maior nota']];
+    var form = '<form class="card" id="g-form"><div class="filters" style="padding:0">' + chips + '</div>' +
+      '<div class="row"><input id="g-q" name="q" type="search" class="grow gq" placeholder="O que você quer garimpar? Ex.: air fryer, fone bluetooth" value="' + esc(g.q) + '" required minlength="2" aria-label="Busca"' + (ready ? '' : ' disabled') + '>' +
+      '<button class="btn primary" type="submit"' + (ready && !g.busy ? '' : ' disabled') + '>' + (g.busy ? 'Garimpando…' : 'Garimpar agora') + '</button></div>' +
+      '<div class="filters" style="padding:0">' + selectEl('g-sort', 'sort', 'Ordenar por', sorts, g.sort) +
+      selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
+      (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
+        selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) : '') + '</div></form>';
+
+    var note = g.mkt === 'ML' ? '<div class="rule">O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado. A comissão usa o padrão que você definiu em Conexões. Depois de salvar, gere o link no portal de Afiliados e cole no produto (botão Editar).</div>' : '';
+    if (!ready) {
+      return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form +
+        '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no ' + mktName(g.mkt) + ', conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
+    }
+    var nsel = Object.keys(g.sel).filter(function (k) { return g.sel[k]; }).length;
+    var cards = g.results.map(function (p, i) {
+      var picked = Boolean(g.sel[i]);
+      return '<article class="card' + (picked ? ' picked' : '') + '">' + thumb(p) +
+        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
+        '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
+        priceBlock(p) + statsBlock(p) +
+        '<div class="row">' + (p.saved_id ? '<span class="pill posted">Já salvo</span>' : '<label class="pick"><input type="checkbox" data-gpick="' + i + '"' + (picked ? ' checked' : '') + '> Selecionar</label>') +
+        '<span class="grow"></span>' + (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Ver na loja</a>' : '') + '</div></article>';
+    }).join('');
+    var results = g.results.length ? '<div class="grid three" style="margin-top:12px">' + cards + '</div>' :
+      (g.done && !g.busy ? '<div class="empty centered-empty" style="margin-top:12px">Nada encontrado com esses filtros. Tente outra palavra ou afrouxe os filtros.</div>' : '');
+    var bar = g.results.length ? '<div class="gbar"><span class="hint">' + g.results.length + ' resultados · ' + nsel + ' selecionados</span><span class="grow"></span>' +
+      '<button class="btn small" data-act="g-all">Selecionar todos</button>' +
+      (g.more ? '<button class="btn small" data-act="g-more"' + (g.busy ? ' disabled' : '') + '>Carregar mais</button>' : '') +
+      '<button class="btn small primary" data-act="g-save"' + (nsel ? '' : ' disabled') + '>Salvar selecionados (' + nsel + ')</button></div>' : '';
+    return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form + note + results + bar;
+  }
+
+  function garimpar(page) {
+    var g = state.g;
+    g.busy = true; render();
+    return api('POST', '/api/garimpo/search', {
+      marketplace: g.mkt, q: g.q, page: page, sort: g.sort,
+      min_discount: g.minDesc, min_commission: g.mkt === 'SH' ? g.minCom : 0, min_rating: g.mkt === 'SH' ? g.minRat : 0,
+    }).then(function (r) {
+      if (page === 1) { g.results = r.items; g.sel = {}; } else g.results = g.results.concat(r.items);
+      g.page = r.page; g.more = r.has_more; g.done = true;
+    }).finally(function () { g.busy = false; render(); });
   }
 
   function viewDescobrir() {
@@ -131,13 +208,15 @@
       return '<article class="card">' + thumb(p) +
         '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
         '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        '<div class="price"><strong class="num">' + brl(p.price) + '</strong>' + (p.original_price ? '<s class="num">' + brl(p.original_price) + '</s>' : '') + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') + '</div>' +
-        '<div class="stats"><div><span>Comissão</span><b class="num">' + (p.commission_pct != null ? p.commission_pct + '%' : '—') + '</b></div><div><span>Ganho/venda</span><b class="num">' + brl(p.earn_per_sale) + '</b></div><div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + p.rating.toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>' +
+        priceBlock(p) + statsBlock(p) +
+        '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
+        (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
+        (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
         '<div class="row"><button class="btn small primary" data-add="' + p.id + '" data-channel="instagram">+ Instagram</button><button class="btn small" data-add="' + p.id + '" data-channel="whatsapp">+ WhatsApp</button><span class="grow"></span>' +
         (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' : '') +
         '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div></article>';
     }).join('');
-    return '<div class="pagehead"><h2>Descobrir</h2><p>Seus produtos, ordenados pela nota de prioridade.</p></div>' +
+    return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos, ordenados pela nota de prioridade.</p></div>' +
       '<div class="toolbar"><button class="btn primary" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button></div>' +
       '<div class="rule">Nota de 0 a 100: 30% desconto, 30% comissão, 20% avaliação, 20% volume de vendas.</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
@@ -145,7 +224,7 @@
       sel('f-com', 'Comissão mínima', [[0, 'Qualquer comissão'], [8, 'A partir de 8%'], [10, 'A partir de 10%'], [12, 'A partir de 12%']], state.comMin) +
       sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) + '</div>' +
       (list.length ? '<div class="grid three">' + cards + '</div>' :
-        '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Toque em Novo produto ou importe um CSV.') + '</div>');
+        '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Use a aba Garimpar, Novo produto ou importe um CSV.') + '</div>');
   }
 
   var STATUS = { draft: 'Rascunho', scheduled: 'Agendado', publishing: 'Publicando', processing: 'Processando', posted: 'Postado', failed: 'Falhou' };
@@ -227,7 +306,28 @@
 
   function viewConexoes() {
     var c = state.conn || {};
-    return '<div class="pagehead"><h2>Conexões</h2><p>Instagram para publicar direto do painel.</p></div><div class="conn">' +
+    var m = state.mkts || { SH: {}, ML: {} };
+    var sh = m.SH || {}, ml = m.ML || {};
+    var shCard = '<section class="card"><h3>Shopee (garimpo)</h3>' +
+      (sh.connected ? '<p class="ok">Conectada (App ID ' + esc(sh.app_id) + ').</p><div class="row"><button class="btn small danger" data-act="disconnect-sh">Desconectar</button></div>' : '<p class="hint">Não conectada.</p>') +
+      '<form class="stack" id="sh-form"><div class="field"><label for="sh-id">App ID</label><input id="sh-id" name="app_id" type="text" inputmode="numeric" autocomplete="off" required></div>' +
+      '<div class="field"><label for="sh-secret">Secret</label><input id="sh-secret" name="secret" type="password" autocomplete="off" required></div>' +
+      '<p class="err" id="sh-err" role="alert"></p><button class="btn primary" type="submit">Salvar e testar</button></form>' +
+      '<ol class="steps"><li>Entre no portal de afiliados da Shopee (affiliate.shopee.com.br).</li><li>Abra o menu <b>Open API</b> e peça o acesso. A aprovação pode levar alguns dias.</li><li>Copie o <b>App ID</b> e a <b>Secret</b> e cole aqui.</li></ol></section>';
+    var mlStatus = ml.authorized ? '<p class="ok">Conectado e autorizado (Client ID ' + esc(ml.app_id) + ').</p>' :
+      ml.connected ? '<p class="err">Credenciais salvas, mas falta autorizar a sua conta.</p><div class="row"><button class="btn small primary" data-act="ml-authorize">Autorizar agora</button></div>' : '<p class="hint">Não conectado.</p>';
+    var mlCard = '<section class="card"><h3>Mercado Livre (garimpo)</h3>' + mlStatus +
+      (ml.connected ? '<div class="row"><button class="btn small danger" data-act="disconnect-ml">Desconectar</button></div>' : '') +
+      '<form class="stack" id="ml-form"><div class="field"><label for="ml-id">Client ID' + (ml.connected ? ' (em branco mantém o atual)' : '') + '</label><input id="ml-id" name="client_id" type="text" inputmode="numeric" autocomplete="off"' + (ml.connected ? '' : ' required') + '></div>' +
+      '<div class="field"><label for="ml-secret">Client Secret</label><input id="ml-secret" name="client_secret" type="password" autocomplete="off"' + (ml.connected ? '' : ' required') + '></div>' +
+      '<div class="field"><label for="ml-com">Sua comissão padrão no Mercado Livre (%)</label><input id="ml-com" name="default_commission" type="text" inputmode="decimal" value="' + esc(ml.default_commission == null ? '' : ml.default_commission) + '" placeholder="Ex.: 8"></div>' +
+      '<p class="err" id="ml-err" role="alert"></p><button class="btn primary" type="submit">' + (ml.connected ? 'Salvar' : 'Salvar e autorizar') + '</button></form>' +
+      '<ol class="steps"><li>Entre em developers.mercadolivre.com.br com a sua conta e clique em <b>Criar aplicação</b>.</li>' +
+      '<li>Em <b>URI de redirect</b>, cole exatamente:<br><code class="copyable">' + esc(ml.redirect_uri || '') + '</code></li>' +
+      '<li>Marque as permissões de leitura e <b>offline_access</b> (para não precisar autorizar de novo a cada 6 horas).</li>' +
+      '<li>Copie o <b>Client ID</b> e a <b>Client Secret</b> para cá e clique em Salvar e autorizar. Na página do Mercado Livre, aceite.</li>' +
+      '<li>A comissão padrão é usada na nota de prioridade, porque a API não informa a comissão de afiliado. Confira a sua no portal de Afiliados.</li></ol></section>';
+    return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar e Instagram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard +
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
       (c.public_media === false ? '<p class="err">Este servidor está em endereço local. O Instagram só consegue ler fotos e vídeos de uma URL pública, então a publicação vai falhar até você configurar APP_URL com o seu domínio.</p>' : '') +
@@ -241,7 +341,7 @@
     var scroll = window.scrollY;
     if (state.loading) { app.innerHTML = '<p class="hint" style="padding-top:40vh;text-align:center">Carregando…</p>'; return; }
     if (!state.user) { app.innerHTML = viewLogin(); return; }
-    var body = state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
+    var body = state.tab === 'garimpar' ? viewGarimpar() : state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
     app.innerHTML = shell(body);
     window.scrollTo(0, scroll);
   }
@@ -308,7 +408,7 @@
         var f = $('#csv', dlg).files[0];
         if (!f) throw new Error('Escolha um arquivo.');
         return f.text().then(function (txt) { return api('POST', isProd ? '/api/products/import' : '/api/earnings/import', undefined, txt); }).then(function (r) {
-          toast(r.imported + ' importados' + (r.errors.length ? ', ' + r.errors.length + ' com erro (linha ' + r.errors[0].line + ': ' + r.errors[0].error + ')' : ''));
+          toast(r.imported + ' importados' + (r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro (linha ' + r.errors[0].line + ': ' + r.errors[0].error + ')' : ''));
           return reload();
         });
       });
@@ -354,7 +454,37 @@
     'close-dlg': function () { dlg.close(); },
     'test-ig': function () { return api('POST', '/api/connections/instagram/test').then(function (r) { toast('Conexão ok' + (r.username ? ': @' + r.username : '')); }); },
     'disconnect-ig': function () { return api('DELETE', '/api/connections/instagram').then(reload).then(function () { toast('Instagram desconectado'); }); },
+    'disconnect-sh': function () { return api('DELETE', '/api/connections/shopee').then(reload).then(function () { toast('Shopee desconectada'); }); },
+    'disconnect-ml': function () { return api('DELETE', '/api/connections/mercadolivre').then(reload).then(function () { toast('Mercado Livre desconectado'); }); },
+    'ml-authorize': function () { window.location.href = '/api/connections/mercadolivre/authorize'; },
+    'g-more': function () { return garimpar(state.g.page + 1); },
+    'g-all': function () {
+      var g = state.g;
+      g.results.forEach(function (p, i) { if (!p.saved_id) g.sel[i] = true; });
+      render();
+    },
+    'g-save': function () {
+      var g = state.g;
+      var items = g.results.filter(function (p, i) { return g.sel[i] && !p.saved_id; });
+      if (!items.length) throw new Error('Marque os produtos que quer salvar.');
+      return api('POST', '/api/garimpo/save', { items: items }).then(function (r) {
+        var ids = {};
+        r.products.forEach(function (p) { if (p.external_id) ids[p.external_id] = p.id; });
+        g.results.forEach(function (p) { if (ids[p.external_id]) p.saved_id = ids[p.external_id]; });
+        g.sel = {};
+        toast(r.saved + ' salvo' + (r.saved === 1 ? '' : 's') + (r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro: ' + r.errors[0].error : ''));
+        return reload();
+      });
+    },
   };
+
+  /** Confere o preço na loja antes de levar para a fila, se ele tiver mais de 6 horas. Falha não impede. */
+  function freshBeforeQueue(p) {
+    if (!p || !p.external_id || !mktReady(p.marketplace) || staleHours(p) < 6) return Promise.resolve(null);
+    return api('POST', '/api/products/' + p.id + '/refresh').then(function (r) {
+      return r.previous_price !== r.product.price ? 'Preço atualizado: ' + brl(r.previous_price) + ' → ' + brl(r.product.price) + '. ' : null;
+    }).catch(function (e) { return 'Não consegui conferir o preço (' + e.message + '). '; });
+  }
 
   function queueItem(id) { return state.queue.filter(function (q) { return q.id === Number(id); })[0]; }
   function capValue(id) { var el = $('#cap-' + id); return el ? el.value : ''; }
@@ -367,7 +497,21 @@
     if (d.act && actions[d.act]) return actions[d.act]();
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; return render(); }
-    if (d.add) return api('POST', '/api/queue', { product_id: Number(d.add), channel: d.channel }).then(function (r) { toast(r.warning || 'Adicionado à fila'); return reload(); });
+    if (d.gmkt) { var g = state.g; if (g.mkt !== d.gmkt) { g.mkt = d.gmkt; g.results = []; g.sel = {}; g.done = false; g.more = false; } return render(); }
+    if (d.refresh) {
+      t.disabled = true; t.textContent = 'Atualizando…';
+      return api('POST', '/api/products/' + d.refresh + '/refresh').then(function (r) {
+        toast(r.previous_price !== r.product.price ? 'Preço mudou: ' + brl(r.previous_price) + ' → ' + brl(r.product.price) : 'Preço confirmado: ' + brl(r.product.price));
+        return reload();
+      }).catch(function (err) { return reload().then(function () { throw err; }); });
+    }
+    if (d.add) {
+      var prod = state.products.filter(function (x) { return x.id === Number(d.add); })[0];
+      t.disabled = true;
+      return freshBeforeQueue(prod).then(function (msg) {
+        return api('POST', '/api/queue', { product_id: Number(d.add), channel: d.channel }).then(function (r) { toast((msg || '') + (r.warning || 'Adicionado à fila')); return reload(); });
+      }).catch(function (err) { t.disabled = false; throw err; });
+    }
     if (d.editProduct) { var p = state.products.filter(function (x) { return x.id === Number(d.editProduct); })[0]; return productDialog(p); }
     if (d.delProduct) { return api('DELETE', '/api/products/' + d.delProduct).then(function () { dlg.close(); toast('Produto excluído'); return reload(); }); }
     if (d.save) return saveQueue(d.save).then(function () { toast('Texto salvo'); return reload(); });
@@ -403,6 +547,12 @@
     if (t.id === 'f-ord') { state.ordem = t.value; return render(); }
     if (t.id === 'f-days') { state.days = Number(t.value); return reload(); }
     if (t.dataset.earnStatus) return api('PATCH', '/api/earnings/' + t.dataset.earnStatus, { status: t.value }).then(reload);
+    if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
+    if (t.form && t.form.id === 'g-form' && t.tagName === 'SELECT') {
+      var gs = state.g;
+      gs[t.name] = t.name === 'sort' ? t.value : Number(t.value);
+      return gs.done && gs.q ? garimpar(1) : render();
+    }
     if (t.dataset.upload && t.files[0]) {
       var id = t.dataset.upload;
       return uploadFile(t.files[0]).then(function (r) { return saveQueue(id, { media_type: r.media_type, media_url: r.url }); }).then(function () { toast('Mídia atualizada'); return reload(); });
@@ -426,6 +576,23 @@
       var g = Object.fromEntries(new FormData(e.target).entries());
       api('PUT', '/api/connections/instagram', g).then(function (r) { toast('Instagram conectado' + (r.username ? ': @' + r.username : '')); return reload(); })
         .catch(function (err) { var el = $('#ig-err'); if (el) el.textContent = err.message; });
+    } else if (e.target.id === 'g-form') {
+      e.preventDefault();
+      state.g.q = $('#g-q').value.trim();
+      guard(function () { return garimpar(1); })();
+    } else if (e.target.id === 'sh-form') {
+      e.preventDefault();
+      var s = Object.fromEntries(new FormData(e.target).entries());
+      var btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true; btn.textContent = 'Testando…';
+      api('PUT', '/api/connections/shopee', s).then(function () { toast('Shopee conectada'); return reload(); })
+        .catch(function (err) { btn.disabled = false; btn.textContent = 'Salvar e testar'; var el = $('#sh-err'); if (el) el.textContent = err.message; });
+    } else if (e.target.id === 'ml-form') {
+      e.preventDefault();
+      var mfd = Object.fromEntries(new FormData(e.target).entries());
+      api('PUT', '/api/connections/mercadolivre', mfd).then(function (r) {
+        if (r.authorize) { window.location.href = r.authorize; return null; }
+        toast('Comissão padrão salva'); return reload();
+      }).catch(function (err) { var el = $('#ml-err'); if (el) el.textContent = err.message; });
     }
   });
 
@@ -438,6 +605,12 @@
   }, 20000);
 
   /* ---------- início ---------- */
+  // Volta da autorização do Mercado Livre: /?ml=ok#conexoes ou /?ml=erro&msg=...#conexoes
+  var qs = new URLSearchParams(location.search);
+  var mlBack = qs.get('ml'), mlMsg = qs.get('msg');
+  if (location.hash === '#conexoes') state.tab = 'conexoes';
+  if (mlBack || location.hash) history.replaceState(null, '', location.pathname);
+
   api('GET', '/api/auth/me').then(function (m) {
     state.user = m.user; state.ai = m.ai; state.signup = m.signup;
     return loadAll();
@@ -447,5 +620,9 @@
       // descobre se o cadastro está aberto sem estar logado
       return fetch('/api/auth/signup-open').then(function (r) { return r.ok ? r.json() : { signup: true }; }).catch(function () { return { signup: true }; }).then(function (s) { state.signup = s.signup; });
     }
-  }).then(render);
+  }).then(function () {
+    render();
+    if (mlBack === 'ok') toast('Mercado Livre autorizado. Já pode garimpar!');
+    else if (mlBack) toast('Mercado Livre: ' + (mlMsg || 'não foi possível autorizar.'));
+  });
 })();

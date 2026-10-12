@@ -10,6 +10,7 @@ const { earningsRoutes } = require('./routes/earnings');
 const { connectionRoutes } = require('./routes/connections');
 const { mediaRoutes } = require('./routes/media');
 const { cronRoutes } = require('./routes/cron');
+const { garimpoRoutes } = require('./routes/garimpo');
 const { createStorage } = require('./services/storage');
 const { startScheduler } = require('./services/publisher');
 
@@ -53,7 +54,8 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   app.use('/api/cron', cronRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/auth', authRoutes({ pool, cfg }));
   const guard = requireAuth(cfg);
-  app.use('/api/products', guard, productRoutes({ pool, cfg }));
+  app.use('/api/products', guard, productRoutes({ pool, cfg, fetchImpl }));
+  app.use('/api/garimpo', guard, garimpoRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/queue', guard, queueRoutes({ pool, cfg, fetchImpl, storage }));
   app.use('/api/media', guard, mediaRoutes({ cfg, storage }));
   app.use('/api/earnings', guard, earningsRoutes({ pool, cfg }));

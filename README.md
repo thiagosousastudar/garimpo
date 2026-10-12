@@ -7,7 +7,9 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 ## O que já funciona
 
 - **Contas e login** (e-mail e senha, sessão por cookie). Cada conta só enxerga os próprios dados.
-- **Produtos** com preço, desconto, comissão, avaliação, vendas, foto e vídeo. Cadastro manual ou importação de CSV. A **nota de prioridade** (0 a 100) pesa 30% desconto, 30% comissão, 20% avaliação e 20% vendas.
+- **Garimpar sob demanda** (aba Garimpar): busca na Shopee (API de afiliados) e no Mercado Livre (API oficial) na hora em que você pede, com filtros de desconto, comissão e avaliação, nota de prioridade e salvamento só dos itens escolhidos. Não depende de agendamento.
+- **Produtos** com preço, desconto, comissão, avaliação, vendas, foto e vídeo. Cadastro manual, importação de CSV ou pelo garimpo. A **nota de prioridade** (0 a 100) pesa 30% desconto, 30% comissão, 20% avaliação e 20% vendas. O mesmo produto (mesmo código da loja ou mesmo link) não é cadastrado duas vezes.
+- **Preço conferido**: cada produto mostra quando o preço foi checado, tem o botão **Atualizar preço** e é conferido sozinho ao entrar na fila se tiver mais de 6 horas.
 - **Fila de divulgação** para Instagram e WhatsApp: texto gerado a partir dos dados do produto (ou por IA, se configurar a chave), edição, troca de foto/vídeo, agendamento e marcação de postado.
 - **Publicação no Instagram** pela API oficial da Meta: foto na hora; Reels em duas etapas (o Instagram processa o vídeo e o painel conclui a publicação sozinho). Imediata ou agendada.
 - **Ganhos**: lançamentos manuais ou importação de CSV, com resumo por dia, canal e produto, valor a receber e já recebido.
@@ -15,7 +17,9 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 
 ## O que ainda não existe
 
-- Busca automática de produtos e importação automática de comissões nas plataformas (próxima etapa: API de afiliados da Shopee; no Mercado Livre pode ser preciso importar o relatório por CSV).
+- Importação automática de comissões ganhas (relatórios) das plataformas.
+- Link de afiliado e comissão do Mercado Livre pela API: a API não oferece. A comissão usa um padrão definido em Conexões e o link é colado no produto (gerado no portal de Afiliados).
+- Lembrete de verdade para os itens do WhatsApp com horário marcado.
 - Envio automático para o WhatsApp. O painel prepara o texto e você copia e cola no grupo.
 - Recuperação de senha por e-mail e vários usuários por conta.
 

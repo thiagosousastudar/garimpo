@@ -27,7 +27,9 @@ function validate(item, cfg) {
   if (['localhost', '127.0.0.1', '::1'].includes(host)) {
     throw new HttpError(400, 'A mídia está em um endereço local. O Instagram precisa de uma URL pública (configure APP_URL com o domínio do app).');
   }
-  if (item.media_type === 'image' && !/\.(jpe?g)(\?|$)/i.test(new URL(url).pathname)) {
+  // Fotos das lojas (ex.: Shopee) costumam vir sem extensão; só recusa quando a extensão é claramente outra.
+  const ext = (new URL(url).pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+  if (item.media_type === 'image' && ext && !/^jpe?g$/i.test(ext)) {
     throw new HttpError(400, 'Para foto, o Instagram aceita apenas JPEG (.jpg).');
   }
   return url;
