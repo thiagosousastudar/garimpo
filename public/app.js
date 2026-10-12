@@ -736,6 +736,11 @@
   var post = null;
   var MAX_MEDIA = 10;
 
+  /** Baixa um arquivo gerado no navegador (alternativa quando não dá para copiar a imagem). */
+  function downloadFile(file) {
+    var a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name || 'achadinho.jpg';
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
   function waLink(text) { return 'https://wa.me/?text=' + encodeURIComponent(text); }
   function copyText(text) {
     try { return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; }); } catch (_) { return Promise.resolve(false); }
@@ -813,7 +818,7 @@
       }).join('') +
       (locked ? '' : '<label class="gpic add" for="post-up" title="Enviar fotos ou vídeos do aparelho">+<small>foto/vídeo</small></label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-pupload="1" multiple hidden>') + '</div>' +
       (post.products.some(function (x) { return x.has_video; }) && !nVideo ? '<p class="hint">🎬 O anúncio no Mercado Livre tem vídeo, mas a API não libera o arquivo. Para postar vídeo, grave ou baixe e envie em "+ foto/vídeo" (MP4).</p>' : '') +
-      '</div>' : '';
+      '</div>' : waMediaSection(locked);
     var actions;
     if (post.status === 'posted') {
       actions = '<p class="ok">' + (ig ? 'Publicado no Instagram!' + (post.permalink ? ' <a href="' + esc(safeUrl(post.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver o post</a>' : '') : 'Registrado no histórico como postado.') + '</p>' +
@@ -826,10 +831,16 @@
         '<div class="row end"><button class="btn" data-act="post-close">Cancelar</button><button class="btn" data-act="post-copy">Copiar texto</button>' +
         '<button class="btn primary" data-act="post-ig"' + (igOk && !post.busy ? '' : ' disabled') + '>' + (post.sending ? 'Publicando…' : 'Publicar no Instagram') + '</button></div>';
     } else {
-      actions = (post.waOpened ? '<p class="hint">Escolha o grupo ou contato no WhatsApp e envie (o texto também foi copiado). Depois toque em "Já enviei" para guardar no histórico.</p>' : '') +
-        '<div class="row end"><button class="btn" data-act="post-close">Cancelar</button>' +
-        (post.waOpened ? '<button class="btn" data-act="post-wa">Abrir de novo</button><button class="btn primary" data-act="post-wa-done"' + (post.busy ? ' disabled' : '') + '>Já enviei</button>'
-          : '<button class="btn primary" data-act="post-wa"' + (post.busy ? ' disabled' : '') + '>Abrir no WhatsApp</button>') + '</div>';
+      var waImg = waPhotoUrl();
+      var dis = post.busy ? ' disabled' : '';
+      actions = (post.waGuide
+          ? '<ol class="steps waguide"><li><b>Foto copiada!</b> Abra o grupo no WhatsApp e cole com <b>Ctrl+V</b>: a foto aparece.</li><li>Clique em <b>Copiar texto</b> aqui e cole na <b>legenda</b> da foto.</li><li>Envie e volte para tocar em <b>Já enviei</b>.</li></ol>'
+          : post.waOpened ? '<p class="hint">Escolha o grupo no WhatsApp e envie. Depois toque em "Já enviei" para guardar no histórico.</p>' : '') +
+        '<div class="row end wa-actions"><button class="btn" data-act="post-close">Cancelar</button>' +
+        (post.waGuide ? '<button class="btn" data-act="post-copy">Copiar texto</button><a class="btn" href="https://web.whatsapp.com/" target="_blank" rel="noopener noreferrer">Abrir WhatsApp Web</a>'
+          : '<button class="btn" data-act="post-wa"' + dis + '>' + (waImg ? 'Só o texto' : 'Abrir no WhatsApp') + '</button>') +
+        (waImg ? '<button class="btn' + (post.waOpened ? '' : ' primary') + '" data-act="post-wa-share"' + dis + '>' + (post.waGuide ? 'Copiar a foto de novo' : '📷 Compartilhar com foto') + '</button>' : '') +
+        (post.waOpened ? '<button class="btn primary" data-act="post-wa-done"' + dis + '>Já enviei</button>' : '') + '</div>';
     }
     var noLink = post.products.filter(function (x) { return !x.affiliate_url; }).length;
     var head = post.group
@@ -847,6 +858,54 @@
         (state.ai ? '<button class="btn small" data-act="post-regen-ai"' + (post.busy ? ' disabled' : '') + '>Refazer com IA</button>' : '') + '</div>') +
       '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
     if (post.cover && post.cover.open) drawCover();
+  }
+
+  /* ---------- WhatsApp com foto: a prévia de link curto nem sempre aparece; a foto sempre ---------- */
+  /** Foto que vai junto no WhatsApp: a escolhida, senão a 1ª marcada (capa, se houver), senão a do produto. "none" = sem foto. */
+  function waPhotoUrl() {
+    if (post.waPhoto === 'none') return null;
+    if (post.waPhoto) return post.waPhoto;
+    var img = post.media.filter(function (m) { return m.type === 'image'; })[0];
+    return img ? img.url : (post.product.image_url || null);
+  }
+  function waMediaSection(locked) {
+    var cur = waPhotoUrl();
+    var pics = mediaPool().filter(function (m) { return m.type === 'image'; });
+    if (cur && !pics.some(function (m) { return m.url === cur; })) pics.unshift({ type: 'image', url: cur });
+    if (cur && !locked) prepareWaImage(cur); // adianta o preparo: o compartilhar precisa ser imediato após o toque
+    return '<div class="mediabox"><div class="row"><b>Foto que vai junto</b><span class="hint">' + (cur ? 'chama muito mais atenção que a prévia do link' : 'sem foto: vai só o texto') + '</span><span class="grow"></span>' +
+      (locked || (post.cover && post.cover.open) ? '' : '<button type="button" class="btn small primary" data-act="cover-open">✨ ' + (post.cover && post.cover.url ? 'Editar capa' : 'Criar capa') + '</button>') + '</div>' +
+      (post.cover && post.cover.open && !locked ? coverPanel() : '') +
+      '<div class="gallery wrap" role="group" aria-label="Escolher a foto">' + pics.map(function (m, k) {
+        var on = m.url === cur;
+        return '<button type="button" class="gpic' + (on ? ' on' : '') + '" data-pwa="' + esc(m.url) + '"' + (locked ? ' disabled' : '') + ' aria-pressed="' + on + '" aria-label="Foto ' + (k + 1) + '"><img src="' + esc(safeUrl(m.url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' + (on ? '<span class="ord">✓</span>' : '') + '</button>';
+      }).join('') +
+      (locked ? '' : '<button type="button" class="gpic add" data-pwa="none" title="Mandar só o texto">✕<small>sem foto</small></button>' +
+        '<label class="gpic add" for="post-up" title="Enviar uma foto do aparelho">+<small>foto</small></label><input id="post-up" class="file-input" type="file" accept="image/jpeg,image/png" data-pupload="1" hidden>') + '</div></div>';
+  }
+
+  /** Carrega a foto pelo repasse (mesmo endereço do app) e re-codifica em JPEG (compartilhar) e PNG (copiar). */
+  function prepareWaImage(url) {
+    if (post.waPrep && post.waPrep.url === url) return post.waPrep.promise;
+    var prep = { url: url, value: null };
+    prep.promise = new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error('Não consegui carregar a foto.')); };
+      img.src = /^\//.test(url) ? url : '/api/media/proxy?url=' + encodeURIComponent(url);
+    }).then(function (img) {
+      var c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      var x = c.getContext('2d'); x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0);
+      var blob = function (type) { return new Promise(function (res, rej) { c.toBlob(function (b) { if (b) res(b); else rej(new Error('Falha ao preparar a foto.')); }, type, 0.92); }); };
+      return Promise.all([blob('image/jpeg'), blob('image/png')]).then(function (b) {
+        prep.value = { file: new File([b[0]], 'achadinho.jpg', { type: 'image/jpeg' }), png: b[1] };
+        return prep.value;
+      });
+    });
+    prep.promise.catch(function () {});
+    post.waPrep = prep;
+    return prep.promise;
   }
 
   /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
@@ -966,6 +1025,7 @@
       }).then(function (r) {
         var old = cv.url;
         cv.url = r.url;
+        if (post.waPhoto && post.waPhoto !== 'none') post.waPhoto = r.url;
         post.uploads = [{ type: 'image', url: r.url }].concat(post.uploads.filter(function (m) { return m.url !== old; }));
         post.media = [{ type: 'image', url: r.url }].concat(post.media.filter(function (m) { return m.url !== old && m.url !== r.url; })).slice(0, MAX_MEDIA);
         post.customMedia = true;
@@ -1011,6 +1071,36 @@
       window.open(waLink(post.caption), '_blank', 'noopener');
       post.waOpened = true; renderPost();
     },
+    /**
+     * Celular: abre o menu de compartilhar com a foto + o texto (a legenda vai junto no WhatsApp).
+     * Computador (sem compartilhar arquivos): copia a foto para colar no WhatsApp; o texto vem depois.
+     */
+    'post-wa-share': function () {
+      var url = waPhotoUrl();
+      if (!url) throw new Error('Escolha uma foto ou use "Só o texto".');
+      var ready = post.waPrep && post.waPrep.url === url && post.waPrep.value;
+      var run = function (v) {
+        if (navigator.canShare && navigator.share && navigator.canShare({ files: [v.file] })) {
+          copyText(post.caption);
+          return navigator.share({ files: [v.file], text: post.caption }).then(function () {
+            post.waOpened = true; renderPost(); toast('Agora é só escolher o grupo e enviar!');
+          }, function (e) { if (e && e.name === 'AbortError') return; throw new Error('Não consegui abrir o compartilhar: ' + e.message); });
+        }
+        if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+          return navigator.clipboard.write([new ClipboardItem({ 'image/png': v.png })]).then(function () {
+            post.waGuide = true; post.waOpened = true; renderPost();
+          }, function () { downloadFile(v.file); post.waGuide = false; post.waOpened = true; renderPost(); toast('Baixei a foto: anexe no WhatsApp e cole o texto na legenda.'); });
+        }
+        downloadFile(v.file); post.waOpened = true; renderPost();
+        toast('Baixei a foto: anexe no WhatsApp e cole o texto na legenda.');
+        return null;
+      };
+      // com a foto já preparada, compartilha no mesmo toque (o navegador exige isso)
+      if (ready) return run(ready);
+      post.busy = true; renderPost();
+      return prepareWaImage(url).then(function () { toast('Foto pronta: toque de novo em "Compartilhar com foto".'); })
+        .finally(function () { if (post) { post.busy = false; renderPost(); } });
+    },
     'post-wa-done': function () {
       post.busy = true; renderPost();
       return api('POST', '/api/queue/post-now', { product_ids: post.products.map(function (x) { return x.id; }), channel: 'whatsapp', caption: post.caption })
@@ -1045,6 +1135,7 @@
     if (d.trend) { state.g.q = d.trend; state.g.category = ''; return garimpar(1); }
     if (d.history) return showHistory(state.products.filter(function (x) { return x.id === Number(d.history); })[0]);
     if (d.pmedia && post) return toggleMedia(d.ptype === 'video' ? 'video' : 'image', d.pmedia);
+    if (d.pwa && post) { post.waPhoto = d.pwa; post.waGuide = false; return renderPost(); }
     if (d.ctpl && post && post.cover) {
       var cv = post.cover;
       if (cv.title === coverDefaultTitle(cv.tpl)) cv.title = coverDefaultTitle(d.ctpl); // título padrão acompanha o modelo
@@ -1053,7 +1144,7 @@
     }
     if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
-    if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.note = null; return loadPreview(false); }
+    if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.waGuide = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
     if (d.gmkt) { var g = state.g; if (g.mkt !== d.gmkt) { g.mkt = d.gmkt; g.results = []; g.sel = {}; g.done = false; g.more = false; } return render(); }
     if (d.refresh) {
@@ -1125,6 +1216,7 @@
           return uploadFile(f).then(function (r) {
             if (!post) return;
             post.uploads.push({ type: r.media_type, url: r.url });
+            if (post.channel === 'whatsapp' && r.media_type === 'image') post.waPhoto = r.url;
             if (post.media.length < MAX_MEDIA) post.media.push({ type: r.media_type, url: r.url });
             post.customMedia = true;
           });
