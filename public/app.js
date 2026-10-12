@@ -408,7 +408,7 @@
     var shCard = '<section class="card"><h3>Shopee (garimpo)</h3>' +
       (sh.connected ? '<p class="ok">Conectada (App ID ' + esc(sh.app_id) + ').</p><div class="row"><button class="btn small danger" data-act="disconnect-sh">Desconectar</button></div>' : '<p class="hint">Não conectada.</p>') +
       '<form class="stack" id="sh-form"><div class="field"><label for="sh-id">App ID</label><input id="sh-id" name="app_id" type="text" inputmode="numeric" autocomplete="off" required></div>' +
-      '<div class="field"><label for="sh-secret">Secret</label><input id="sh-secret" name="secret" type="password" autocomplete="off" required></div>' +
+      '<div class="field"><label for="sh-secret">Secret</label><input id="sh-secret" name="secret" type="password" autocomplete="new-password" data-lpignore="true" required></div>' +
       '<p class="err" id="sh-err" role="alert"></p><button class="btn primary" type="submit">Salvar e testar</button></form>' +
       '<ol class="steps"><li>Entre no portal de afiliados da Shopee (affiliate.shopee.com.br).</li><li>Abra o menu <b>Open API</b> e peça o acesso. A aprovação pode levar alguns dias.</li><li>Copie o <b>App ID</b> e a <b>Secret</b> e cole aqui.</li></ol></section>';
     var mlStatus = ml.authorized ? '<p class="ok">Conectado e autorizado (Client ID ' + esc(ml.app_id) + ').</p>' :
@@ -416,7 +416,7 @@
     var mlCard = '<section class="card"><h3>Mercado Livre (garimpo)</h3>' + mlStatus +
       (ml.connected ? '<div class="row"><button class="btn small danger" data-act="disconnect-ml">Desconectar</button></div>' : '') +
       '<form class="stack" id="ml-form"><div class="field"><label for="ml-id">Client ID' + (ml.connected ? ' (em branco mantém o atual)' : '') + '</label><input id="ml-id" name="client_id" type="text" inputmode="numeric" autocomplete="off"' + (ml.connected ? '' : ' required') + '></div>' +
-      '<div class="field"><label for="ml-secret">Client Secret</label><input id="ml-secret" name="client_secret" type="password" autocomplete="off"' + (ml.connected ? '' : ' required') + '></div>' +
+      '<div class="field"><label for="ml-secret">Client Secret</label><input id="ml-secret" name="client_secret" type="password" autocomplete="new-password" data-lpignore="true"' + (ml.connected ? '' : ' required') + '></div>' +
       '<div class="field"><label for="ml-com">Sua comissão padrão no Mercado Livre (%)</label><input id="ml-com" name="default_commission" type="text" inputmode="decimal" value="' + esc(ml.default_commission == null ? '' : ml.default_commission) + '" placeholder="Ex.: 8"></div>' +
       '<p class="err" id="ml-err" role="alert"></p><button class="btn primary" type="submit">' + (ml.connected ? 'Salvar' : 'Salvar e autorizar') + '</button></form>' +
       '<ol class="steps"><li>Entre em developers.mercadolivre.com.br com a sua conta e clique em <b>Criar aplicação</b>.</li>' +
@@ -429,9 +429,12 @@
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
       (c.public_media === false ? '<p class="err">Este servidor está em endereço local. O Instagram só consegue ler fotos e vídeos de uma URL pública, então a publicação vai falhar até você configurar APP_URL com o seu domínio.</p>' : '') +
-      '<form class="stack" id="ig-form"><div class="field"><label for="ig-id">ID da conta do Instagram</label><input id="ig-id" name="ig_user_id" type="text" inputmode="numeric" placeholder="17841400000000000" required></div>' +
-      '<div class="field"><label for="ig-token">Token de acesso</label><input id="ig-token" name="access_token" type="password" autocomplete="off" required></div>' +
-      '<p class="err" id="ig-err" role="alert"></p><button class="btn primary" type="submit">' + (c.connected ? 'Atualizar credenciais' : 'Conectar') + '</button></form></section>' +
+      // Conectado: formulário recolhido. autocomplete desligado para o navegador não preencher e-mail/senha salvos.
+      (c.connected ? '<details class="sched"><summary>Trocar de conta ou atualizar o token</summary>' : '') +
+      '<form class="stack" id="ig-form" autocomplete="off"><div class="field"><label for="ig-id">ID da conta do Instagram (só números)</label><input id="ig-id" name="ig_user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-lpignore="true" placeholder="17841400000000000" required></div>' +
+      '<div class="field"><label for="ig-token">Token de acesso (começa com IG)</label><input id="ig-token" name="access_token" type="password" autocomplete="new-password" data-lpignore="true" required></div>' +
+      '<p class="err" id="ig-err" role="alert"></p><button class="btn primary" type="submit">' + (c.connected ? 'Atualizar credenciais' : 'Conectar') + '</button></form>' +
+      (c.connected ? '</details>' : '') + '</section>' +
       '<section class="card"><h3>Como conseguir as credenciais</h3><ol class="steps">' +
       '<li>No app do Instagram, deixe a conta como <b>profissional</b> (Comercial ou Criador de conteúdo).</li>' +
       '<li>Em developers.facebook.com, crie um app com o caso de uso <b>Gerenciar mensagens e conteúdo no Instagram</b> (API do Instagram).</li>' +
