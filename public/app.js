@@ -56,6 +56,7 @@
     g: { mkt: 'ML', q: '', category: '', freeShip: false, sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
     onlyFree: false,
     psel: {}, // produtos marcados para postar juntos (carrossel)
+    brand: { color: null, handle: null }, // identidade das capas (cor e @)
   };
 
   var ICONS = {
@@ -662,7 +663,9 @@
       : sel.length === 1 ? (nVideo ? 'Reels com 1 vídeo' : 'Post com 1 foto')
       : 'Carrossel com ' + sel.length + ' itens' + (nVideo ? ' (' + nVideo + ' vídeo' + (nVideo > 1 ? 's' : '') + ')' : '');
     // galeria: toque marca/desmarca; a ordem dos toques é a ordem no carrossel
-    var media = ig ? '<div class="mediabox"><div class="row"><b>Fotos e vídeos</b><span class="hint">' + summary + '</span></div>' +
+    var media = ig ? '<div class="mediabox"><div class="row"><b>Fotos e vídeos</b><span class="hint">' + summary + '</span><span class="grow"></span>' +
+      (locked || (post.cover && post.cover.open) ? '' : '<button type="button" class="btn small primary" data-act="cover-open">✨ ' + (post.cover && post.cover.url ? 'Editar capa' : 'Criar capa') + '</button>') + '</div>' +
+      (post.cover && post.cover.open && !locked ? coverPanel() : '') +
       '<p class="hint">Toque para marcar até 10. A ordem dos toques é a ordem no post; 2 ou mais viram carrossel.</p>' +
       '<div class="gallery wrap" role="group" aria-label="Escolher fotos e vídeos">' + mediaPool().map(function (m, k) {
         var i = mediaIndex(m.url), src = esc(safeUrl(m.url));
@@ -705,7 +708,54 @@
       (post.status ? '' : '<div class="row"><button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
         (state.ai ? '<button class="btn small" data-act="post-regen-ai"' + (post.busy ? ' disabled' : '') + '>Refazer com IA</button>' : '') + '</div>') +
       '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
+    if (post.cover && post.cover.open) drawCover();
   }
+
+  /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
+  var DEFAULT_COLOR = '#E8457A';
+  function coverDefaultTitle(tpl) {
+    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : 'Achadinho do dia';
+  }
+  /** Foto usada nos modelos de 1 produto: a escolhida, senão a 1ª marcada no post (que não seja a capa), senão a do produto. */
+  function coverPhoto() {
+    var cv = post.cover;
+    if (cv.photo) return cv.photo;
+    var first = post.media.filter(function (m) { return m.type === 'image' && m.url !== cv.url; })[0];
+    return first ? first.url : post.product.image_url;
+  }
+  function coverPanel() {
+    var cv = post.cover;
+    var tpls = post.group ? [['lista', 'Top ' + post.products.length], ['oferta', 'Oferta'], ['achadinho', 'Achadinho']] : [['oferta', 'Oferta'], ['achadinho', 'Achadinho do dia']];
+    var photos = post.group || cv.tpl === 'lista' ? [] : mediaPool().filter(function (m) { return m.type === 'image' && m.url !== cv.url; });
+    var cur = coverPhoto();
+    return '<div class="coverbox"><canvas id="cover-canvas" width="1080" height="1350" aria-label="Prévia da capa"></canvas><div class="coverctl">' +
+      '<div class="seg" role="group" aria-label="Modelo">' + tpls.map(function (t) { return '<button type="button" data-ctpl="' + t[0] + '" aria-pressed="' + (cv.tpl === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="field"><label for="cover-title">Título</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '"></div>' +
+      (photos.length > 1 ? '<div class="field"><label>Foto do produto</label><div class="gallery">' + photos.map(function (m) {
+        return '<button type="button" class="gpic' + (cur === m.url ? ' on' : '') + '" data-cphoto="' + esc(m.url) + '"><img src="' + esc(safeUrl(m.url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
+      }).join('') + '</div></div>' : '') +
+      '<div class="cols"><div class="field"><label for="cover-color">Cor da marca</label><input id="cover-color" type="color" value="' + esc(cv.color) + '"></div>' +
+      '<div class="field"><label for="cover-handle">Seu @ no rodapé</label><input id="cover-handle" type="text" maxlength="31" autocomplete="off" value="' + esc(cv.handle) + '" placeholder="seuperfil"></div></div>' +
+      '<label class="pick"><input type="checkbox" id="cover-save"' + (cv.saveDefault ? ' checked' : '') + '> Usar esta cor e este @ nas próximas capas</label>' +
+      '<div class="row end"><button type="button" class="btn small" data-act="cover-close">Fechar</button>' +
+      '<button type="button" class="btn small primary" data-act="cover-use"' + (cv.busy ? ' disabled' : '') + '>' + (cv.busy ? 'Gerando…' : cv.url ? 'Atualizar capa' : 'Usar como 1ª imagem') + '</button></div></div></div>';
+  }
+  var coverImgs = {};
+  function coverImage(url) { if (!url) return Promise.resolve(null); return coverImgs[url] || (coverImgs[url] = window.GarimpoCover.loadImage(url)); }
+  /** Redesenha a prévia (as chamadas antigas que terminarem depois de uma nova são ignoradas). */
+  function drawCover() {
+    var cv = post && post.cover;
+    if (!cv || !cv.open || !window.GarimpoCover) return null;
+    var seq = cv.seq = (cv.seq || 0) + 1;
+    var urls = cv.tpl === 'lista' ? post.products.map(function (p) { return (p.images && p.images[0]) || p.image_url; }) : [coverPhoto()];
+    return Promise.all([window.GarimpoCover.fontsReady(), Promise.all(urls.map(coverImage))]).then(function (r) {
+      var canvas = $('#cover-canvas');
+      if (!canvas || !post || !post.cover || post.cover.seq !== seq) return;
+      window.GarimpoCover.render(canvas, { template: cv.tpl, title: cv.title, color: cv.color, handle: cv.handle, products: post.products, images: r[1] });
+    });
+  }
+  var coverRaf = 0;
+  function drawCoverSoon() { cancelAnimationFrame(coverRaf); coverRaf = requestAnimationFrame(drawCover); }
 
   /** Janela com o histórico de preço do produto: gráfico de linha + últimas conferências. */
   function showHistory(p) {
@@ -751,6 +801,42 @@
   }
 
   Object.assign(actions, {
+    'cover-open': function () {
+      if (!window.GarimpoCover) throw new Error('O editor de capa não carregou. Atualize a página (Ctrl+F5).');
+      if (!post.cover) {
+        var tpl = post.group ? 'lista' : 'oferta';
+        post.cover = {
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true,
+          color: state.brand.color || DEFAULT_COLOR,
+          handle: state.brand.handle || (state.conn && state.conn.username) || '',
+        };
+      }
+      post.cover.open = true;
+      renderPost();
+    },
+    'cover-close': function () { post.cover.open = false; renderPost(); },
+    /** Exporta a prévia em JPEG 1080x1350, envia ao armazenamento e põe como 1ª imagem do post. */
+    'cover-use': function () {
+      var cv = post.cover, canvas = $('#cover-canvas');
+      if (!canvas) return null;
+      return new Promise(function (resolve, reject) {
+        try { canvas.toBlob(function (b) { if (b) resolve(b); else reject(new Error('Não consegui gerar a imagem da capa.')); }, 'image/jpeg', 0.92); }
+        catch (e) { reject(new Error('Não consegui gerar a imagem da capa: ' + e.message)); }
+      }).then(function (blob) {
+        cv.busy = true; renderPost();
+        return uploadFile(new File([blob], 'capa.jpg', { type: 'image/jpeg' }));
+      }).then(function (r) {
+        var old = cv.url;
+        cv.url = r.url;
+        post.uploads = [{ type: 'image', url: r.url }].concat(post.uploads.filter(function (m) { return m.url !== old; }));
+        post.media = [{ type: 'image', url: r.url }].concat(post.media.filter(function (m) { return m.url !== old && m.url !== r.url; })).slice(0, MAX_MEDIA);
+        post.customMedia = true;
+        cv.open = false;
+        toast('Capa pronta: é a 1ª imagem do post');
+        if (!cv.saveDefault) return null;
+        return api('PUT', '/api/auth/brand', { color: cv.color, handle: cv.handle }).then(function (b) { state.brand = b.brand; }).catch(function () {});
+      }).finally(function () { if (post && post.cover) { post.cover.busy = false; renderPost(); } });
+    },
     'psel-clear': function () { state.psel = {}; render(); },
     'psel-post': function () { return openPost(groupSelected()); },
     'refresh-all': function (btn) {
@@ -821,6 +907,13 @@
     if (d.trend) { state.g.q = d.trend; state.g.category = ''; return garimpar(1); }
     if (d.history) return showHistory(state.products.filter(function (x) { return x.id === Number(d.history); })[0]);
     if (d.pmedia && post) return toggleMedia(d.ptype === 'video' ? 'video' : 'image', d.pmedia);
+    if (d.ctpl && post && post.cover) {
+      var cv = post.cover;
+      if (cv.title === coverDefaultTitle(cv.tpl)) cv.title = coverDefaultTitle(d.ctpl); // título padrão acompanha o modelo
+      cv.tpl = d.ctpl;
+      return renderPost();
+    }
+    if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
@@ -890,6 +983,7 @@
         });
       }, Promise.resolve()).finally(function () { if (post) { post.busy = false; renderPost(); } });
     }
+    if (t.id === 'cover-save' && post && post.cover) { post.cover.saveDefault = t.checked; return null; }
     if (t.dataset.psel) {
       if (t.checked && groupSelected().length >= MAX_MEDIA) { t.checked = false; throw new Error('Dá para juntar no máximo 10 produtos num carrossel.'); }
       state.psel[t.dataset.psel] = t.checked;
@@ -919,6 +1013,13 @@
     var t = e.target;
     if (t.dataset && t.dataset.caption) { var c = $('#cnt-' + t.dataset.caption); if (c) c.textContent = t.value.length; }
     if (t.id === 'post-cap' && post) { post.caption = t.value; var pc = $('#post-cnt'); if (pc) pc.textContent = t.value.length; }
+    // editor de capa: atualiza a prévia sem redesenhar a janela (não perde o foco do campo)
+    if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {
+      if (t.id === 'cover-title') post.cover.title = t.value;
+      if (t.id === 'cover-color') post.cover.color = t.value;
+      if (t.id === 'cover-handle') post.cover.handle = t.value.replace(/^@+/, '').replace(/[^A-Za-z0-9._]/g, '');
+      drawCoverSoon();
+    }
   });
 
   document.addEventListener('submit', function (e) {
@@ -926,7 +1027,7 @@
       e.preventDefault();
       var f = Object.fromEntries(new FormData(e.target).entries());
       var url = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; return reload(); }); })
+      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; return reload(); }); })
         .catch(function (err) { var el = $('#auth-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'ig-form') {
       e.preventDefault();
@@ -977,7 +1078,7 @@
   if (mlBack || location.hash) history.replaceState(null, '', location.pathname);
 
   api('GET', '/api/auth/me').then(function (m) {
-    state.user = m.user; state.ai = m.ai; state.signup = m.signup;
+    state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand;
     return loadAll();
   }).catch(function () { state.user = null; return fetch('/api/health').catch(function () {}); }).then(function () {
     state.loading = false;

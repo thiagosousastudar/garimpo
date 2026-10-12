@@ -76,9 +76,20 @@ function authRoutes({ pool, cfg }) {
   });
 
   r.get('/me', requireAuth(cfg), async (req, res) => {
-    const { rows } = await pool.query('select id, email, name from users where id = $1', [req.uid]);
+    const { rows } = await pool.query('select id, email, name, brand_color, brand_handle from users where id = $1', [req.uid]);
     if (!rows.length) throw new HttpError(401, 'Conta não encontrada.');
-    res.json({ user: clean(rows[0]), signup: cfg.allowSignup, ai: Boolean(cfg.anthropicKey) });
+    res.json({ user: clean(rows[0]), signup: cfg.allowSignup, ai: Boolean(cfg.anthropicKey),
+      brand: { color: rows[0].brand_color || null, handle: rows[0].brand_handle || null } });
+  });
+
+  /** Identidade visual das capas: cor da marca (#rrggbb) e @ que aparece no rodapé. */
+  r.put('/brand', requireAuth(cfg), async (req, res) => {
+    const color = String(req.body?.color || '').trim();
+    const handle = String(req.body?.handle || '').trim().replace(/^@+/, '');
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) throw new HttpError(400, 'Cor inválida. Use o formato #rrggbb.');
+    if (handle && !/^[A-Za-z0-9._]{1,30}$/.test(handle)) throw new HttpError(400, '@ inválido. Use letras, números, ponto ou _.');
+    await pool.query('update users set brand_color = $1, brand_handle = $2 where id = $3', [color || null, handle || null, req.uid]);
+    res.json({ brand: { color: color || null, handle: handle || null } });
   });
 
   return r;

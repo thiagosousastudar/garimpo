@@ -4,8 +4,46 @@ const { HttpError } = require('../util');
 
 const TYPES = { 'image/jpeg': { ext: 'jpg', kind: 'image', max: 8 * 1024 * 1024 }, 'image/png': { ext: 'png', kind: 'image', max: 8 * 1024 * 1024 }, 'video/mp4': { ext: 'mp4', kind: 'video', max: 100 * 1024 * 1024 } };
 
-function mediaRoutes({ cfg, storage }) {
+const PROXY_MAX = 4 * 1024 * 1024; // abaixo do limite de resposta da Vercel (4,5 MB)
+
+/**
+ * Hosts de onde o repasse de imagens aceita buscar: fotos do Mercado Livre e da Shopee e o próprio
+ * armazenamento (Supabase). Lista fechada para o servidor não virar ponte para qualquer endereço.
+ */
+function proxyAllowed(cfg, hostname) {
+  const h = String(hostname || '').toLowerCase();
+  const own = [];
+  try { if (cfg.supabaseUrl) own.push(new URL(cfg.supabaseUrl).hostname); } catch (_) { /* sem supabase */ }
+  return h === 'mlstatic.com' || h.endsWith('.mlstatic.com')
+    || h.endsWith('.susercontent.com') || h === 'shopee.com.br' || h.endsWith('.shopee.com.br')
+    || own.includes(h);
+}
+
+function mediaRoutes({ cfg, storage, fetchImpl = fetch }) {
   const r = express.Router();
+
+  /**
+   * Repasse de imagem para a capa: o navegador só consegue desenhar (e exportar) no canvas imagens
+   * do mesmo endereço do app. Só aceita https, hosts da lista e conteúdo de imagem até 4 MB.
+   */
+  r.get('/proxy', async (req, res) => {
+    let u;
+    try { u = new URL(String(req.query.url || '')); } catch (_) { throw new HttpError(400, 'Endereço de imagem inválido.'); }
+    if (u.protocol !== 'https:' || !proxyAllowed(cfg, u.hostname)) throw new HttpError(400, 'Endereço de imagem não permitido.');
+    let up;
+    try {
+      up = await fetchImpl(u.toString(), { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+    } catch (_) { throw new HttpError(502, 'Não foi possível baixar a imagem.'); }
+    if (up.url && !proxyAllowed(cfg, new URL(up.url).hostname)) throw new HttpError(400, 'Endereço de imagem não permitido.');
+    if (!up.ok) throw new HttpError(502, `A loja não entregou a imagem (HTTP ${up.status}).`);
+    const type = String(up.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) throw new HttpError(415, 'O endereço não é de uma imagem.');
+    const buf = Buffer.from(await up.arrayBuffer());
+    if (buf.length > PROXY_MAX) throw new HttpError(413, 'Imagem grande demais.');
+    res.set('content-type', type);
+    res.set('cache-control', 'private, max-age=86400');
+    res.send(buf);
+  });
 
   /**
    * O navegador pergunta como enviar o arquivo. Com Supabase, recebe uma URL assinada de envio e o endereço

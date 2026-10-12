@@ -57,7 +57,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   app.use('/api/products', guard, productRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/garimpo', guard, garimpoRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/queue', guard, queueRoutes({ pool, cfg, fetchImpl, storage }));
-  app.use('/api/media', guard, mediaRoutes({ cfg, storage }));
+  app.use('/api/media', guard, mediaRoutes({ cfg, storage, fetchImpl }));
   app.use('/api/earnings', guard, earningsRoutes({ pool, cfg }));
   app.use('/api/connections', guard, connectionRoutes({ pool, cfg, fetchImpl }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));

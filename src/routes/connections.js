@@ -10,11 +10,22 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
   const r = express.Router();
 
   r.get('/instagram', async (req, res) => {
-    const { rows } = await pool.query('select ig_user_id, ig_token_enc from connections where user_id = $1', [req.uid]);
+    const { rows } = await pool.query('select ig_user_id, ig_token_enc, ig_username from connections where user_id = $1', [req.uid]);
     const c = rows[0];
+    const connected = Boolean(c && c.ig_user_id && c.ig_token_enc);
+    let username = c?.ig_username || null;
+    // Conexões feitas antes de guardar o @: busca uma vez na Meta e grava (falha não impede a resposta).
+    if (connected && !username) {
+      try {
+        const who = await createInstagramClient({ cfg, fetchImpl }).whoami({ igUserId: c.ig_user_id, token: decrypt(c.ig_token_enc, cfg.encryptionKey) });
+        username = who.username || null;
+        if (username) await pool.query('update connections set ig_username = $1 where user_id = $2', [username, req.uid]);
+      } catch (_) { /* segue sem o @ */ }
+    }
     res.json({
-      connected: Boolean(c && c.ig_user_id && c.ig_token_enc),
+      connected,
       ig_user_id: c?.ig_user_id || null,
+      username,
       public_media: !/^https?:\/\/(localhost|127\.0\.0\.1)/.test(cfg.appUrl),
     });
   });
@@ -32,9 +43,10 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
       throw new HttpError(400, `A Meta recusou as credenciais: ${e.message}`);
     }
     await pool.query(
-      `insert into connections (user_id, ig_user_id, ig_token_enc, updated_at) values ($1,$2,$3, now())
-         on conflict (user_id) do update set ig_user_id = excluded.ig_user_id, ig_token_enc = excluded.ig_token_enc, updated_at = now()`,
-      [req.uid, igUserId, encrypt(token, cfg.encryptionKey)]
+      `insert into connections (user_id, ig_user_id, ig_token_enc, ig_username, updated_at) values ($1,$2,$3,$4, now())
+         on conflict (user_id) do update set ig_user_id = excluded.ig_user_id, ig_token_enc = excluded.ig_token_enc,
+           ig_username = excluded.ig_username, updated_at = now()`,
+      [req.uid, igUserId, encrypt(token, cfg.encryptionKey), who.username || null]
     );
     res.json({ connected: true, ig_user_id: igUserId, username: who.username || null });
   });

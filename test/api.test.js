@@ -40,6 +40,11 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     if (u.hostname === 'api.anthropic.com') {
       return json(200, { content: [{ type: 'text', text: 'Legenda gerada pela IA' }] });
     }
+    if (u.hostname.endsWith('mlstatic.com')) {
+      const isImg = u.pathname.endsWith('.jpg');
+      return { ok: true, status: 200, url: String(url), headers: { get: (k) => (k.toLowerCase() === 'content-type' ? (isImg ? 'image/jpeg' : 'text/html; charset=utf-8') : null) },
+        arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).buffer, json: async () => ({}) };
+    }
     if (u.hostname === 'open-api.affiliate.shopee.com.br') {
       log[log.length - 1].headers = opts.headers;
       log[log.length - 1].gql = JSON.parse(opts.body).query;
@@ -1100,5 +1105,44 @@ test('carrossel com vídeo: se o Instagram ainda prepara o carrossel, fica proce
     const ck = await api('POST', `/api/queue/${r.data.item.id}/check`);
     assert.equal(ck.data.item.status, 'posted');
     assert.equal(t.calls.filter((c) => c.path.endsWith('/media_publish')).pop().body.creation_id, 'CAROUSEL_1');
+  } finally { t.close(); }
+});
+test('capa: repasse de imagem só para lojas/armazenamento, cor e @ da marca, @ do Instagram guardado', async () => {
+  const t = await boot();
+  try {
+    const anon = t.client();
+    assert.equal((await anon('GET', '/api/media/proxy?url=' + encodeURIComponent('https://http2.mlstatic.com/D_1-O.jpg'))).status, 401);
+    const api = t.client();
+    await signup(api);
+
+    // repasse: imagem do Mercado Livre passa; outros endereços não
+    const base = `http://127.0.0.1:${t.server.address().port}`;
+    const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'a@exemplo.com', password: 'senha-forte-1' }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const get = (u) => fetch(base + '/api/media/proxy?url=' + encodeURIComponent(u), { headers: { cookie } });
+    const ok = await get('https://http2.mlstatic.com/D_NQ_NP_1-O.jpg');
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual([...new Uint8Array(await ok.arrayBuffer())].slice(0, 3), [0xff, 0xd8, 0xff]);
+    const before = t.calls.length;
+    for (const bad of ['https://evil.example.com/x.jpg', 'http://http2.mlstatic.com/x.jpg', 'https://127.0.0.1/x.jpg', 'https://mlstatic.com.evil.com/x.jpg', 'file:///etc/passwd', 'nada']) {
+      assert.equal((await get(bad)).status, 400, bad);
+    }
+    assert.equal(t.calls.length, before, 'endereços proibidos nem chegam a ser buscados');
+    assert.equal((await get('https://http2.mlstatic.com/pagina.html')).status, 415);
+
+    // marca: cor e @ salvos e devolvidos no /me
+    assert.equal((await api('PUT', '/api/auth/brand', { color: 'rosa', handle: 'x' })).status, 400);
+    assert.equal((await api('PUT', '/api/auth/brand', { color: '#E8457A', handle: 'a b' })).status, 400);
+    const b = await api('PUT', '/api/auth/brand', { color: '#E8457A', handle: '@anninha.achados' });
+    assert.deepEqual(b.data.brand, { color: '#E8457A', handle: 'anninha.achados' });
+    assert.deepEqual((await api('GET', '/api/auth/me')).data.brand, { color: '#E8457A', handle: 'anninha.achados' });
+
+    // @ do Instagram: guardado ao conectar; conexões antigas sem @ buscam uma vez
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    assert.equal((await api('GET', '/api/connections/instagram')).data.username, 'loja_teste');
+    await t.pool.query('update connections set ig_username = null');
+    assert.equal((await api('GET', '/api/connections/instagram')).data.username, 'loja_teste');
+    assert.equal((await t.pool.query('select ig_username from connections')).rows[0].ig_username, 'loja_teste');
   } finally { t.close(); }
 });
