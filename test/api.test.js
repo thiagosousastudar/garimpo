@@ -64,7 +64,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       if (u.pathname === '/fora') return page(301, '', 'https://evil.example.com/x');
       if (opts.redirect === 'manual') return page(301, '', 'https://shopee.com.br/lojinha/111/222?__mobile__=1');
       return page(200, '<html><head><meta property="og:title" content="Kit Marmita Infantil com Copo...">'
-        + '<meta name="description" content="Compre Kit Marmita Infantil com Copo 250ml e Talher na Shopee Brasil! KIT COMPLETO PARA A HORA DO LANCHE">'
+        + '<meta name="description" content="Compre Kit Marmita Infantil com Copo 250ml &#43; Talher &amp; Cia na Shopee Brasil! KIT COMPLETO PARA A HORA DO LANCHE">'
         + '<meta property="og:image" content="https://down-br.img.susercontent.com/file/abc"></head></html>');
     }
     if (u.hostname === 'shopee.com.br') return page(200, '<html><body>app</body></html>');
@@ -1376,7 +1376,7 @@ test('cadastrar por links: Shopee pela prévia (sem preço), Mercado Livre pela 
     const [sh, ml, evil, fora, nada] = r.data.items;
     // Shopee: nome inteiro (da descrição), foto, código e o link colado como link de afiliado; preço a completar
     assert.deepEqual([sh.marketplace, sh.external_id, sh.title, sh.price, sh.affiliate_url, sh.product_url],
-      ['SH', '111.222', 'Kit Marmita Infantil com Copo 250ml e Talher', null, 'https://s.shopee.com.br/1gJKcHjxJh', 'https://shopee.com.br/product/111/222']);
+      ['SH', '111.222', 'Kit Marmita Infantil com Copo 250ml + Talher & Cia', null, 'https://s.shopee.com.br/1gJKcHjxJh', 'https://shopee.com.br/product/111/222']);
     assert.equal(sh.image_url, 'https://down-br.img.susercontent.com/file/abc');
     // Mercado Livre: dados completos da API (preço, comissão da tabela/padrão) e o link de afiliado colado
     assert.deepEqual([ml.marketplace, ml.external_id, ml.price, ml.commission_pct, ml.source, ml.affiliate_url],

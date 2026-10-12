@@ -37,7 +37,12 @@ async function resolve(url, fetchImpl) {
   return cur;
 }
 
-const decode = (s) => String(s || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+/** Entidades HTML das meta tags: nomeadas comuns e numéricas ("&#43;" = "+", "&#x2B;" = "+"). */
+const decode = (s) => String(s || '')
+  .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+  .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&');
 
 /** Prévia Open Graph do link: título, foto, descrição (e preço, se a página informar). */
 async function openGraph(url, fetchImpl) {
