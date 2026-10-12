@@ -27,15 +27,27 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       return json(400, { error: { message: 'Application request limit reached', type: 'OAuthException', code: 4 } });
     }
     if (u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') {
-      if (u.pathname.endsWith('/media_publish')) return json(200, { id: 'MEDIA_1' });
+      if (u.pathname.endsWith('/media_publish')) {
+        const ts = new Date().toISOString().replace(/\.\d+Z$/, '+0000');
+        if (meta.publishErr) {
+          meta.published = meta.reallyPublishes !== false;
+          if (meta.published) (meta.posts = meta.posts || []).unshift({ id: 'MEDIA_9', permalink: 'https://instagram.com/p/xyz', caption: meta.lastCaption, timestamp: ts });
+          return json(400, { error: { message: 'Application request limit reached', code: 4 } });
+        }
+        (meta.posts = meta.posts || []).unshift({ id: 'MEDIA_1', permalink: 'https://instagram.com/p/abc', caption: meta.lastCaption, timestamp: ts });
+        return json(200, { id: 'MEDIA_1' });
+      }
+      if (u.pathname.endsWith('/media') && (opts.method || 'GET') === 'GET') return json(200, { data: meta.posts || [] });
       if (u.pathname.endsWith('/media')) {
         if (failMedia) return json(400, { error: { message: `Invalid token ${body.access_token}` } });
+        if (body.caption) meta.lastCaption = body.caption;
         if (body.is_carousel_item) return json(200, { id: `CHILD_${++child}` });
         if (body.media_type === 'CAROUSEL') return json(200, { id: 'CAROUSEL_1' });
         return json(200, { id: 'CONTAINER_1' });
       }
       if (u.pathname.endsWith('/MEDIA_1')) return json(200, { permalink: 'https://instagram.com/p/abc' });
       if (/\/CHILD_\d+$/.test(u.pathname)) return json(200, { status_code: childStates.length ? childStates.shift() : 'FINISHED' });
+      if (meta.published && /\/(CAROUSEL_1|CONTAINER_1)$/.test(u.pathname)) return json(200, { status_code: 'PUBLISHED' });
       if (u.pathname.endsWith('/CAROUSEL_1')) return json(200, { status_code: carouselStates.length ? carouselStates.shift() : 'FINISHED' });
       if (u.pathname.endsWith('/CONTAINER_1')) {
         const s = videoStates.length ? videoStates.shift() : 'FINISHED';
@@ -1290,5 +1302,46 @@ test('carrossel que falhou: "Publicar agora" reaproveita os itens já enviados (
     await t.pool.query(`update queue_items set container_id = 'children:CHILD_1,vCHILD_2', claimed_at = now() where id = $1`, [d.id]);
     const ch = await api('PATCH', `/api/queue/${d.id}`, { media_type: 'image', media_url: 'https://img.exemplo.com/9.jpg' });
     assert.equal(ch.data.item.container_id, null);
+  } finally { t.close(); }
+});
+test('Meta publica mas responde erro: o app confere, marca como postado e não deixa duplicar', async () => {
+  const opts = { meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const publishes = () => t.calls.filter((c) => c.path.endsWith('/media_publish')).length;
+
+    // 1) erro na publicação, mas o post saiu: fica "postado" com o link encontrado
+    opts.meta.publishErr = true;
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Carrossel do patinete', media_type: 'carousel',
+      media_items: [{ type: 'image', url: 'https://img.exemplo.com/1.jpg' }, { type: 'image', url: 'https://img.exemplo.com/2.jpg' }] });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.item.status, 'posted');
+    assert.equal(r.data.item.permalink, 'https://instagram.com/p/xyz');
+
+    // 2) erro e o post NÃO saiu: falhou, com aviso para conferir antes de repetir
+    opts.meta.published = false; opts.meta.reallyPublishes = false;
+    const f = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Foto', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(f.status, 429);
+    assert.match(f.data.error, /confira no Instagram/);
+
+    // 2b) post no ar com o container respondendo "ERROR" (como aconteceu de verdade): achado pela legenda e horário
+    opts.meta.published = false; opts.meta.reallyPublishes = true; opts.meta.publishErr = true;
+    opts.carouselStates = undefined;
+    const e2 = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Patinete rosa', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(e2.data.item.status, 'posted', JSON.stringify(e2.data));
+    opts.meta.published = false; opts.meta.reallyPublishes = false;
+
+    // 3) item que falhou mas cujo post saiu depois: "Publicar agora" não publica de novo
+    // simula que aquele post (legenda "Foto") apareceu no perfil depois
+    opts.meta.publishErr = false;
+    opts.meta.posts.unshift({ id: 'MEDIA_7', permalink: 'https://instagram.com/p/foto', caption: 'Foto', timestamp: new Date().toISOString().replace(/\.\d+Z$/, '+0000') });
+    const before = publishes();
+    const again = await api('POST', `/api/queue/${f.data.item?.id || (await api('GET', '/api/queue')).data.items.find((i) => i.status === 'failed').id}/publish`);
+    assert.equal(again.data.item.status, 'posted');
+    assert.equal(publishes(), before, 'não chamou media_publish de novo');
   } finally { t.close(); }
 });

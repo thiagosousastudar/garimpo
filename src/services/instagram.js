@@ -12,6 +12,9 @@ const IG_LOGIN_BASE = 'https://graph.instagram.com';
  */
 const isInstagramLoginToken = (token) => /^IG/.test(String(token || ''));
 
+/** Data da Meta ("2026-10-12T11:26:00+0000") em milissegundos. */
+const igTime = (s) => new Date(String(s || '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).getTime() || 0;
+
 /**
  * Limite de chamadas da Meta (por app ou por usuário, janela de 1 hora): códigos 4, 17, 32, 613
  * ou mensagens "request limit reached". Repetir só piora; é preciso esperar.
@@ -98,6 +101,27 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
     async containerStatus({ containerId, token }) {
       const st = await call('GET', `/${containerId}`, { fields: 'status_code' }, token);
       return st.status_code;
+    },
+
+    /**
+     * O container já virou post? (status PUBLISHED). Se sim, procura o post entre os mais recentes pela legenda
+     * para pegar id e link. Serve para quando a Meta publica mas responde com erro (ex.: limite de chamadas).
+     * Devolve { id, permalink } (podem ser null) ou null se não foi publicado.
+     */
+    async findPublished({ igUserId, token, containerId, caption, since }) {
+      // A situação do container não é confiável depois de publicado (já vimos post no ar com container "ERROR"),
+      // então o principal é procurar o post no perfil: mesma legenda, publicado depois da tentativa.
+      let code = null;
+      if (containerId) {
+        try { code = (await call('GET', `/${containerId}`, { fields: 'status_code' }, token)).status_code; } catch (e) { if (e.rateLimited) throw e; }
+      }
+      const start = String(caption || '').trim().slice(0, 60);
+      const after = since ? new Date(since).getTime() - 5 * 60 * 1000 : 0;
+      const list = await call('GET', `/${igUserId}/media`, { fields: 'id,permalink,caption,timestamp', limit: 10 }, token);
+      const hit = (list.data || []).find((m) => start && String(m.caption || '').trim().startsWith(start)
+        && (!after || igTime(m.timestamp) >= after));
+      if (hit) return { id: hit.id, permalink: hit.permalink || null };
+      return code === 'PUBLISHED' ? { id: null, permalink: null } : null;
     },
 
     /** Situação com o detalhe que a Meta dá quando há erro (ex.: "Error: ... 2207026"). */

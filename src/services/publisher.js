@@ -105,7 +105,7 @@ const RATE_LIMIT_WAIT_MS = 20 * 60 * 1000;
 const REUSE_MS = 23 * 3600 * 1000; // containers da Meta expiram em 24 h
 const RECHECK_MS = 60 * 1000;
 const RATE_LIMIT_MSG = 'O Instagram limitou as chamadas do app (limite por hora da Meta). Espere cerca de 1 hora e tente de novo pela Fila.';
-const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG : e.message);
+const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG + (String(e.message).includes('confira no Instagram') ? ' ' + UNSURE : '') : e.message);
 
 /**
  * Cria o container do carrossel com os itens prontos e publica quando o Instagram terminar de prepará-lo.
@@ -115,10 +115,12 @@ const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG : e.message);
  */
 async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, children, caption }) {
   const carousel = await client.createCarousel({ igUserId, token, children: children.map((c) => (typeof c === 'object' ? c.id : c)), caption });
+  // guarda o id do carrossel já agora: se a publicação responder erro, dá para conferir se saiu
+  await pool.query('update queue_items set container_id = $1 where id = $2', [carousel.id, itemId]);
   for (let i = 0; i < Math.max(1, cfg.videoInlinePolls); i++) {
     const st = await client.containerStatus({ containerId: carousel.id, token });
     if (st === 'FINISHED') {
-      return markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId: carousel.id }));
+      return publishOrVerify({ pool, client, igUserId, token, itemId, containerId: carousel.id, caption });
     }
     if (st === 'ERROR' || st === 'EXPIRED') throw new Error('O Instagram não conseguiu montar o carrossel.');
     await sleep(cfg.videoPollMs);
@@ -148,6 +150,26 @@ async function markPosted(pool, itemId, out) {
   );
   return done.rows[0];
 }
+
+/**
+ * Publica o container. Se a Meta responder erro, confere se o post saiu mesmo assim (acontece, por exemplo,
+ * com "Application request limit reached"): se saiu, marca como postado em vez de falhou, evitando
+ * que o usuário publique de novo e duplique o post.
+ */
+async function publishOrVerify({ pool, client, igUserId, token, itemId, containerId, caption }) {
+  try {
+    return await markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId }));
+  } catch (e) {
+    let found = null;
+    const since = (await pool.query('select claimed_at from queue_items where id = $1', [itemId])).rows[0]?.claimed_at;
+    try { found = await client.findPublished({ igUserId, token, containerId, caption, since }); } catch (_) { /* não deu para conferir */ }
+    if (found) return markPosted(pool, itemId, found);
+    if (e.rateLimited) e.message = `${e.message}. ${UNSURE}`;
+    throw e;
+  }
+}
+
+const UNSURE = 'Não deu para confirmar se o post saiu: confira no Instagram antes de publicar de novo (o Garimpo também confere antes de repetir).';
 
 async function markFailed(pool, itemId, message) {
   await pool.query(`update queue_items set status = 'failed', error = $1 where id = $2`, [message, itemId]);
@@ -183,6 +205,15 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     const { igUserId, token } = await credentialsFor(pool, cfg, userId);
     const client = createInstagramClient({ cfg, fetchImpl });
 
+    // Evita post duplicado: se a tentativa anterior deixou um container (post simples ou carrossel montado)
+    // e a Meta diz que ele já foi publicado, só registra como postado.
+    const prevContainer = prev && prev.container_id && !String(prev.container_id).startsWith(CHILDREN) ? prev.container_id : null;
+    if (prevContainer) {
+      let found = null;
+      try { found = await client.findPublished({ igUserId, token, containerId: prevContainer, caption: item.caption, since: prev.claimed_at }); } catch (e) { if (e.rateLimited) throw e; }
+      if (found) return await markPosted(pool, item.id, found);
+    }
+
     // Carrossel: cria cada item (foto/vídeo), espera os vídeos ficarem prontos e publica o conjunto.
     // Se os vídeos demorarem, fica em "processing" com os itens anotados e é concluído depois (Verificar/agendador).
     if (item.media_type === 'carousel') {
@@ -217,16 +248,17 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     }
 
     const container = await client.createContainer({ igUserId, token, kind: item.media_type, mediaUrl, caption: item.caption });
+    await pool.query('update queue_items set container_id = $1 where id = $2', [container.id, item.id]); // para conferir se saiu, se a publicação der erro
 
     if (item.media_type === 'image') {
-      return await markPosted(pool, item.id, await client.publishContainer({ igUserId, token, containerId: container.id }));
+      return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption });
     }
 
     await pool.query(`update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2`, [container.id, item.id]);
     for (let i = 0; i < cfg.videoInlinePolls; i++) {
       const st = await client.containerStatus({ containerId: container.id, token });
       if (st === 'FINISHED') {
-        return await markPosted(pool, item.id, await client.publishContainer({ igUserId, token, containerId: container.id }));
+        return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption });
       }
       if (st === 'ERROR' || st === 'EXPIRED') throw new Error('O Instagram não conseguiu processar o vídeo.');
       await sleep(cfg.videoPollMs);
@@ -235,7 +267,7 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
   } catch (e) {
     await markFailed(pool, item.id, friendly(e));
     if (e instanceof HttpError) throw e;
-    if (e.rateLimited) throw new HttpError(429, RATE_LIMIT_MSG);
+    if (e.rateLimited) throw new HttpError(429, friendly(e));
     throw new HttpError(502, `Falha ao publicar: ${e.message}`);
   }
 }
@@ -262,7 +294,7 @@ async function finishItem({ pool, cfg, fetchImpl, item }) {
       if (!claim.rows.length) return (await pool.query('select * from queue_items where id = $1', [item.id])).rows[0];
       try {
         if (isCarousel) return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
-        return await markPosted(pool, item.id, await client.publishContainer({ igUserId, token, containerId: item.container_id }));
+        return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: item.container_id, caption: item.caption });
       } catch (e) {
         await markFailed(pool, item.id, e.message);
         throw e;
