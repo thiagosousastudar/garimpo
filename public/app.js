@@ -1459,6 +1459,9 @@
   var COVER_FORMATS = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16'], ['square', 'Quadrado 1:1']];
   var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
+  var COVER_RADIUS = { oferta: 44, achadinho: 60, lista: 36, relampago: 48, foto: 0, minimal: 0, premium: 48 };
+  var COVER_SHAPES = [['auto', 'Automática'], ['free', 'Solta'], ['arch', 'Arco'], ['round', 'Arredondada']];
+  function coverRadius(cv) { return cv.radius != null && cv.radius !== '' ? Number(cv.radius) : COVER_RADIUS[cv.tpl] || 0; }
   function coverPanel() {
     var cv = post.cover;
     var tpls = post.group ? [['lista', 'Top ' + post.products.length]].concat(COVER_TPLS) : COVER_TPLS;
@@ -1474,6 +1477,10 @@
     return '<div class="coverbox"><div class="coverprev"><canvas id="cover-canvas" class="fmt-' + fmt + '" width="1080" height="1350" aria-label="Prévia da capa"></canvas>' +
       '<button type="button" class="btn small" data-act="cover-download"' + (cv.busy ? ' disabled' : '') + '>⬇ Baixar imagem</button></div><div class="coverctl">' +
       seg('Modelo', tpls, 'ctpl', cv.tpl) + seg('Formato', COVER_FORMATS, 'cfmt', fmt) +
+      (cv.tpl === 'premium' ? seg('Moldura da foto', COVER_SHAPES, 'cshape', cv.shape || 'auto') : '') +
+      (cv.tpl !== 'premium' || cv.shape === 'round' ? '<div class="field"><label for="cover-radius">Arredondar cantos <span class="hint" id="cover-radius-v">' + coverRadius(cv) + '</span></label>' +
+        '<div class="row"><input id="cover-radius" type="range" min="0" max="200" step="2" value="' + coverRadius(cv) + '" style="flex:1">' +
+        '<button type="button" class="btn small ghost" data-act="cover-radius-reset">Padrão</button></div></div>' : '') +
       '<div class="field"><label for="cover-title">Título</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '" placeholder="(sem título)"></div>' +
       (photos.length > 1 ? '<div class="field"><label>Foto do produto</label><div class="gallery">' + photos.map(function (m) {
         return '<button type="button" class="gpic' + (cur === m.url ? ' on' : '') + '" data-cphoto="' + esc(m.url) + '"><img src="' + esc(safeUrl(m.url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
@@ -1501,7 +1508,7 @@
     return Promise.all([window.GarimpoCover.fontsReady(), Promise.all(urls.map(coverImage))]).then(function (r) {
       var canvas = $('#cover-canvas');
       if (!canvas || !post || !post.cover || post.cover.seq !== seq) return;
-      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, products: post.products, images: r[1] });
+      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, shape: cv.shape, radius: cv.radius, products: post.products, images: r[1] });
     });
   }
   var coverRaf = 0;
@@ -1556,7 +1563,7 @@
       if (!post.cover) {
         var tpl = post.group ? 'lista' : post.tone === 'premium' ? 'premium' : 'oferta';
         post.cover = {
-          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {},
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''),
           color: state.brand.color || DEFAULT_COLOR,
           handle: state.brand.handle || (state.conn && state.conn.username) || '',
         };
@@ -1579,6 +1586,7 @@
         toast('Imagem baixada');
       });
     },
+    'cover-radius-reset': function () { post.cover.radius = ''; prefSet('coverRadius', ''); renderPost(); },
     'cover-close': function () { post.cover.open = false; renderPost(); },
     /** Exporta a prévia em JPEG 1080x1350, envia ao armazenamento e põe como 1ª imagem do post. */
     'cover-use': function () {
@@ -1760,6 +1768,7 @@
       cv.tpl = d.ctpl;
       return renderPost();
     }
+    if (d.cshape && post && post.cover) { post.cover.shape = d.cshape; prefSet('coverShape', d.cshape); return renderPost(); }
     if (d.cfmt && post && post.cover) { post.cover.format = d.cfmt; prefSet('coverFormat', d.cfmt); return renderPost(); }
     if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
     if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
@@ -1915,6 +1924,12 @@
     }
     if (t.id === 'post-cap' && post) { post.caption = t.value; var pc = $('#post-cnt'); if (pc) pc.textContent = t.value.length; }
     // editor de capa: atualiza a prévia sem redesenhar a janela (não perde o foco do campo)
+    if (post && post.cover && t.id === 'cover-radius') {
+      post.cover.radius = Number(t.value); prefSet('coverRadius', t.value);
+      var rv = $('#cover-radius-v'); if (rv) rv.textContent = t.value;
+      drawCover();
+      return;
+    }
     if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {
       if (t.id === 'cover-title') post.cover.title = t.value;
       if (t.id === 'cover-color') post.cover.color = t.value;

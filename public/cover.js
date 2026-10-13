@@ -88,6 +88,17 @@
     var k = Math.min(w / img.width, h / img.height), iw = img.width * k, ih = img.height * k;
     ctx.drawImage(img, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih);
   }
+  /** Arredondamento escolhido pelo usuário (controle deslizante) ou o padrão do modelo. */
+  function rad(d, def) { return d && d.radius != null && d.radius !== '' ? Math.max(0, Math.min(300, Number(d.radius) || 0)) : def; }
+  /** Desenha dentro de um retângulo de cantos arredondados (o que passar da borda é cortado). */
+  function clipped(ctx, x, y, w, h, r, fn) { ctx.save(); roundRect(ctx, x, y, w, h, r); ctx.clip(); fn(); ctx.restore(); }
+  /** Foto inteira com os cantos da própria foto arredondados (modelos sem cartão). */
+  function roundedContain(ctx, img, x, y, w, h, r) {
+    if (!img) return;
+    if (!r) return contain(ctx, img, x, y, w, h);
+    var k = Math.min(w / img.width, h / img.height), iw = img.width * k, ih = img.height * k, ix = x + (w - iw) / 2, iy = y + (h - ih) / 2;
+    clipped(ctx, ix, iy, iw, ih, r, function () { ctx.drawImage(img, ix, iy, iw, ih); });
+  }
   /** Pílula com texto; alinhamento "left" a partir de x ou "right" terminando em x. Devolve a largura. */
   function pill(ctx, text, x, y, o) {
     ctx.font = font(o.weight || 700, o.size || 32, o.family || BODY);
@@ -145,8 +156,9 @@
     var p = d.products[0], c = d.color, off = offOf(p, d);
     ctx.fillStyle = shade(c, 0.9); ctx.fillRect(0, 0, W, H);
     pill(ctx, (d.title || 'ACHADINHO DO DIA').toUpperCase(), W / 2, 52, { bg: c, fg: onColor(c), size: 42, family: DISPLAY, padX: 40, align: 'center' });
-    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 60, 160, 960, 740, 44); ctx.fill(); shadow(ctx, false);
-    contain(ctx, d.images[0], 100, 195, 880, 670);
+    var r1 = rad(d, 44);
+    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 60, 160, 960, 740, r1); ctx.fill(); shadow(ctx, false);
+    clipped(ctx, 60, 160, 960, 740, r1, function () { contain(ctx, d.images[0], 100, 195, 880, 670); });
     if (off > 0) {
       ctx.fillStyle = shade(c, -0.12); ctx.beginPath(); ctx.arc(905, 230, 118, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = onColor(shade(c, -0.12)); ctx.textAlign = 'center';
@@ -184,8 +196,9 @@
     ctx.fillStyle = fg; ctx.textAlign = 'center';
     ctx.font = font(700, fit(ctx, title, 960, 132, 60, 700, DISPLAY), DISPLAY); ctx.fillText(title, W / 2, 168);
     ctx.font = font(500, 36, BODY); ctx.fillText(wrap(ctx, p.title, 900, 1)[0] || '', W / 2, 228); ctx.textAlign = 'left';
-    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 130, 280, 820, 820, 60); ctx.fill(); shadow(ctx, false);
-    contain(ctx, d.images[0], 175, 325, 730, 730);
+    var r2 = rad(d, 60);
+    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 130, 280, 820, 820, r2); ctx.fill(); shadow(ctx, false);
+    clipped(ctx, 130, 280, 820, 820, r2, function () { contain(ctx, d.images[0], 175, 325, 730, 730); });
     // etiqueta de preço
     ctx.save(); ctx.translate(800, 1085); ctx.rotate(-0.1);
     shadow(ctx, true); ctx.fillStyle = GOLD; roundRect(ctx, -235, -120, 470, 240, 34); ctx.fill(); shadow(ctx, false);
@@ -220,8 +233,9 @@
     list.forEach(function (p, i) {
       var x = gx + (i % cols) * (cw + gap), y = gy + Math.floor(i / cols) * (ch + gap);
       if (list.length === 3 && i === 2) x = gx + (gw - cw) / 2;
-      shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, x, y, cw, ch, 36); ctx.fill(); shadow(ctx, false);
-      contain(ctx, d.images[i], x + 24, y + 24, cw - 48, ch - 120);
+      var r3 = rad(d, 36);
+      shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, x, y, cw, ch, r3); ctx.fill(); shadow(ctx, false);
+      clipped(ctx, x, y, cw, ch, r3, function () { contain(ctx, d.images[i], x + 24, y + 24, cw - 48, ch - 120); });
       ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x + 46, y + 46, 34, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = onColor(c); ctx.textAlign = 'center'; ctx.font = font(700, 38, DISPLAY); ctx.fillText(String(i + 1), x + 46, y + 59); ctx.textAlign = 'left';
       var off = offOf(p, d);
@@ -237,7 +251,7 @@
   T.foto = function (ctx, d) {
     var p = d.products[0], c = d.color, fg = onColor(c), off = offOf(p, d);
     ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, H);
-    contain(ctx, d.images[0], 50, 120, 980, 760);
+    roundedContain(ctx, d.images[0], 50, 120, 980, 760, rad(d, 0));
     if (d.title) pill(ctx, d.title.toUpperCase(), 60, 40, { bg: c, fg: fg, size: 34, family: DISPLAY, padX: 30 });
     if (off > 0) {
       ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(930, 150, 104, 0, Math.PI * 2); ctx.fill();
@@ -274,8 +288,9 @@
     ctx.fillStyle = GOLD; ctx.textAlign = 'center';
     ctx.font = font(700, fit(ctx, title, 960, 120, 56, 700, DISPLAY), DISPLAY); ctx.fillText(title, W / 2, 150);
     ctx.textAlign = 'left';
-    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 150, 210, 780, 640, 48); ctx.fill(); shadow(ctx, false);
-    contain(ctx, d.images[0], 190, 245, 700, 570);
+    var r4 = rad(d, 48);
+    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 150, 210, 780, 640, r4); ctx.fill(); shadow(ctx, false);
+    clipped(ctx, 150, 210, 780, 640, r4, function () { contain(ctx, d.images[0], 190, 245, 700, 570); });
     if (off > 0) {
       ctx.save(); ctx.translate(890, 250); ctx.rotate(0.18);
       ctx.fillStyle = c; roundRect(ctx, -150, -70, 300, 140, 30); ctx.fill();
@@ -299,7 +314,7 @@
   T.minimal = function (ctx, d) {
     var p = d.products[0], c = d.color, off = offOf(p, d);
     ctx.fillStyle = '#F7F5F0'; ctx.fillRect(0, 0, W, H);
-    contain(ctx, d.images[0], 90, 90, 900, 780);
+    roundedContain(ctx, d.images[0], 90, 90, 900, 780, rad(d, 0));
     ctx.fillStyle = c; ctx.fillRect(60, 910, 90, 10);
     if (d.title) { ctx.fillStyle = shade(c, -0.25); ctx.font = font(700, 30, BODY); ctx.fillText(d.title.toUpperCase(), 170, 925); }
     ctx.fillStyle = INK; ctx.font = font(700, 50, DISPLAY);
@@ -383,9 +398,22 @@
    * Fundo branco: o branco vira a cor de fundo (multiplicar) e o produto ganha sombra suave embaixo.
    * Foto de ambiente: preenche um arco com filete dourado.
    */
-  function premiumPhoto(ctx, img, x, y, w, h, line) {
+  function premiumPhoto(ctx, img, x, y, w, h, line, shape, radius) {
     if (!img) return;
-    if (plainBackground(img)) {
+    var mode = shape === 'free' || shape === 'arch' || shape === 'round' ? shape : (plainBackground(img) ? 'free' : 'arch');
+    if (mode === 'round') {
+      // retângulo de cantos arredondados (o usuário ajusta o arredondamento), foto preenchendo, filete dourado
+      var rr = radius == null || radius === '' ? 48 : Math.max(0, Math.min(300, Number(radius) || 0));
+      var bx = x + 50, bw = w - 100; h -= 24; // respiro entre a moldura e o nome
+      clipped(ctx, bx, y, bw, h, rr, function () {
+        var k = Math.max(bw / img.width, h / img.height), iw = img.width * k, ih = img.height * k;
+        ctx.drawImage(img, bx + (bw - iw) / 2, y + (h - ih) / 2, iw, ih);
+      });
+      ctx.strokeStyle = line; ctx.lineWidth = 2; roundRect(ctx, bx - 14, y - 14, bw + 28, h + 28, rr + 14); ctx.stroke();
+      return;
+    }
+    if (mode === 'free' && !plainBackground(img)) { contain(ctx, img, x + 30, y + 10, w - 60, h - 50); return; }
+    if (mode === 'free') {
       var r = containRect(img, x + 30, y + 10, w - 60, h - 50);
       var fy = r.y + r.h * productBottom(img) + 4; // "chão": logo abaixo do produto
       // sombra elíptica no chão
@@ -421,7 +449,7 @@
     spacing('0px');
     ctx.fillStyle = GOLDLINE; ctx.fillRect(W / 2 - 50, 128, 100, 3);
     // foto
-    premiumPhoto(ctx, d.images[0], 110, 170, W - 220, 600, GOLDLINE);
+    premiumPhoto(ctx, d.images[0], 110, 170, W - 220, 600, GOLDLINE, d.shape, d.radius);
     // nome em serifa, maior
     ctx.fillStyle = DEEP; ctx.font = font(600, 64, SERIF);
     var lines = wrap(ctx, p.title, 900, 2);
