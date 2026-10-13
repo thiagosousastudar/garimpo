@@ -112,15 +112,36 @@ function templateCopy(p, channel) {
       pick(WA_CLOSERS),
     ].join('\n');
   }
+  // Instagram: preço em linhas próprias, logo abaixo do nome (o Instagram não tem negrito nem riscado)
+  const perks = f.slice(1).filter((x) => !/^tem opções/.test(x)).map((x) => `✅ ${x[0].toUpperCase()}${x.slice(1)}`);
+  const hl = highlights(p).map((x) => `▫️ ${x}`);
   return [
     pick(IG_HOOKS),
-    `${p.title} ${f[0]}.`,
-    ...f.slice(1).map((x) => `✅ ${x[0].toUpperCase()}${x.slice(1)}`),
-    ...highlights(p).map((x) => `▫️ ${x}`),
+    '',
+    `✨ ${p.title}`,
+    '',
+    ...igPrice(p),
+    ...(perks.length ? ['', ...perks] : []),
+    ...(hl.length ? ['', ...hl] : []),
+    '',
     '👉 Link na bio! Comenta EU QUERO que eu te mando.',
     'Preços e estoque podem mudar.',
+    '',
     hashtags(p),
   ].join('\n');
+}
+
+/** Bloco de preço do Instagram: "de / por (−x%) / economia", ou "por apenas", ou "a partir de" (variações). */
+function igPrice(p) {
+  const { desc } = scoreProduct(p);
+  const from = details(p).price_max > Number(p.price);
+  const off = desc > 0 && p.original_price;
+  const lines = [];
+  if (off) lines.push(`💸 De ${brl(p.original_price)}`);
+  lines.push(`🔥 ${from ? 'A partir de' : off ? 'Por' : 'Por apenas'} ${brl(p.price)}${off ? ` (${desc}% OFF)` : ''}`);
+  if (off && !from) lines.push(`💰 Você economiza ${brl(Number(p.original_price) - Number(p.price))}`);
+  if (from) lines.push('📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha');
+  return lines;
 }
 
 async function aiCopy(p, channel, { cfg, fetchImpl }) {

@@ -1493,7 +1493,7 @@ test('preço com variações (kits): "a partir de", "até R$" validado e texto h
     assert.match(wa, /💥 A partir de: \*R\$\s28,90\* \(−68% OFF\)/);
     assert.ok(wa.includes('📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha'));
     const ig = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram' })).data.caption;
-    assert.match(ig, /a partir de R\$\s28,90/);
+    assert.match(ig, /a partir de R\$\s28,90/i);
 
     // editar: valor inválido recusado; vazio volta a preço único (e o texto volta ao normal)
     assert.equal((await api('PATCH', `/api/products/${p.id}`, { price_max: '10' })).status, 400);
