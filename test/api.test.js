@@ -44,6 +44,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
         if (meta.fetchFail > 0) { meta.fetchFail--; return json(400, { error: { message: 'Only photo or video can be accepted as media type.', code: 9004, error_subcode: 2207052 } }); }
         if (body.caption) meta.lastCaption = body.caption;
         if (body.is_carousel_item) return json(200, { id: `CHILD_${++child}` });
+        if (body.media_type === 'CAROUSEL' && meta.carouselZero > 0) { meta.carouselZero--; return json(200, { id: '0' }); }
         if (body.media_type === 'CAROUSEL') return json(200, { id: 'CAROUSEL_1' });
         return json(200, { id: 'CONTAINER_1' });
       }
@@ -1757,5 +1758,22 @@ test('Meta não baixa uma foto do carrossel na hora: tenta de novo; se insistir,
     const bad = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Outro', media_type: 'carousel', media_items: items });
     assert.equal(bad.status, 502);
     assert.match(bad.data.error, /Foto 1 do carrossel: Only photo or video/);
+  } finally { t.close(); }
+});
+
+test('carrossel: Meta responde id "0" (foto ainda preparando) — confere os itens e monta de novo, sem consultar "/0"', async () => {
+  const opts = { meta: { carouselZero: 1 } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Carrossel zero', media_type: 'carousel',
+      media_items: [{ type: 'image', url: 'https://img.exemplo.com/1.jpg' }, { type: 'image', url: 'https://img.exemplo.com/2.jpg' }] });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.item.status, 'posted');
+    assert.equal(t.calls.filter((c) => /\/0$/.test(c.path)).length, 0, 'nunca consulta o container "0"');
+    assert.ok(t.calls.some((c) => /\/CHILD_\d+$/.test(c.path)), 'conferiu as fotos antes de montar de novo');
   } finally { t.close(); }
 });

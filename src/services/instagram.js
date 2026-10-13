@@ -94,7 +94,14 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
 
     /** Container do carrossel a partir dos itens já criados (2 a 10). Devolve { id }. */
     async createCarousel({ igUserId, token, children, caption }) {
-      return call('POST', `/${igUserId}/media`, { media_type: 'CAROUSEL', children: children.join(','), caption }, token);
+      const out = await call('POST', `/${igUserId}/media`, { media_type: 'CAROUSEL', children: children.join(','), caption }, token);
+      // A Meta às vezes responde id "0" quando algum item ainda não está pronto: não é um container de verdade
+      if (!out || !out.id || String(out.id) === '0') {
+        const e = new Error('Media ID is not available (o Instagram ainda está preparando as fotos do carrossel)');
+        e.code = 9007;
+        throw e;
+      }
+      return out;
     },
 
     /** Devolve IN_PROGRESS, FINISHED, ERROR, EXPIRED ou PUBLISHED. */

@@ -117,7 +117,21 @@ const friendly = (e) => (e && e.rateLimited ? RATE_LIMIT_MSG + (String(e.message
  * (botão Verificar, janela do Postar agora ou agendador), pelo mesmo caminho do Reels.
  */
 async function publishCarousel({ pool, cfg, client, igUserId, token, itemId, children, caption }) {
-  const carousel = await client.createCarousel({ igUserId, token, children: children.map((c) => (typeof c === 'object' ? c.id : c)), caption });
+  const ids = children.map((c) => (typeof c === 'object' ? c.id : c));
+  let carousel;
+  try {
+    carousel = await client.createCarousel({ igUserId, token, children: ids, caption });
+  } catch (e) {
+    // Alguma foto ainda sendo baixada pela Meta: confere todos os itens (fotos também) e tenta montar de novo
+    if (!notReady(e)) throw e;
+    for (let i = 0; i < 6; i++) {
+      await sleep(Math.min(Number(cfg.videoPollMs) || 0, 3000));
+      const sts = await Promise.all(ids.map((id) => client.containerStatus({ containerId: id, token })));
+      if (sts.some((s) => s === 'ERROR' || s === 'EXPIRED')) throw new Error('O Instagram não conseguiu preparar uma das fotos/vídeos do carrossel. Troque a mídia e tente de novo.');
+      if (sts.every((s) => s === 'FINISHED')) break;
+    }
+    carousel = await client.createCarousel({ igUserId, token, children: ids, caption });
+  }
   // guarda o id do carrossel já agora: se a publicação responder erro, dá para conferir se saiu
   await pool.query('update queue_items set container_id = $1 where id = $2', [carousel.id, itemId]);
   for (let i = 0; i < Math.max(1, cfg.videoInlinePolls); i++) {
