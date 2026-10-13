@@ -41,6 +41,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       if (u.pathname.endsWith('/media') && (opts.method || 'GET') === 'GET') return json(200, { data: meta.posts || [] });
       if (u.pathname.endsWith('/media')) {
         if (failMedia) return json(400, { error: { message: `Invalid token ${body.access_token}` } });
+        if (meta.fetchFail > 0) { meta.fetchFail--; return json(400, { error: { message: 'Only photo or video can be accepted as media type.', code: 9004, error_subcode: 2207052 } }); }
         if (body.caption) meta.lastCaption = body.caption;
         if (body.is_carousel_item) return json(200, { id: `CHILD_${++child}` });
         if (body.media_type === 'CAROUSEL') return json(200, { id: 'CAROUSEL_1' });
@@ -1736,5 +1737,25 @@ test('foto WEBP (ex.: endereço copiado da Shopee) é convertida para JPEG; cola
     // endereço de fora das lojas com extensão errada continua recusado
     const bad = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'x', media_type: 'image', media_url: 'https://img.exemplo.com/a.png' });
     assert.equal(bad.status, 400);
+  } finally { t.close(); }
+});
+
+test('Meta não baixa uma foto do carrossel na hora: tenta de novo; se insistir, diz qual foto falhou', async () => {
+  const opts = { meta: { fetchFail: 1 } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const items = [{ type: 'image', url: 'https://img.exemplo.com/1.jpg' }, { type: 'image', url: 'https://img.exemplo.com/2.jpg' }];
+    const ok = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Carrossel', media_type: 'carousel', media_items: items });
+    assert.equal(ok.status, 201, JSON.stringify(ok.data));
+    assert.equal(ok.data.item.status, 'posted');
+
+    opts.meta.fetchFail = 3; // falha na 1ª foto e na nova tentativa
+    const bad = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Outro', media_type: 'carousel', media_items: items });
+    assert.equal(bad.status, 502);
+    assert.match(bad.data.error, /Foto 1 do carrossel: Only photo or video/);
   } finally { t.close(); }
 });

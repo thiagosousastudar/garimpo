@@ -159,6 +159,23 @@ async function markPosted(pool, itemId, out) {
  * com "Application request limit reached"): se saiu, marca como postado em vez de falhou, evitando
  * que o usuário publique de novo e duplique o post.
  */
+/**
+ * A Meta não conseguiu baixar a mídia naquele instante (arquivo recém-enviado ainda não disponível, loja lenta):
+ * "Only photo or video can be accepted", "could not be fetched", "unknown error". Costuma passar numa 2ª tentativa.
+ */
+const fetchFailed = (e) => /only photo or video can be accepted|could not be fetched|failed to download|unknown error|try again/i.test(String(e?.message || ''));
+
+/** Cria o container da mídia; se a Meta não conseguir baixar o arquivo, espera e tenta mais uma vez. */
+async function createWithRetry(client, args, cfg) {
+  try {
+    return await client.createContainer(args);
+  } catch (e) {
+    if (e.rateLimited || !fetchFailed(e)) throw e;
+    await sleep(Math.min(Number(cfg.videoPollMs) || 0, 3000));
+    return client.createContainer(args);
+  }
+}
+
 /** A Meta ainda está baixando/preparando a mídia ("Media ID is not available", código 9007). */
 const notReady = (e) => Number(e?.code) === 9007 || /media id is not available|not ready for publishing/i.test(String(e?.message || ''));
 
@@ -246,8 +263,14 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
         if (st === 'FINISHED') return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children: reusable, caption: item.caption });
       }
       const children = [];
-      for (const m of mediaUrl) {
-        const made = await client.createContainer({ igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true });
+      for (const [i, m] of mediaUrl.entries()) {
+        let made;
+        try {
+          made = await createWithRetry(client, { igUserId, token, kind: m.kind, mediaUrl: m.url, carouselItem: true }, cfg);
+        } catch (e) {
+          if (!e.rateLimited) e.message = `${m.kind === 'video' ? 'Vídeo' : 'Foto'} ${i + 1} do carrossel: ${e.message}`;
+          throw e;
+        }
         children.push({ id: made.id, video: m.kind === 'video' });
       }
       if (mediaUrl.some((m) => m.kind === 'video')) {
@@ -269,7 +292,7 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
       return await publishCarousel({ pool, cfg, client, igUserId, token, itemId: item.id, children, caption: item.caption });
     }
 
-    const container = await client.createContainer({ igUserId, token, kind: item.media_type, mediaUrl, caption: item.caption });
+    const container = await createWithRetry(client, { igUserId, token, kind: item.media_type, mediaUrl, caption: item.caption }, cfg);
     await pool.query('update queue_items set container_id = $1 where id = $2', [container.id, item.id]); // para conferir se saiu, se a publicação der erro
 
     if (item.media_type === 'image') {
