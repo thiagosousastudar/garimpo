@@ -13,6 +13,18 @@ const TAGS = {
   acessorios: '#acessórios #praticidade',
 };
 
+/**
+ * Vendas (em milhares) em texto: "mais de 3 mil vendidos", "mais de 300 vendidos".
+ * Abaixo de 100 vendas não entra no texto (não ajuda a vender).
+ */
+function salesText(k, cap) {
+  const n = Number(k) || 0;
+  let t = '';
+  if (n >= 1) t = `mais de ${Math.floor(n)} mil vendidos`;
+  else if (n >= 0.1) t = `mais de ${Math.floor(n * 10) * 100} vendidos`;
+  return cap && t ? t[0].toUpperCase() + t.slice(1) : t;
+}
+
 function hashtags(p) {
   const base = TAGS[String(p.category || '').toLowerCase()] || '';
   const all = `${base} #achadinhos ${p.marketplace === 'ML' ? '#mercadolivre' : '#shopee'} #ofertas`.split(/\s+/).filter(Boolean);
@@ -39,7 +51,7 @@ function facts(p) {
   if (from) out.push('tem opções (kits/tamanhos): o preço muda conforme a escolha');
   if (d.best_seller_rank && d.best_seller_rank <= 20) out.push(`${d.best_seller_rank}º mais vendido da categoria`);
   if (Number(p.rating)) out.push(`avaliação ★ ${Number(p.rating).toFixed(1)}`);
-  if (Number(p.sales_k)) out.push(`mais de ${Math.floor(Number(p.sales_k))} mil vendidos`);
+  if (salesText(p.sales_k)) out.push(salesText(p.sales_k));
   if (d.free_shipping) out.push(d.full ? 'frete grátis com entrega Full' : 'frete grátis');
   if (d.official_store) out.push('vendido por loja oficial');
   return out;
@@ -75,7 +87,7 @@ function waPerks(p) {
   const out = [];
   if (d.free_shipping) out.push(d.full ? '🚚 *Frete grátis* com entrega Full!' : '🚚 *Frete grátis!*');
   if (d.best_seller_rank && d.best_seller_rank <= 20) out.push(`🏆 ${d.best_seller_rank}º mais vendido da categoria`);
-  if (Number(p.sales_k) >= 1) out.push(`⭐ Mais de ${Math.floor(Number(p.sales_k))} mil vendidos`);
+  if (salesText(p.sales_k)) out.push(`⭐ ${salesText(p.sales_k, true)}`);
   if (d.official_store) out.push('🏪 Vendido por loja oficial');
   return out;
 }

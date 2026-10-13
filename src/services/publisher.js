@@ -158,9 +158,24 @@ async function markPosted(pool, itemId, out) {
  * com "Application request limit reached"): se saiu, marca como postado em vez de falhou, evitando
  * que o usuário publique de novo e duplique o post.
  */
-async function publishOrVerify({ pool, client, igUserId, token, itemId, containerId, caption }) {
+/** A Meta ainda está baixando/preparando a mídia ("Media ID is not available", código 9007). */
+const notReady = (e) => Number(e?.code) === 9007 || /media id is not available|not ready for publishing/i.test(String(e?.message || ''));
+
+async function publishOrVerify({ pool, client, igUserId, token, itemId, containerId, caption, waitMs = 3000, tries = 6 }) {
   try {
-    return await markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId }));
+    try {
+      return await markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId }));
+    } catch (e) {
+      // Foto grande ou lenta para a Meta baixar: espera ficar pronta (poucas conferências) e tenta de novo uma vez.
+      if (!notReady(e)) throw e;
+      for (let i = 0; i < tries; i++) {
+        await sleep(waitMs);
+        const st = await client.containerStatus({ containerId, token });
+        if (st === 'FINISHED') return await markPosted(pool, itemId, await client.publishContainer({ igUserId, token, containerId }));
+        if (st === 'ERROR' || st === 'EXPIRED') break;
+      }
+      throw e;
+    }
   } catch (e) {
     let found = null;
     const since = (await pool.query('select claimed_at from queue_items where id = $1', [itemId])).rows[0]?.claimed_at;
@@ -257,14 +272,14 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
     await pool.query('update queue_items set container_id = $1 where id = $2', [container.id, item.id]); // para conferir se saiu, se a publicação der erro
 
     if (item.media_type === 'image') {
-      return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption });
+      return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption, waitMs: cfg.videoPollMs });
     }
 
     await pool.query(`update queue_items set status = 'processing', container_id = $1, claimed_at = now() where id = $2`, [container.id, item.id]);
     for (let i = 0; i < cfg.videoInlinePolls; i++) {
       const st = await client.containerStatus({ containerId: container.id, token });
       if (st === 'FINISHED') {
-        return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption });
+        return await publishOrVerify({ pool, client, igUserId, token, itemId: item.id, containerId: container.id, caption: item.caption, waitMs: cfg.videoPollMs });
       }
       if (st === 'ERROR' || st === 'EXPIRED') throw new Error('O Instagram não conseguiu processar o vídeo.');
       await sleep(cfg.videoPollMs);

@@ -29,6 +29,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     if (u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') {
       if (u.pathname.endsWith('/media_publish')) {
         const ts = new Date().toISOString().replace(/\.\d+Z$/, '+0000');
+        if (meta.notReady > 0) { meta.notReady--; return json(400, { error: { message: 'Media ID is not available', code: 9007, error_subcode: 2207027 } }); }
         if (meta.publishErr) {
           meta.published = meta.reallyPublishes !== false;
           if (meta.published) (meta.posts = meta.posts || []).unshift({ id: 'MEDIA_9', permalink: 'https://instagram.com/p/xyz', caption: meta.lastCaption, timestamp: ts });
@@ -1693,5 +1694,23 @@ test('fotos extras coladas no produto viram a galeria (foto principal primeiro),
     // salvar o produto sem mexer nas fotos mantém a galeria
     const k = await api('PATCH', `/api/products/${p.id}`, { title: 'Novo nome' });
     assert.equal(k.data.product.images.length, 2);
+  } finally { t.close(); }
+});
+
+test('foto que a Meta ainda está preparando ("Media ID is not available"): espera ficar pronta e publica', async () => {
+  const opts = { meta: { notReady: 1 } };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', { ...PRODUTO, sales_k: 0.008 })).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Foto grande', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.item.status, 'posted');
+    assert.equal(t.calls.filter((c) => c.path.endsWith('/media_publish')).length, 2, 'tentou de novo depois de pronto');
+    // poucas vendas não viram "mais de 0 mil vendidos"
+    const prev = await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' });
+    assert.doesNotMatch(prev.data.caption, /0 mil vendidos/);
   } finally { t.close(); }
 });
