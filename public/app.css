@@ -155,3 +155,28 @@ textarea{font:inherit;color:var(--ink)}
 .card.flash{outline:3px solid var(--accent);outline-offset:2px;transition:outline-color .3s}
 .sheetcard{margin-top:12px}
 .warnbox{margin-top:12px}
+/* produtos: busca, lista compacta */
+.psearch{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 4px}
+.psearch input{flex:1;min-width:200px}
+.pcount{margin:6px 0 8px}
+.plist{display:flex;flex-direction:column;gap:8px}
+.prow{display:grid;grid-template-columns:64px 1fr auto;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:8px 10px}
+.prow:hover{border-color:var(--accent)}
+.prow .thumb{width:64px;height:64px;aspect-ratio:auto;border-radius:10px;margin:0}
+.prow .thumb img{width:100%;height:100%;object-fit:cover}
+.pinfo{min-width:0;display:flex;flex-direction:column;gap:3px}
+.pinfo h3{margin:0;font-size:15px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.pinfo .meta{gap:6px}
+.pline{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;font-size:14px}
+.pline .off{font-size:12px}
+.pline .earn{font-weight:600}
+.pact{display:flex;flex-direction:row;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.pact .pick{font-size:13px;justify-content:center}
+.plist .card.pexpanded{border-color:var(--accent)}
+@media (max-width:560px){
+  .prow{grid-template-columns:56px 1fr}
+  .prow .thumb{width:56px;height:56px}
+  .pact{grid-column:1/-1;flex-direction:row;align-items:center}
+  .pact .btn{flex:1}
+}
+.plist .card.pexpanded .thumb{max-width:240px;max-height:240px;aspect-ratio:1}

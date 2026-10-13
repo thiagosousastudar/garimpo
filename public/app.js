@@ -51,7 +51,7 @@
   var state = {
     user: null, loading: true, tab: 'garimpar', signup: false, ai: false,
     products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
-    mkt: 'todos', cat: 'todas', comMin: 0, ordem: 'score', days: 14, authMode: 'login',
+    mkt: 'todos', cat: 'todas', comMin: 0, ordem: prefGet('ordem', 'recentes'), days: 14, authMode: 'login',
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
     g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', onlyCom: false, sheetBusy: false, minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
     shipFilter: '', // filtro de frete na aba Produtos ('', 'free', 'cheap')
@@ -61,6 +61,8 @@
     autos: [], // pilotos automáticos
     tg: null, // conexão do Telegram
     tgChats: null, // grupos/canais encontrados pelo bot
+    pq: '', pflag: '', plimit: 24, pexp: {}, // Produtos: busca, situação, quantos mostrar, cards abertos na lista
+    pview: prefGet('pview', 'lista'), // Produtos: 'lista' (compacta) ou 'cards'
     qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
   };
 
@@ -384,48 +386,113 @@
       '<button class="btn small primary" data-act="psel-post"' + (n < 2 ? ' disabled' : '') + '>Postar ' + n + ' juntos</button></div>';
   }
 
-  function viewDescobrir() {
-    var cats = ['todas'].concat(Array.from(new Set(state.products.map(function (p) { return p.category; }).filter(Boolean))));
+  /* ---------- Produtos: ordem fixa, busca, lista compacta e páginas ---------- */
+  var P_PAGE = 24;
+  var P_SORTS = [['recentes', 'Mais recentes primeiro'], ['antigos', 'Mais antigos primeiro'], ['nome', 'Nome (A–Z)'], ['score', 'Maior nota'], ['ganho', 'Maior ganho por venda'],
+    ['comissao', 'Maior comissão'], ['desc', 'Maior desconto'], ['vendidos', 'Mais vendidos'], ['preco', 'Menor preço']];
+  // Toda ordem desempata pelo mais recente: a lista nunca "embaralha" entre uma visita e outra.
+  var P_SORTERS = {
+    recentes: function () { return 0; },
+    antigos: function (a, b) { return a.id - b.id; },
+    nome: function (a, b) { return String(a.title).localeCompare(String(b.title), 'pt-BR', { sensitivity: 'base' }); },
+    score: function (a, b) { return b.score - a.score; },
+    ganho: function (a, b) { return (b.earn_per_sale || 0) - (a.earn_per_sale || 0); },
+    comissao: function (a, b) { return (b.commission_pct || 0) - (a.commission_pct || 0); },
+    desc: function (a, b) { return (b.desc || 0) - (a.desc || 0); },
+    vendidos: function (a, b) { return (a.best_seller_rank || 1e9) - (b.best_seller_rank || 1e9) || (b.sales_k || 0) - (a.sales_k || 0); },
+    preco: function (a, b) { return a.price - b.price; },
+  };
+  var P_FLAGS = [['', 'Todos os produtos'], ['semlink', 'Sem link de afiliado'], ['semcom', 'Sem comissão'], ['comlink', 'Prontos (com link)']];
+
+  /** Preferências da tela de produtos guardadas neste aparelho. */
+  function prefGet(k, def) { try { var v = localStorage.getItem('garimpo.' + k); return v === null ? def : v; } catch (_) { return def; } }
+  function prefSet(k, v) { try { localStorage.setItem('garimpo.' + k, v); } catch (_) { /* sem armazenamento: só não lembra */ } }
+
+  function productsFiltered() {
+    var q = normTxt(state.pq);
     var list = state.products.filter(function (p) {
-      return (state.mkt === 'todos' || p.marketplace === state.mkt) && (state.cat === 'todas' || p.category === state.cat) && (p.commission_pct || 0) >= state.comMin && shipFilterOk(p, state.shipFilter);
+      if (state.mkt !== 'todos' && p.marketplace !== state.mkt) return false;
+      if (state.cat !== 'todas' && p.category !== state.cat) return false;
+      if ((p.commission_pct || 0) < state.comMin) return false;
+      if (!shipFilterOk(p, state.shipFilter)) return false;
+      if (state.pflag === 'semlink' && p.affiliate_url) return false;
+      if (state.pflag === 'comlink' && !p.affiliate_url) return false;
+      if (state.pflag === 'semcom' && p.commission_pct != null) return false;
+      return !q || normTxt(p.title + ' ' + (p.category || '')).indexOf(q) > -1;
     });
-    list.sort(function (a, b) {
-      if (state.ordem === 'ganho') return b.earn_per_sale - a.earn_per_sale;
-      if (state.ordem === 'desc') return b.desc - a.desc;
-      return b.score - a.score;
-    });
+    var s = P_SORTERS[state.ordem] || P_SORTERS.recentes;
+    return list.sort(function (a, b) { return s(a, b) || b.id - a.id; });
+  }
+  function normTxt(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim(); }
+
+  /** Card completo (o de sempre). */
+  function productCard(p, compactOpen) {
+    return '<article class="card' + (compactOpen ? ' pexpanded' : '') + '" id="prod-' + p.id + '">' + thumb(p) +
+      '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
+      '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
+      badges(p) + priceBlock(p) + shipInfo(p) + priceTrend(p) + statsBlock(p) +
+      '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
+      (p.price_stats && p.price_stats.count > 1 ? ' · <button class="link" data-history="' + p.id + '">Histórico</button>' : '') +
+      (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
+      (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
+      '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button>' +
+      '<label class="pick" title="Marque vários para postar juntos num carrossel"><input type="checkbox" data-psel="' + p.id + '"' + (state.psel[p.id] ? ' checked' : '') + '> Juntar</label><span class="grow"></span>' +
+      (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' : '') +
+      '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div>' +
+      '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div>' +
+      (compactOpen ? '<div class="row end"><button class="btn small ghost" data-pexp="' + p.id + '">Fechar detalhes ▲</button></div>' : '') + '</article>';
+  }
+
+  /** Linha compacta: foto pequena, nome, preço, ganho e ações principais. */
+  function productRow(p) {
+    var com = p.commission_pct != null;
+    return '<article class="prow" id="prod-' + p.id + '">' + thumb(p, true) +
+      '<div class="pinfo"><h3 title="' + esc(p.title) + '">' + esc(p.title) + '</h3>' +
+      '<div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div>' +
+      '<div class="pline"><b class="num">' + (p.price_max > p.price ? 'a partir de ' : '') + brl(p.price) + '</b>' + (p.desc ? '<span class="off num">−' + p.desc + '%</span>' : '') +
+      '<span class="' + (com ? 'earn' : 'hint') + ' num">' + (com ? p.commission_pct + '% · ' + brl(p.earn_per_sale) + '/venda' : 'sem comissão') + '</span>' +
+      (p.affiliate_url ? '' : '<span class="err small">sem link</span>') + '</div></div>' +
+      '<div class="pact"><button class="btn small primary" data-post="' + p.id + '">Postar</button>' +
+      '<label class="pick" title="Juntar num carrossel"><input type="checkbox" data-psel="' + p.id + '"' + (state.psel[p.id] ? ' checked' : '') + ' aria-label="Juntar"> Juntar</label>' +
+      '<button class="btn small ghost" data-pexp="' + p.id + '" aria-label="Ver detalhes">Detalhes ▾</button></div></article>';
+  }
+
+  /** Lista (filtrada, ordenada e paginada). Separada da tela para a busca redesenhar só ela (sem perder o foco). */
+  function productsList() {
+    var list = productsFiltered();
+    var shown = list.slice(0, state.plimit);
+    var compact = state.pview === 'lista';
+    var body = shown.map(function (p) { return compact && !state.pexp[p.id] ? productRow(p) : productCard(p, compact); }).join('');
+    var count = '<p class="hint pcount">' + (list.length === state.products.length ? list.length + ' produto' + (list.length === 1 ? '' : 's') : list.length + ' de ' + state.products.length + ' produtos') +
+      (shown.length < list.length ? ' · mostrando ' + shown.length : '') + '</p>';
+    if (!list.length) {
+      return '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros' + (state.pq ? ' e essa busca' : '') + '.' : 'Nenhum produto ainda. Use a aba Garimpar, Cadastrar por links ou importe um CSV.') + '</div>';
+    }
+    return count + '<div class="' + (compact ? 'plist' : 'grid three') + '">' + body + '</div>' +
+      (shown.length < list.length ? '<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-act="p-more">Mostrar mais ' + Math.min(P_PAGE, list.length - shown.length) + '</button><button class="btn ghost" data-act="p-all">Mostrar todos (' + list.length + ')</button></div>' : '');
+  }
+
+  function viewDescobrir() {
+    var cats = ['todas'].concat(Array.from(new Set(state.products.map(function (p) { return p.category; }).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'pt-BR'); }));
     var chips = [['todos', 'Todos'], ['ML', 'Mercado Livre'], ['SH', 'Shopee']].map(function (m) {
       return '<button class="chip" data-mkt="' + m[0] + '" aria-pressed="' + (state.mkt === m[0]) + '">' + m[1] + '</button>';
     }).join('');
     function sel(id, label, opts, cur) {
       return '<select id="' + id + '" aria-label="' + label + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
     }
-    var cards = list.map(function (p) {
-      return '<article class="card">' + thumb(p) +
-        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
-        '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        badges(p) + priceBlock(p) + shipInfo(p) + priceTrend(p) + statsBlock(p) +
-        '<p class="hint' + (staleHours(p) > 24 ? ' stale' : '') + '">Preço conferido ' + ago(p.price_checked_at) +
-        (p.price_stats && p.price_stats.count > 1 ? ' · <button class="link" data-history="' + p.id + '">Histórico</button>' : '') +
-        (p.external_id && mktReady(p.marketplace) ? ' · <button class="link" data-refresh="' + p.id + '">Atualizar preço</button>' : '') + '</p>' +
-        (p.affiliate_url ? '' : '<p class="err small">Sem link de afiliado: o post vai sem o seu link. Use Editar para colar.</p>') +
-        '<div class="row"><button class="btn small primary" data-post="' + p.id + '">Postar agora</button>' +
-        '<label class="pick" title="Marque vários para postar juntos num carrossel"><input type="checkbox" data-psel="' + p.id + '"' + (state.psel[p.id] ? ' checked' : '') + '> Juntar</label><span class="grow"></span>' +
-        (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' : '') +
-        '<button class="btn small ghost" data-edit-product="' + p.id + '">Editar</button></div>' +
-        '<div class="row later"><span class="hint">Guardar para depois:</span><button class="btn small ghost" data-add="' + p.id + '" data-channel="instagram">Fila Instagram</button><button class="btn small ghost" data-add="' + p.id + '" data-channel="whatsapp">Fila WhatsApp</button></div></article>';
-    }).join('');
-    return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos, ordenados pela nota de prioridade.</p></div>' +
+    var noLink = state.products.filter(function (p) { return !p.affiliate_url; }).length;
+    var views = '<div class="seg" role="group" aria-label="Modo de exibição"><button type="button" data-pview="lista" aria-pressed="' + (state.pview === 'lista') + '">☰ Lista</button><button type="button" data-pview="cards" aria-pressed="' + (state.pview !== 'lista') + '">▦ Cards</button></div>';
+    return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos. Os novos aparecem no topo; mude a ordem quando quiser.</p></div>' +
       '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button>' +
       (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
-      '<div class="rule">Nota de 0 a 100: 30% desconto, 30% comissão, 20% avaliação, 20% volume de vendas.</div>' +
+      '<div class="psearch"><input id="f-q" type="search" placeholder="Buscar nos seus produtos…" value="' + esc(state.pq) + '" aria-label="Buscar produtos" autocomplete="off">' + views + '</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
+      sel('f-ord', 'Ordenar por', P_SORTS, state.ordem) +
       sel('f-cat', 'Categoria', cats.map(function (c) { return [c, c === 'todas' ? 'Todas as categorias' : c]; }), state.cat) +
+      sel('f-flag', 'Situação', P_FLAGS.map(function (f) { return [f[0], f[1] + (f[0] === 'semlink' && noLink ? ' (' + noLink + ')' : '')]; }), state.pflag) +
       sel('f-com', 'Comissão mínima', [[0, 'Qualquer comissão'], [8, 'A partir de 8%'], [10, 'A partir de 10%'], [12, 'A partir de 12%']], state.comMin) +
-      sel('f-ord', 'Ordenar por', [['score', 'Maior prioridade'], ['ganho', 'Maior ganho por venda'], ['desc', 'Maior desconto']], state.ordem) +
       sel('f-ship', 'Frete', SHIP_OPTS, state.shipFilter) + '</div>' +
-      (list.length ? '<div class="grid three">' + cards + '</div>' + groupBar() :
-        '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros.' : 'Nenhum produto ainda. Use a aba Garimpar, Novo produto ou importe um CSV.') + '</div>');
+      '<div id="plist">' + productsList() + '</div>' + groupBar();
   }
 
   var STATUS = { draft: 'Rascunho', scheduled: 'Agendado', publishing: 'Publicando', processing: 'Processando', posted: 'Postado', failed: 'Falhou' };
@@ -1365,6 +1432,8 @@
         return api('PUT', '/api/auth/brand', { color: cv.color, handle: cv.handle }).then(function (b) { state.brand = b.brand; }).catch(function () {});
       }).finally(function () { if (post && post.cover) { post.cover.busy = false; renderPost(); } });
     },
+    'p-more': function () { state.plimit += P_PAGE; render(); },
+    'p-all': function () { state.plimit = 1e6; render(); },
     'psel-clear': function () { state.psel = {}; render(); },
     'psel-post': function () { return openPost(groupSelected()); },
     'refresh-all': function (btn) {
@@ -1461,7 +1530,9 @@
     var d = t.dataset;
     if (d.act && actions[d.act]) return actions[d.act](t);
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
-    if (d.mkt) { state.mkt = d.mkt; return render(); }
+    if (d.mkt) { state.mkt = d.mkt; state.plimit = P_PAGE; return render(); }
+    if (d.pview) { state.pview = d.pview; prefSet('pview', d.pview); state.pexp = {}; return render(); }
+    if (d.pexp) { state.pexp[d.pexp] = !state.pexp[d.pexp]; render(); var pe = $('#prod-' + d.pexp); if (pe && state.pexp[d.pexp]) pe.scrollIntoView({ block: 'nearest' }); return null; }
     if (d.gfocus !== undefined) { var el = $('#gres-' + d.gfocus); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(function () { el.classList.remove('flash'); }, 1600); } return null; }
     if (d.comsave) {
       var inp = document.querySelector('[data-comcat="' + d.comsave + '"]');
@@ -1563,9 +1634,10 @@
 
   document.addEventListener('change', guard(function (e) {
     var t = e.target;
-    if (t.id === 'f-cat') { state.cat = t.value; return render(); }
+    if (t.id === 'f-cat') { state.cat = t.value; state.plimit = P_PAGE; return render(); }
     if (t.id === 'f-com') { state.comMin = Number(t.value); return render(); }
-    if (t.id === 'f-ord') { state.ordem = t.value; return render(); }
+    if (t.id === 'f-ord') { state.ordem = t.value; prefSet('ordem', t.value); state.plimit = P_PAGE; return render(); }
+    if (t.id === 'f-flag') { state.pflag = t.value; state.plimit = P_PAGE; return render(); }
     if (t.id === 'f-days') { state.days = Number(t.value); return reload(); }
     if (t.dataset.earnStatus) return api('PATCH', '/api/earnings/' + t.dataset.earnStatus, { status: t.value }).then(reload);
     if (t.id === 'links-sheet' && t.files[0] && links) {
@@ -1641,6 +1713,8 @@
 
   document.addEventListener('input', function (e) {
     var t = e.target;
+    // busca em Produtos: redesenha só a lista, para não perder o foco do campo
+    if (t.id === 'f-q') { state.pq = t.value; state.plimit = P_PAGE; var pl = $('#plist'); if (pl) pl.innerHTML = productsList(); return; }
     if (t.dataset && t.dataset.caption) { var c = $('#cnt-' + t.dataset.caption); if (c) c.textContent = t.value.length; }
     // cadastro por links: guarda o que o usuário digita sem redesenhar (não perde o foco)
     if (links && links.items && t.dataset && t.dataset.li !== undefined) {
