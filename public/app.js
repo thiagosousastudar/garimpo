@@ -744,7 +744,32 @@
     });
   }
   /** Envia foto/vídeo. Com Supabase, vai direto do navegador para o Storage; sem ele, passa pelo servidor. */
-  function uploadFile(file) {
+  /** O Instagram só aceita foto em JPEG: PNG (ex.: print da tela) é convertido aqui antes de enviar. */
+  function toJpeg(file) {
+    if (file.type !== 'image/png') return Promise.resolve(file);
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        var x = c.getContext('2d'); x.fillStyle = '#ffffff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0);
+        c.toBlob(function (b) {
+          if (!b) return reject(new Error('Não consegui converter a foto para JPEG.'));
+          resolve(new File([b], file.name.replace(/\.png$/i, '') + '.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.92);
+      };
+      img.onerror = function () { reject(new Error('Não consegui ler a foto.')); };
+      // data: (e não blob:), que a política de segurança da página permite em imagens
+      var rd = new FileReader();
+      rd.onload = function () { img.src = rd.result; };
+      rd.onerror = function () { reject(new Error('Não consegui ler a foto.')); };
+      rd.readAsDataURL(file);
+    });
+  }
+  function uploadFile(original) {
+    return toJpeg(original).then(function (file) { return uploadRaw(file); });
+  }
+  function uploadRaw(file) {
     return api('POST', '/api/media/sign', { content_type: file.type, size: file.size }).then(function (s) {
       if (s.driver === 'local') {
         var fd = new FormData(); fd.append('file', file);
