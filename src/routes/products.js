@@ -368,4 +368,4 @@ function productRoutes({ pool, cfg, fetchImpl }) {
   return r;
 }
 
-module.exports = { productRoutes, mapProduct, parseBody, insertProduct };
+module.exports = { productRoutes, mapProduct, parseBody, insertProduct, refreshOne };

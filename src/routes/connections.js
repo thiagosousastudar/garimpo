@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { HttpError, encrypt, decrypt, parseNum } = require('../util');
 const { createInstagramClient } = require('../services/instagram');
+const { createTelegramClient } = require('../services/telegram');
 const { createShopeeClient } = require('../services/shopee');
 const { mercadoLivreOAuth } = require('../services/mercadolivre');
 const { saveMercadoLivreTokens, applyCommissionTable, commissionTableOf } = require('../services/garimpo');
@@ -66,7 +67,62 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
   });
 
   r.delete('/instagram', async (req, res) => {
-    await pool.query('delete from connections where user_id = $1', [req.uid]);
+    // só os dados do Instagram (a mesma linha guarda o Telegram)
+    await pool.query('update connections set ig_user_id = null, ig_token_enc = null, ig_username = null where user_id = $1', [req.uid]);
+    res.json({ ok: true });
+  });
+
+  /* ---------- Telegram (bot oficial): canal automático do piloto ---------- */
+  const tgRow = async (uid) => (await pool.query('select tg_token_enc, tg_chat_id, tg_chat_title from connections where user_id = $1', [uid])).rows[0] || {};
+  const tgClient = (row) => createTelegramClient({ token: decrypt(row.tg_token_enc, cfg.encryptionKey), fetchImpl });
+
+  r.get('/telegram', async (req, res) => {
+    const t = await tgRow(req.uid);
+    res.json({ connected: Boolean(t.tg_token_enc), chat_id: t.tg_chat_id || null, chat_title: t.tg_chat_title || null, ready: Boolean(t.tg_token_enc && t.tg_chat_id) });
+  });
+
+  /** Salva o token do bot (testado no Telegram antes). */
+  r.put('/telegram', async (req, res) => {
+    const token = String(req.body?.token || '').trim();
+    if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new HttpError(400, 'Token inválido. Ele tem o formato 123456789:ABC... e vem do @BotFather.');
+    let me;
+    try { me = await createTelegramClient({ token, fetchImpl }).me(); } catch (e) { throw new HttpError(400, `O Telegram recusou o token: ${e.message}`); }
+    await pool.query(
+      `insert into connections (user_id, tg_token_enc, updated_at) values ($1, $2, now())
+         on conflict (user_id) do update set tg_token_enc = excluded.tg_token_enc, tg_chat_id = null, tg_chat_title = null`,
+      [req.uid, encrypt(token, cfg.encryptionKey)]
+    );
+    res.json({ connected: true, bot: me.username || null });
+  });
+
+  /** Grupos/canais em que o bot está e recebeu mensagem recente (para escolher onde postar). */
+  r.get('/telegram/chats', async (req, res) => {
+    const t = await tgRow(req.uid);
+    if (!t.tg_token_enc) throw new HttpError(400, 'Conecte o bot do Telegram primeiro.');
+    try { res.json({ chats: await tgClient(t).chats() }); } catch (e) { throw new HttpError(502, e.message); }
+  });
+
+  /** Escolhe o grupo/canal (id da lista ou @canal) e manda uma mensagem de teste. */
+  r.put('/telegram/chat', async (req, res) => {
+    const t = await tgRow(req.uid);
+    if (!t.tg_token_enc) throw new HttpError(400, 'Conecte o bot do Telegram primeiro.');
+    const chatId = String(req.body?.chat_id || '').trim();
+    if (!/^(-?\d{5,}|@[A-Za-z0-9_]{5,})$/.test(chatId)) throw new HttpError(400, 'Escolha um grupo/canal da lista ou digite o @ do canal.');
+    const client = tgClient(t);
+    let title;
+    try {
+      const chat = await client.chat(chatId);
+      title = chat.title || chat.username || chatId;
+      await client.sendMessage(chatId, '✅ *Garimpo conectado!* As ofertas do piloto automático vão chegar aqui.');
+    } catch (e) {
+      throw new HttpError(400, `${e.message}. Confira se o bot é administrador do grupo/canal.`);
+    }
+    await pool.query('update connections set tg_chat_id = $1, tg_chat_title = $2 where user_id = $3', [String(chatId), title, req.uid]);
+    res.json({ ready: true, chat_id: chatId, chat_title: title });
+  });
+
+  r.delete('/telegram', async (req, res) => {
+    await pool.query('update connections set tg_token_enc = null, tg_chat_id = null, tg_chat_title = null where user_id = $1', [req.uid]);
     res.json({ ok: true });
   });
 

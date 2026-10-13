@@ -58,6 +58,10 @@
     shipZip: null, // CEP de referência do frete
     psel: {}, // produtos marcados para postar juntos (carrossel)
     brand: { color: null, handle: null }, // identidade das capas (cor e @)
+    autos: [], // pilotos automáticos
+    tg: null, // conexão do Telegram
+    tgChats: null, // grupos/canais encontrados pelo bot
+    qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
   };
 
   var ICONS = {
@@ -82,9 +86,12 @@
       api('GET', '/api/products'), api('GET', '/api/queue'),
       api('GET', '/api/earnings/summary?days=' + state.days), api('GET', '/api/earnings'),
       api('GET', '/api/connections/instagram'), api('GET', '/api/connections/marketplaces'),
+      api('GET', '/api/automations').catch(function () { return { items: [] }; }),
+      api('GET', '/api/connections/telegram').catch(function () { return null; }),
     ]).then(function (r) {
       state.products = r[0].products; state.queue = r[1].items; state.summary = r[2];
       state.earnings = r[3].earnings; state.conn = r[4]; state.mkts = r[5];
+      state.autos = r[6].items; state.tg = r[7];
       loadMlExtras();
     });
   }
@@ -134,6 +141,7 @@
     var tabs = [['garimpar', 'Garimpar', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'],
       ['descobrir', 'Produtos', '<path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8V6a3 3 0 016 0v2"/>'],
       ['fila', 'Fila', '<path d="M4 6h16M4 12h16M4 18h10"/>'],
+      ['piloto', 'Piloto', '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M2 13v2M22 13v2"/>'],
       ['ganhos', 'Ganhos', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
       ['conexoes', 'Conexões', '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 0011 18.7l1-1"/>']];
     return '<header class="top"><div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .8-4.4 4.2 1.1 6L12 16.7 6.7 19.6l1.1-6L3.4 9.4l6-.8z"/></svg></div><h1>Garimpo</h1></div>' +
@@ -331,8 +339,18 @@
 
   var STATUS = { draft: 'Rascunho', scheduled: 'Agendado', publishing: 'Publicando', processing: 'Processando', posted: 'Postado', failed: 'Falhou' };
 
+  function waPending(q) { return q.channel === 'whatsapp' && (q.status === 'draft' || q.status === 'failed'); }
   function viewFila() {
-    var items = state.queue.map(function (q) {
+    var nWa = state.queue.filter(waPending).length;
+    var nAuto = state.queue.filter(function (q) { return q.automation_id; }).length;
+    var shown = state.queue.filter(function (q) {
+      return state.qfilter === 'wa' ? waPending(q) : state.qfilter === 'piloto' ? Boolean(q.automation_id) : true;
+    });
+    var filters = '<div class="row chips" style="margin-bottom:12px">' + [['', 'Tudo'], ['wa', 'WhatsApp a enviar' + (nWa ? ' (' + nWa + ')' : '')], ['piloto', '🤖 Do piloto' + (nAuto ? ' (' + nAuto + ')' : '')]].map(function (f) {
+      return '<button class="chip" data-qfilter="' + f[0] + '" aria-pressed="' + (state.qfilter === f[0]) + '">' + esc(f[1]) + '</button>';
+    }).join('') + '</div>';
+    var prefetch = 0;
+    var items = shown.map(function (q) {
       var editable = q.status === 'draft' || q.status === 'scheduled' || q.status === 'failed';
       var isIg = q.channel === 'instagram';
       var media = '';
@@ -350,11 +368,15 @@
           (q.media_type === 'video' && u ? '<video src="' + esc(u) + '" muted playsinline preload="metadata"></video>' : (u ? '<img src="' + esc(u) + '" alt="" referrerpolicy="no-referrer">' : '<span class="hint" style="padding:8px">sem mídia</span>')) +
           '</div><div class="stack" style="display:flex;flex-direction:column;gap:6px"><span class="hint">' + (q.media_type === 'none' ? 'O Instagram exige foto (JPEG) ou vídeo.' : (q.media_type === 'video' ? 'Reels em vídeo' : 'Foto')) + '</span>' +
           (editable ? '<label class="btn small" for="up-' + q.id + '">Trocar mídia</label><input id="up-' + q.id + '" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4" data-upload="' + q.id + '" hidden>' : '') + '</div></div>';
+      } else if (safeUrl(q.product_image)) {
+        // WhatsApp: a foto do produto vai junto ao compartilhar (preparada antes, porque o compartilhar precisa ser imediato)
+        if (editable && prefetch++ < 6) prepareWaImage(q.product_image).catch(function () {});
+        media = '<div class="qmedia"><div class="thumb"><img src="' + esc(safeUrl(q.product_image)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></div><span class="hint">Foto que vai junto no WhatsApp</span></div>';
       }
       var nProd = 1;
       try { nProd = q.product_ids ? JSON.parse(q.product_ids).length : 1; } catch (_) { nProd = 1; }
       return '<article class="card qitem" data-q="' + q.id + '"><header><div><h3>' + esc(q.product_title || 'Produto removido') + (nProd > 1 ? ' <span class="hint">+ ' + (nProd - 1) + ' produto' + (nProd > 2 ? 's' : '') + '</span>' : '') + '</h3>' +
-        '<div class="meta">' + (q.product_marketplace ? mktTag(q.product_marketplace) : '') + '<span>' + (isIg ? 'Instagram' : 'WhatsApp') + '</span>' +
+        '<div class="meta">' + (q.product_marketplace ? mktTag(q.product_marketplace) : '') + '<span>' + (isIg ? 'Instagram' : 'WhatsApp') + '</span>' + (q.automation_id ? '<span class="tag plain">🤖 Piloto</span>' : '') +
         (q.scheduled_at && q.status === 'scheduled' ? '<span class="num">· ' + fmtWhen(q.scheduled_at) + '</span>' : '') + '</div></div>' +
         '<span class="pill ' + q.status + '">' + STATUS[q.status] + '</span></header>' + media +
         '<textarea id="cap-' + q.id + '" data-caption="' + q.id + '" ' + (editable ? '' : 'readonly') + ' aria-label="Texto da postagem">' + esc(q.caption) + '</textarea>' +
@@ -366,7 +388,8 @@
         (editable && isIg ? '<details class="sched"' + (q.status === 'scheduled' ? ' open' : '') + '><summary>Agendar (opcional)</summary><div class="row"><input type="datetime-local" id="when-' + q.id + '" value="' + localInput(q.scheduled_at) + '" aria-label="Data e hora"><button class="btn small" data-schedule="' + q.id + '">Agendar</button>' +
           (q.status === 'scheduled' ? '<button class="btn small ghost" data-unschedule="' + q.id + '">Tirar agendamento</button>' : '') + '</div></details>' : '') +
         '<div class="actions">' +
-        (!isIg && editable ? '<button class="btn small primary" data-wa="' + q.id + '">Abrir no WhatsApp</button>' : '') +
+        (!isIg && editable && safeUrl(q.product_image) ? '<button class="btn small primary" data-washare="' + q.id + '">📷 Compartilhar com foto</button>' : '') +
+        (!isIg && editable ? '<button class="btn small' + (safeUrl(q.product_image) ? '' : ' primary') + '" data-wa="' + q.id + '">' + (safeUrl(q.product_image) ? 'Só o texto' : 'Abrir no WhatsApp') + '</button>' : '') +
         '<button class="btn small" data-copy="' + q.id + '">Copiar texto</button>' +
         (editable && isIg ? '<button class="btn small primary" data-publish="' + q.id + '"' + (state.conn && state.conn.connected ? '' : ' disabled title="Conecte o Instagram na aba Conexões"') + '>Publicar agora</button>' : '') +
         (editable ? '<button class="btn small" data-posted="' + q.id + '">Marcar como postado</button>' : '') +
@@ -374,8 +397,124 @@
         (q.status !== 'publishing' ? '<button class="btn small ghost danger" data-del-queue="' + q.id + '">Excluir</button>' : '') + '</div></article>';
     }).join('');
     return '<div class="pagehead"><h2>Fila e histórico</h2><p>Posts guardados para depois e tudo o que já foi postado. Publique quando quiser; agendar é opcional. Para postar na hora, use Postar agora na aba Produtos.</p></div>' +
-      (items ? '<div class="grid">' + items + '</div>' : '<div class="empty centered-empty">Nada por aqui ainda. Em Produtos, use Postar agora, ou Fila Instagram/WhatsApp para guardar e publicar depois.</div>');
+      (state.queue.length ? filters : '') +
+      (items ? '<div class="grid">' + items + '</div>' : state.queue.length ? '<div class="empty centered-empty">Nada neste filtro.</div>' : '<div class="empty centered-empty">Nada por aqui ainda. Em Produtos, use Postar agora, ou Fila Instagram/WhatsApp para guardar e publicar depois.</div>');
   }
+
+  /* ---------- piloto automático ---------- */
+  var INTERVALS = [[15, 'a cada 15 min'], [30, 'a cada 30 min'], [45, 'a cada 45 min'], [60, 'a cada 1 hora'], [90, 'a cada 1h30'], [120, 'a cada 2 horas'], [180, 'a cada 3 horas'], [240, 'a cada 4 horas']];
+  var DEDUPS = [[1, '1 dia'], [2, '2 dias'], [3, '3 dias'], [7, '7 dias'], [14, '14 dias'], [30, '30 dias']];
+  var CH_NAMES = { instagram: 'Instagram', telegram: 'Telegram', whatsapp: 'WhatsApp' };
+  var runsOpen = {}; // id do piloto -> lista de rodadas carregada
+
+  function autoSummary(c) {
+    if (!c) return 'Configuração inválida: edite e salve de novo.';
+    var src = [];
+    if (c.sources.saved) src.push('seus produtos ' + (c.sources.marketplaces.length === 2 ? 'salvos' : 'da ' + mktName(c.sources.marketplaces[0])) + (c.sources.keywords.length ? ' com "' + c.sources.keywords.join('", "') + '"' : ''));
+    if (c.sources.shopee_queries.length) src.push('busca na Shopee: ' + c.sources.shopee_queries.join(', '));
+    var f = c.filters, filt = [];
+    if (f.min_discount) filt.push('desconto ≥ ' + f.min_discount + '%');
+    if (f.min_commission) filt.push('comissão ≥ ' + String(f.min_commission).replace('.', ',') + '%');
+    if (f.shipping) filt.push(f.shipping === 'free' ? 'frete grátis' : 'frete grátis ou barato');
+    if (f.price_min) filt.push('a partir de ' + brl(f.price_min));
+    if (f.price_max) filt.push('até ' + brl(f.price_max));
+    var iv = INTERVALS.filter(function (x) { return x[0] === c.interval_min; })[0];
+    var chans = Object.keys(CH_NAMES).filter(function (k) { return c.channels[k]; }).map(function (k) { return CH_NAMES[k] + (k === 'instagram' ? ' (até ' + c.ig_daily_max + '/dia)' : ''); });
+    return '<b>De onde:</b> ' + esc(src.join(' + ')) + '<br><b>Filtros:</b> ' + esc(filt.join(', ') || 'nenhum') +
+      '<br><b>Quando:</b> 1 oferta ' + esc(iv ? iv[1] : '') + ', das ' + esc(c.window.start) + ' às ' + esc(c.window.end) + ', sem repetir por ' + c.dedup_days + ' dia' + (c.dedup_days > 1 ? 's' : '') +
+      '<br><b>Para:</b> ' + esc(chans.join(', '));
+  }
+
+  function runLine(r) {
+    var ch = r.channels ? Object.keys(r.channels).map(function (k) { return CH_NAMES[k] + ': ' + r.channels[k]; }).join(' · ') : '';
+    var icon = r.status === 'sent' ? '✅' : r.status === 'empty' ? '⏭️' : '⚠️';
+    return '<li><span class="num hint">' + esc(fmtWhen(r.ran_at)) + '</span> ' + icon + ' ' + (r.title ? '<b>' + esc(r.title) + '</b> ' : '') +
+      '<span class="hint">' + esc([r.source, ch, r.error].filter(Boolean).join(' · ')) + '</span></li>';
+  }
+
+  function viewPiloto() {
+    var withLink = state.products.filter(function (p) { return p.affiliate_url; }).length;
+    var tg = state.tg || {};
+    var warn = [];
+    if (!withLink) warn.push('Você ainda não tem produtos com o seu link de afiliado. O piloto só envia ofertas com o seu link (senão a venda não conta para você). Cadastre em Produtos → Cadastrar por links ou pela planilha da Shopee.');
+    var cards = state.autos.map(function (a) {
+      var c = a.config;
+      var needs = [];
+      if (c && c.channels.instagram && !(state.conn && state.conn.connected)) needs.push('conecte o Instagram');
+      if (c && c.channels.telegram && !tg.ready) needs.push('conecte o Telegram');
+      var runs = runsOpen[a.id];
+      return '<article class="card auto' + (a.active ? '' : ' paused') + '"><header><div><h3>🤖 ' + esc(a.name) + '</h3><div class="meta"><span>' +
+        (a.active ? 'Ligado' : 'Pausado') + '</span><span class="num">· ' + a.sent_today + ' hoje · ' + a.sent_total + ' no total</span>' +
+        (a.last_run_at ? '<span class="num">· última rodada ' + esc(ago(a.last_run_at)) + '</span>' : '') + '</div></div>' +
+        '<label class="switch"><input type="checkbox" data-auto-toggle="' + a.id + '"' + (a.active ? ' checked' : '') + ' aria-label="Ligar ou pausar"><span></span></label></header>' +
+        '<p class="small">' + autoSummary(c) + '</p>' +
+        (needs.length ? '<p class="err small">Para funcionar: ' + esc(needs.join(' e ')) + ' (aba Conexões).</p>' : '') +
+        '<div class="actions"><button class="btn small primary" data-auto-run="' + a.id + '">Rodar agora</button><button class="btn small" data-auto-edit="' + a.id + '">Editar</button>' +
+        '<button class="btn small" data-auto-runs="' + a.id + '">' + (runs ? 'Esconder histórico' : 'Histórico') + '</button><button class="btn small ghost danger" data-auto-del="' + a.id + '">Excluir</button></div>' +
+        (runs ? (runs.length ? '<ul class="runs">' + runs.map(runLine).join('') + '</ul>' : '<p class="hint">Ainda não rodou.</p>') : '') + '</article>';
+    }).join('');
+    return '<div class="pagehead"><h2>Piloto automático</h2><p>Escolha de onde vêm as ofertas, os filtros, o horário e os canais. O Garimpo envia sozinho: <b>Instagram</b> e <b>Telegram</b> direto; no <b>WhatsApp</b> a oferta fica pronta na Fila e você compartilha com foto em um toque.</p></div>' +
+      warn.map(function (w) { return '<p class="err">' + esc(w) + '</p>'; }).join('') +
+      '<div class="row" style="margin-bottom:12px"><button class="btn primary" data-act="auto-new">+ Novo piloto</button></div>' +
+      (cards ? '<div class="grid">' + cards + '</div>' : '<div class="empty centered-empty">Nenhum piloto ainda. Crie um: por exemplo, "1 oferta da Shopee com 30% off a cada hora, das 9h às 21h, no Telegram e no WhatsApp".</div>') +
+      '<section class="card" style="margin-top:14px"><h3>Como funciona</h3><ol class="steps">' +
+      '<li>A cada rodada o piloto pega <b>1 oferta</b>: a fonte da vez, só itens com o seu link de afiliado, dentro dos filtros, sem repetir o que já mandou no período escolhido. Entre as melhores notas ele sorteia, para variar.</li>' +
+      '<li>Produtos do Mercado Livre têm o preço conferido antes de sair (se a conferência tiver mais de 3 horas).</li>' +
+      '<li><b>Instagram</b>: publica foto ou carrossel com até 3 fotos, respeitando o limite por dia (contas novas devem postar pouco no começo).</li>' +
+      '<li><b>WhatsApp</b>: por segurança da sua conta, o envio é feito por você. Na Fila, filtre "WhatsApp a enviar" e use "📷 Compartilhar com foto".</li>' +
+      '<li>Fora do horário escolhido o piloto descansa. "Rodar agora" funciona a qualquer hora, para testar.</li></ol></section>';
+  }
+
+  function autoDialog(a) {
+    var c = (a && a.config) || { sources: { saved: true, marketplaces: ['ML', 'SH'], keywords: [], shopee_queries: [] }, filters: { min_discount: 20, min_commission: 0, shipping: '', price_min: null, price_max: null },
+      window: { start: '09:00', end: '21:00' }, interval_min: 60, dedup_days: 7, channels: { instagram: false, telegram: Boolean(state.tg && state.tg.ready), whatsapp: true }, ig_daily_max: 4 };
+    var shOk = mktReady('SH');
+    var chk = function (name, value, on, label) { return '<label class="check"><input type="checkbox" name="' + name + '" value="' + value + '"' + (on ? ' checked' : '') + '> ' + label + '</label>'; };
+    var opt = function (list, cur) { return list.map(function (o) { return '<option value="' + o[0] + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); };
+    var numv = function (v) { return v == null || v === 0 ? '' : String(v).replace('.', ','); };
+    var inner = field('a_name', 'Nome do piloto', a ? a.name : 'Ofertas do dia', 'required maxlength="60"') +
+      '<fieldset class="fs"><legend>De onde vêm as ofertas</legend>' +
+      chk('saved', '1', c.sources.saved, 'Meus produtos salvos (com link de afiliado)') +
+      '<div class="row">' + chk('mk', 'ML', c.sources.marketplaces.indexOf('ML') > -1, 'Mercado Livre') + chk('mk', 'SH', c.sources.marketplaces.indexOf('SH') > -1, 'Shopee') + '</div>' +
+      field('keywords', 'Só produtos com estas palavras (opcional, separe por vírgula)', c.sources.keywords.join(', '), 'placeholder="Ex.: air fryer, cozinha, maquiagem"') +
+      field('shopee_queries', 'Buscas na Shopee (opcional, separe por vírgula)', c.sources.shopee_queries.join(', '), 'placeholder="Ex.: organizador, fone bluetooth"' + (shOk ? '' : ' disabled')) +
+      (shOk ? '<p class="hint">Cada busca traz ofertas novas já com o seu link de afiliado. As fontes se revezam a cada rodada.</p>' : '<p class="hint">Buscas na Shopee ficam disponíveis quando a API de afiliados da Shopee for liberada e conectada.</p>') + '</fieldset>' +
+      '<fieldset class="fs"><legend>Filtros</legend><div class="cols">' +
+      field('min_discount', 'Desconto mínimo (%)', numv(c.filters.min_discount), 'inputmode="numeric" placeholder="0"') +
+      field('min_commission', 'Comissão mínima (%)', numv(c.filters.min_commission), 'inputmode="decimal" placeholder="0"') + '</div><div class="cols">' +
+      field('price_min', 'Preço de (R$)', numv(c.filters.price_min), 'inputmode="decimal" placeholder="qualquer"') +
+      field('price_max', 'Preço até (R$)', numv(c.filters.price_max), 'inputmode="decimal" placeholder="qualquer"') + '</div>' +
+      '<div class="field"><label for="a_ship">Frete</label><select id="a_ship" name="shipping">' + opt(SHIP_OPTS, c.filters.shipping) + '</select></div></fieldset>' +
+      '<fieldset class="fs"><legend>Quando</legend><div class="cols">' +
+      '<div class="field"><label for="a_start">Das</label><input id="a_start" name="start" type="time" value="' + esc(c.window.start) + '" required></div>' +
+      '<div class="field"><label for="a_end">Até</label><input id="a_end" name="end" type="time" value="' + esc(c.window.end) + '" required></div></div><div class="cols">' +
+      '<div class="field"><label for="a_int">Ritmo (1 oferta)</label><select id="a_int" name="interval_min">' + opt(INTERVALS, c.interval_min) + '</select></div>' +
+      '<div class="field"><label for="a_dd">Não repetir o mesmo produto por</label><select id="a_dd" name="dedup_days">' + opt(DEDUPS, c.dedup_days) + '</select></div></div>' +
+      '<p class="hint">Horário de Brasília.</p></fieldset>' +
+      '<fieldset class="fs"><legend>Para onde</legend>' +
+      chk('ch', 'telegram', c.channels.telegram, 'Telegram (automático)' + (state.tg && state.tg.ready ? '' : ' <span class="hint">· conecte em Conexões</span>')) +
+      chk('ch', 'instagram', c.channels.instagram, 'Instagram (automático)' + (state.conn && state.conn.connected ? '' : ' <span class="hint">· conecte em Conexões</span>')) +
+      '<div class="field" style="margin-left:26px"><label for="a_igmax">Máximo de posts no Instagram por dia</label><input id="a_igmax" name="ig_daily_max" type="number" min="1" max="25" value="' + c.ig_daily_max + '" style="max-width:90px"></div>' +
+      chk('ch', 'whatsapp', c.channels.whatsapp, 'WhatsApp (fica pronto na Fila para você compartilhar com foto)') + '</fieldset>' +
+      chk('active', '1', a ? a.active : true, 'Ligado');
+    openDialog(a ? 'Editar piloto' : 'Novo piloto', inner, 'Salvar piloto', function () {
+      var fd = new FormData($('#dform', dlg));
+      var body = {
+        name: fd.get('a_name'), active: fd.get('active') === '1',
+        config: {
+          sources: { saved: fd.get('saved') === '1', marketplaces: fd.getAll('mk'), keywords: fd.get('keywords') || '', shopee_queries: fd.get('shopee_queries') || '' },
+          filters: { min_discount: fd.get('min_discount'), min_commission: fd.get('min_commission'), price_min: fd.get('price_min'), price_max: fd.get('price_max'), shipping: fd.get('shipping') },
+          window: { start: fd.get('start'), end: fd.get('end') }, interval_min: Number(fd.get('interval_min')), dedup_days: Number(fd.get('dedup_days')),
+          channels: { instagram: fd.getAll('ch').indexOf('instagram') > -1, telegram: fd.getAll('ch').indexOf('telegram') > -1, whatsapp: fd.getAll('ch').indexOf('whatsapp') > -1 },
+          ig_daily_max: Number(fd.get('ig_daily_max')),
+        },
+      };
+      return (a ? api('PATCH', '/api/automations/' + a.id, body) : api('POST', '/api/automations', body)).then(function () { toast(a ? 'Piloto atualizado' : 'Piloto criado. Use "Rodar agora" para testar.'); return reload(); });
+    });
+  }
+
+  function autoById(id) { return state.autos.filter(function (a) { return a.id === Number(id); })[0]; }
+  function loadRuns(id) { return api('GET', '/api/automations/' + id + '/runs').then(function (r) { runsOpen[id] = r.items; }); }
 
   function viewGanhos() {
     var s = state.summary; if (!s) return '';
@@ -446,6 +585,33 @@
       '<div class="row end"><button class="btn primary" type="submit">Salvar comissões</button></div></form></details>';
   }
 
+  /** Telegram: 1) token do bot (@BotFather); 2) escolher o grupo/canal (lista ou @canal); 3) pronto. */
+  function telegramCard() {
+    var tg = state.tg || {};
+    var head = '<section class="card"><h3>Telegram (piloto automático)</h3>';
+    if (tg.ready) {
+      return head + '<p class="ok">Postando em <b>' + esc(tg.chat_title || tg.chat_id) + '</b>.</p>' +
+        '<div class="actions row"><button class="btn small" data-act="tg-change">Trocar grupo/canal</button><button class="btn small danger" data-act="disconnect-tg">Desconectar</button></div></section>';
+    }
+    if (tg.connected) {
+      var found = state.tgChats;
+      return head + '<p class="ok">Bot conectado. Falta escolher onde ele vai postar.</p><ol class="steps">' +
+        '<li>No Telegram, abra o seu <b>grupo</b> ou <b>canal</b> de ofertas → Administradores → Adicionar administrador → procure o seu bot e permita <b>enviar/publicar mensagens</b>.</li>' +
+        '<li>Mande qualquer mensagem no grupo/canal (ex.: "oi") e toque em <b>Procurar meus grupos</b>.</li></ol>' +
+        '<div class="row"><button class="btn small primary" data-act="tg-find">Procurar meus grupos</button><button class="btn small danger" data-act="disconnect-tg">Desconectar</button></div>' +
+        (found && found.length ? '<div class="stack" style="margin-top:10px">' + found.map(function (ch) {
+          return '<button class="btn" data-tgchat="' + esc(ch.id) + '">Usar "' + esc(ch.title) + '" <span class="hint">(' + (ch.type === 'channel' ? 'canal' : 'grupo') + ')</span></button>';
+        }).join('') + '</div>' : '') +
+        '<form class="stack" id="tgchat-form" style="margin-top:10px"><div class="field"><label for="tg-chat">Ou digite o @ do canal público</label><input id="tg-chat" type="text" autocomplete="off" placeholder="@achadinhosdaanninha"></div>' +
+        '<p class="err" role="alert"></p><button class="btn" type="submit">Usar este canal</button></form></section>';
+    }
+    return head + '<p class="hint">Não conectado. Com o Telegram, o piloto automático posta as ofertas com foto sozinho no seu grupo ou canal (API oficial, sem risco para a conta).</p>' +
+      '<form class="stack" id="tg-form" autocomplete="off"><div class="field"><label for="tg-token">Token do bot</label><input id="tg-token" type="password" autocomplete="new-password" data-lpignore="true" placeholder="123456789:AAH..." required></div>' +
+      '<p class="err" role="alert"></p><button class="btn primary" type="submit">Conectar bot</button></form>' +
+      '<ol class="steps"><li>No Telegram, abra uma conversa com <b>@BotFather</b> (o oficial, com selo azul).</li><li>Envie <b>/newbot</b>, escolha um nome (ex.: Achadinhos da Anninha) e um usuário terminado em <b>bot</b>.</li>' +
+      '<li>O BotFather responde com o <b>token</b>. Copie e cole aqui. Ele fica guardado criptografado e nunca volta para esta tela.</li></ol></section>';
+  }
+
   function viewConexoes() {
     var c = state.conn || {};
     var m = state.mkts || { SH: {}, ML: {} };
@@ -470,7 +636,7 @@
       '<li>Copie o <b>Client ID</b> e a <b>Client Secret</b> para cá e clique em Salvar e autorizar. Na página do Mercado Livre, aceite.</li>' +
       '<li>A comissão padrão vale para as categorias que você não preencher na tabela abaixo.</li></ol>' +
       (ml.authorized ? shipZipCard() + commissionTableCard(ml) : '') + '</section>';
-    return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar e Instagram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard +
+    return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar, Instagram e Telegram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard + telegramCard() +
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
       (c.public_media === false ? '<p class="err">Este servidor está em endereço local. O Instagram só consegue ler fotos e vídeos de uma URL pública, então a publicação vai falhar até você configurar APP_URL com o seu domínio.</p>' : '') +
@@ -492,7 +658,7 @@
     var scroll = window.scrollY;
     if (state.loading) { app.innerHTML = '<p class="hint" style="padding-top:40vh;text-align:center">Carregando…</p>'; return; }
     if (!state.user) { app.innerHTML = viewLogin(); return; }
-    var body = state.tab === 'garimpar' ? viewGarimpar() : state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
+    var body = state.tab === 'garimpar' ? viewGarimpar() : state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'piloto' ? viewPiloto() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
     app.innerHTML = shell(body);
     window.scrollTo(0, scroll);
   }
@@ -616,6 +782,19 @@
     'disconnect-ig': function () { return api('DELETE', '/api/connections/instagram').then(reload).then(function () { toast('Instagram desconectado'); }); },
     'disconnect-sh': function () { return api('DELETE', '/api/connections/shopee').then(reload).then(function () { toast('Shopee desconectada'); }); },
     'disconnect-ml': function () { return api('DELETE', '/api/connections/mercadolivre').then(reload).then(function () { toast('Mercado Livre desconectado'); }); },
+    'auto-new': function () { autoDialog(null); },
+    'tg-find': function () {
+      return api('GET', '/api/connections/telegram/chats').then(function (r) {
+        state.tgChats = r.chats;
+        if (!r.chats.length) toast('Não achei grupos ainda. Adicione o bot no grupo/canal, mande uma mensagem lá e tente de novo.');
+        render();
+      });
+    },
+    'tg-change': function () { return api('GET', '/api/connections/telegram/chats').then(function (r) { state.tgChats = r.chats; state.tg.ready = false; render(); }); },
+    'disconnect-tg': function () {
+      if (!confirm('Desconectar o Telegram? Os pilotos param de postar lá.')) return null;
+      return api('DELETE', '/api/connections/telegram').then(function () { state.tgChats = null; toast('Telegram desconectado'); return reload(); });
+    },
     'ml-authorize': function () { window.location.href = '/api/connections/mercadolivre/authorize'; },
     'g-more': function () { return garimpar(state.g.page + 1); },
     'g-all': function () {
@@ -887,8 +1066,9 @@
   }
 
   /** Carrega a foto pelo repasse (mesmo endereço do app) e re-codifica em JPEG (compartilhar) e PNG (copiar). */
+  var waPreps = {}; // url -> preparo da foto (reaproveitado entre a janela de postar e a Fila)
   function prepareWaImage(url) {
-    if (post.waPrep && post.waPrep.url === url) return post.waPrep.promise;
+    if (waPreps[url]) { if (post) post.waPrep = waPreps[url]; return waPreps[url].promise; }
     var prep = { url: url, value: null };
     prep.promise = new Promise(function (resolve, reject) {
       var img = new Image();
@@ -905,9 +1085,41 @@
         return prep.value;
       });
     });
-    prep.promise.catch(function () {});
-    post.waPrep = prep;
+    prep.promise.catch(function () { delete waPreps[url]; });
+    waPreps[url] = prep;
+    if (post) post.waPrep = prep;
     return prep.promise;
+  }
+
+  /**
+   * Fila: compartilha um item do WhatsApp com a foto do produto. No celular abre o menu de compartilhar
+   * (foto + texto) e, ao concluir, marca como postado. No computador copia a foto (ou baixa) e o texto vai pelo "Copiar texto".
+   */
+  function shareQueueWa(q) {
+    if (!q) return null;
+    var text = capValue(q.id) || q.caption;
+    var url = q.product_image;
+    if (!url) { copyText(text); window.open(waLink(text), '_blank', 'noopener'); return null; }
+    var prep = waPreps[url];
+    if (!prep || !prep.value) {
+      toast('Preparando a foto…');
+      return prepareWaImage(url).then(function () { toast('Foto pronta: toque de novo em "Compartilhar com foto".'); });
+    }
+    var v = prep.value;
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [v.file] })) {
+      copyText(text);
+      return navigator.share({ files: [v.file], text: text }).then(function () {
+        return api('POST', '/api/queue/' + q.id + '/mark-posted').then(function () { toast('Enviado e marcado como postado'); return reload(); });
+      }, function (e) { if (e && e.name === 'AbortError') return null; throw new Error('Não consegui abrir o compartilhar: ' + e.message); });
+    }
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      return navigator.clipboard.write([new ClipboardItem({ 'image/png': v.png })]).then(function () {
+        toast('Foto copiada! Cole no WhatsApp (Ctrl+V), depois use "Copiar texto" e cole na legenda. No fim, "Marcar como postado".');
+      }, function () { downloadFile(v.file); toast('Baixei a foto: anexe no WhatsApp e cole o texto na legenda.'); });
+    }
+    downloadFile(v.file);
+    toast('Baixei a foto: anexe no WhatsApp e cole o texto na legenda.');
+    return null;
   }
 
   /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
@@ -1080,7 +1292,7 @@
     'post-wa-share': function () {
       var url = waPhotoUrl();
       if (!url) throw new Error('Escolha uma foto ou use "Só o texto".');
-      var ready = post.waPrep && post.waPrep.url === url && post.waPrep.value;
+      var ready = waPreps[url] && waPreps[url].value;
       var run = function (v) {
         if (navigator.canShare && navigator.share && navigator.canShare({ files: [v.file] })) {
           copyText(post.caption);
@@ -1134,6 +1346,30 @@
     if (d.act && actions[d.act]) return actions[d.act](t);
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; return render(); }
+    if (d.qfilter !== undefined) { state.qfilter = d.qfilter; return render(); }
+    if (d.autoEdit) return autoDialog(autoById(d.autoEdit));
+    if (d.autoDel) {
+      if (!confirm('Excluir este piloto? O histórico dele também some.')) return null;
+      return api('DELETE', '/api/automations/' + d.autoDel).then(function () { toast('Piloto excluído'); return reload(); });
+    }
+    if (d.autoRuns) {
+      if (runsOpen[d.autoRuns]) { delete runsOpen[d.autoRuns]; return render(); }
+      return loadRuns(d.autoRuns).then(render);
+    }
+    if (d.autoRun) {
+      t.disabled = true; t.textContent = 'Rodando…';
+      return api('POST', '/api/automations/' + d.autoRun + '/run').then(function (r) {
+        toast(r.status === 'sent' ? 'Enviado: ' + r.title : r.status === 'empty' ? (r.error || 'Nenhuma oferta nova agora.') : 'Problema: ' + (r.error || Object.keys(r.channels || {}).map(function (k) { return CH_NAMES[k] + ': ' + r.channels[k]; }).join(' · ')));
+        return loadRuns(d.autoRun).then(reload);
+      }).catch(function (err) { return reload().then(function () { throw err; }); });
+    }
+    if (d.tgchat) {
+      t.disabled = true;
+      return api('PUT', '/api/connections/telegram/chat', { chat_id: d.tgchat }).then(function (r) {
+        state.tgChats = null; toast('Pronto! Mandei uma mensagem de teste em ' + r.chat_title); return reload();
+      }).catch(function (err) { t.disabled = false; throw err; });
+    }
+    if (d.washare) return shareQueueWa(queueItem(d.washare));
     if (d.trend) { state.g.q = d.trend; state.g.category = ''; return garimpar(1); }
     if (d.history) return showHistory(state.products.filter(function (x) { return x.id === Number(d.history); })[0]);
     if (d.pmedia && post) return toggleMedia(d.ptype === 'video' ? 'video' : 'image', d.pmedia);
@@ -1231,6 +1467,10 @@
       state.psel[t.dataset.psel] = t.checked;
       return render();
     }
+    if (t.dataset.autoToggle) {
+      return api('PATCH', '/api/automations/' + t.dataset.autoToggle, { active: t.checked }).then(function () { toast(t.checked ? 'Piloto ligado' : 'Piloto pausado'); return reload(); })
+        .catch(function (err) { return reload().then(function () { throw err; }); });
+    }
     if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
     if (t.id === 'g-cat') {
       state.g.category = t.value;
@@ -1281,6 +1521,19 @@
       var g = Object.fromEntries(new FormData(e.target).entries());
       api('PUT', '/api/connections/instagram', g).then(function (r) { toast('Instagram conectado' + (r.username ? ': @' + r.username : '')); return reload(); })
         .catch(function (err) { var el = $('#ig-err'); if (el) el.textContent = err.message; });
+    } else if (e.target.id === 'tg-form' || e.target.id === 'tgchat-form') {
+      e.preventDefault();
+      var isTok = e.target.id === 'tg-form';
+      var tv = e.target.querySelector('input').value.trim();
+      var tb = e.target.querySelector('button[type="submit"]'); tb.disabled = true;
+      var errEl = e.target.querySelector('.err');
+      (isTok ? api('PUT', '/api/connections/telegram', { token: tv }) : api('PUT', '/api/connections/telegram/chat', { chat_id: tv }))
+        .then(function (r) {
+          if (isTok) { state.tgChats = null; toast('Bot @' + (r.bot || '') + ' conectado. Agora escolha o grupo ou canal.'); }
+          else { state.tgChats = null; toast('Pronto! Mandei uma mensagem de teste em ' + r.chat_title); }
+          return reload();
+        })
+        .catch(function (err) { tb.disabled = false; if (errEl) errEl.textContent = err.message; });
     } else if (e.target.id === 'g-form') {
       e.preventDefault();
       state.g.q = $('#g-q').value.trim();

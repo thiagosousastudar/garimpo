@@ -398,6 +398,13 @@ async function processDue({ pool, cfg, fetchImpl, log = console }) {
       log.error(`[agendador] item ${item.id}: ${e.message}`);
     }
   }
+
+  // Piloto automático (carregado aqui para evitar dependência circular com este módulo)
+  try {
+    result.autopilot = (await require('./automation').runDue({ pool, cfg, fetchImpl, log })).length;
+  } catch (e) {
+    log.error(`[piloto] ${e.message}`);
+  }
   return result;
 }
 

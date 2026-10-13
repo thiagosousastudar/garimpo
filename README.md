@@ -18,6 +18,8 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 - **Capa de conversão** (botão ✨ Criar capa no Postar agora): imagem 1080×1350 desenhada no navegador com preço, "de/por", selo de desconto, ranking, frete grátis/Full, loja oficial, chamada "link na bio" e o seu @. Modelos Oferta, Achadinho do dia e Top N (vários produtos). Cor da marca e @ ficam salvos. A capa entra como 1ª imagem do post. As fotos das lojas passam por `/api/media/proxy` (só hosts do Mercado Livre, Shopee e do próprio Storage).
 - **Fila e histórico** (opcional): guardar posts para depois, editar, publicar quando quiser e, se quiser, agendar. Tudo o que foi postado fica registrado.
 - **Publicação no Instagram** pela API oficial da Meta: foto na hora; Reels em duas etapas (o Instagram processa o vídeo e o painel conclui a publicação). O agendamento é opcional e depende do agendador (pg_cron) só para os posts agendados.
+- **Piloto automático** (aba Piloto): configure de onde vêm as ofertas (seus produtos salvos com link de afiliado, filtrados por loja e palavras-chave, e buscas na API de afiliados da Shopee quando liberada), filtros (desconto, comissão, faixa de preço, frete), janela de horário, ritmo (1 oferta a cada 15 min a 4 h), período "não repetir" e canais. A cada rodada sai 1 oferta, sorteada entre as melhores notas, com o preço do Mercado Livre conferido. **Instagram** publica direto (limite diário por piloto), **Telegram** posta no grupo/canal pelo bot oficial e **WhatsApp** fica pronto na Fila (filtro "WhatsApp a enviar" e botão "📷 Compartilhar com foto", que no celular abre o compartilhar com a foto e o texto e marca como postado). Só sai oferta com o seu link de afiliado. Roda pelo agendador (pg_cron a cada minuto); "Rodar agora" testa na hora. Histórico de cada rodada com o motivo quando nada sai.
+- **Telegram** (Conexões): crie um bot no @BotFather, cole o token (guardado criptografado), adicione o bot como administrador do grupo/canal e escolha-o na lista (ou digite o @ do canal). Uma mensagem de teste confirma.
 - **Ganhos**: lançamentos manuais ou importação de CSV, com resumo por dia, canal e produto, valor a receber e já recebido.
 - **Segurança**: Postgres com RLS ligado, token do Instagram criptografado (AES-256-GCM), mídia enviada direto do navegador para o Supabase Storage.
 
@@ -25,7 +27,7 @@ Pensado para **Git + Vercel + Supabase**. Também roda em servidor próprio com 
 
 - Importação automática de comissões ganhas (relatórios) das plataformas.
 - Link de afiliado e comissão do Mercado Livre pela API: a API não oferece. A comissão usa um padrão definido em Conexões e o link é colado no produto (gerado no portal de Afiliados).
-- Envio automático para grupos do WhatsApp (não há API oficial para grupos); o painel abre o WhatsApp com o texto pronto.
+- Envio automático para grupos do WhatsApp: não há API oficial para grupos, e ferramentas não oficiais (conexão por QR code) arriscam banir o número. O piloto deixa a oferta pronta na Fila e o envio é feito por você, com foto, em um toque.
 - Recuperação de senha por e-mail e vários usuários por conta.
 
 ## Publicar: Git, Supabase e Vercel

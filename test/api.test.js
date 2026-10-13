@@ -55,6 +55,18 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       }
       return json(200, { username: 'loja_teste' });
     }
+    if (u.hostname === 'api.telegram.org') {
+      const tg = shopee.tg || (shopee.tg = { sent: [] });
+      const method = u.pathname.split('/').pop();
+      const b = JSON.parse(opts.body || '{}');
+      log[log.length - 1].tg = { method, ...b };
+      if (!u.pathname.includes('/bot123456:')) return json(401, { ok: false, error_code: 401, description: 'Unauthorized' });
+      if (method === 'getMe') return json(200, { ok: true, result: { id: 1, username: 'anninha_bot', first_name: 'Anninha' } });
+      if (method === 'getUpdates') return json(200, { ok: true, result: [{ my_chat_member: { chat: { id: -1001234567890, title: 'Achadinhos da Anninha', type: 'supergroup' } } }, { message: { chat: { id: 55, type: 'private' } } }] });
+      if (method === 'getChat') return b.chat_id === '@naoexiste' ? json(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' }) : json(200, { ok: true, result: { id: -1001234567890, title: 'Achadinhos da Anninha', type: 'supergroup' } });
+      tg.sent.push({ method, ...b });
+      return json(200, { ok: true, result: { message_id: tg.sent.length } });
+    }
     if (u.hostname === 'api.anthropic.com') {
       return json(200, { content: [{ type: 'text', text: 'Legenda gerada pela IA' }] });
     }
@@ -1493,5 +1505,113 @@ test('preço com variações (kits): "a partir de", "até R$" validado e texto h
     assert.equal(s.data.saved, 2);
     const byId = Object.fromEntries((await api('GET', '/api/products')).data.products.map((x) => [x.external_id, x]));
     assert.deepEqual([byId['1.2'].price_max, byId['1.3'].price_max], [35.5, undefined]);
+  } finally { t.close(); }
+});
+test('Telegram: conecta o bot, escolhe o grupo, testa e o token não aparece', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const TG = '123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789';
+    assert.equal((await api('PUT', '/api/connections/telegram', { token: 'abc' })).status, 400);
+    const bad = await api('PUT', '/api/connections/telegram', { token: '999999:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789' });
+    assert.equal(bad.status, 400);
+    assert.ok(!JSON.stringify(bad.data).includes('ABCdefGHI'), 'erro não mostra o token');
+    const ok = await api('PUT', '/api/connections/telegram', { token: TG });
+    assert.equal(ok.status, 200, JSON.stringify(ok.data));
+    const chats = await api('GET', '/api/connections/telegram/chats');
+    assert.deepEqual(chats.data.chats.map((c) => c.title), ['Achadinhos da Anninha']);
+    assert.equal((await api('PUT', '/api/connections/telegram/chat', { chat_id: '@naoexiste' })).status, 400);
+    const pick = await api('PUT', '/api/connections/telegram/chat', { chat_id: '-1001234567890' });
+    assert.equal(pick.status, 200, JSON.stringify(pick.data));
+    const st = await api('GET', '/api/connections/telegram');
+    assert.equal(st.data.ready, true);
+    assert.equal(st.data.chat_title, 'Achadinhos da Anninha');
+    assert.ok(!JSON.stringify(st.data).includes('ABCdef'));
+    const enc = (await t.pool.query('select tg_token_enc from connections')).rows[0].tg_token_enc;
+    assert.ok(!enc.includes('ABCdef'), 'token guardado criptografado');
+    assert.equal(opts.shopee.tg.sent.length, 1, 'mensagem de teste enviada');
+    assert.equal((await api('DELETE', '/api/connections/telegram')).status, 200);
+    assert.equal((await api('GET', '/api/connections/telegram')).data.connected, false);
+  } finally { t.close(); }
+});
+
+test('piloto automático: filtros, só com link de afiliado, não repete, janela, Telegram, Instagram com limite e WhatsApp na Fila', async () => {
+  const opts = { shopee: {}, meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const { runDue, inWindow, cleanConfig } = require('../src/services/automation');
+    assert.equal(inWindow('23:30', { start: '20:00', end: '02:00' }), true);
+    assert.equal(inWindow('12:00', { start: '20:00', end: '02:00' }), false);
+    assert.throws(() => cleanConfig({ sources: { saved: true }, channels: {} }), /canal/);
+
+    const mk = (o) => api('POST', '/api/products', { ...PRODUTO, ...o });
+    const a = (await mk({ title: 'Air Fryer Boa', marketplace: 'SH' })).data.product; // 42% off, com link
+    await mk({ title: 'Fone Sem Desconto', marketplace: 'SH', original_price: '', affiliate_url: 'https://s.shopee.com.br/x1' });
+    await mk({ title: 'Panela Sem Link', marketplace: 'SH', affiliate_url: '' });
+
+    await api('PUT', '/api/connections/telegram', { token: '123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789' });
+    await api('PUT', '/api/connections/telegram/chat', { chat_id: '-1001234567890' });
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+
+    assert.equal((await api('POST', '/api/automations', { name: 'x', config: { sources: { saved: false }, channels: { telegram: true } } })).status, 400);
+    const cfg = { sources: { saved: true, marketplaces: ['SH'] }, filters: { min_discount: 30 }, window: { start: '00:00', end: '23:59' },
+      interval_min: 60, dedup_days: 7, channels: { instagram: true, telegram: true, whatsapp: true }, ig_daily_max: 1 };
+    const created = await api('POST', '/api/automations', { name: 'Ofertas Shopee', config: cfg });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    const id = created.data.id;
+
+    // rodada 1: só a Air Fryer passa (desconto e link); vai para os 3 canais
+    const r1 = await api('POST', `/api/automations/${id}/run`);
+    assert.equal(r1.status, 200, JSON.stringify(r1.data));
+    assert.equal(r1.data.status, 'sent', JSON.stringify(r1.data));
+    assert.equal(r1.data.title, 'Air Fryer Boa');
+    assert.equal(r1.data.channels.telegram, 'enviado');
+    assert.equal(r1.data.channels.instagram, 'publicado');
+    assert.match(r1.data.channels.whatsapp, /Fila/);
+    const photo = opts.shopee.tg.sent.find((m) => m.method === 'sendPhoto' && m.caption);
+    assert.ok(photo, 'Telegram recebeu foto com legenda');
+    assert.match(photo.caption, /<b>/);
+    const q = (await api('GET', '/api/queue')).data.items;
+    assert.ok(q.find((i) => i.channel === 'whatsapp' && i.automation_id === id && i.status === 'draft' && i.product_id === a.id));
+    assert.ok(q.find((i) => i.channel === 'instagram' && i.automation_id === id && i.status === 'posted'));
+
+    // logo em seguida: espera 20 s
+    assert.equal((await api('POST', `/api/automations/${id}/run`)).status, 429);
+
+    // rodada 2 (agendador, uma hora depois): nada novo (não repete), registra o motivo
+    await t.pool.query(`update automations set last_run_at = $1`, [new Date(Date.now() - 2 * 3600e3).toISOString()]);
+    const res = await runDue({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } });
+    assert.equal(res.length, 1);
+    assert.equal(res[0].status, 'empty');
+    // ainda no ritmo: não roda de novo
+    assert.equal((await runDue({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } })).length, 0);
+
+    // nova oferta: Instagram bloqueado pelo limite diário (1), Telegram e WhatsApp seguem
+    await mk({ title: 'Mixer Top', marketplace: 'SH', affiliate_url: 'https://s.shopee.com.br/mx' });
+    await t.pool.query(`update automations set last_run_at = $1`, [new Date(Date.now() - 2 * 3600e3).toISOString()]);
+    const [r3] = await runDue({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } });
+    assert.equal(r3.title, 'Mixer Top');
+    assert.match(r3.channels.instagram, /limite diário/);
+    assert.equal(r3.channels.telegram, 'enviado');
+
+    // pausado: não roda
+    await api('PATCH', `/api/automations/${id}`, { active: false });
+    await t.pool.query(`update automations set last_run_at = null`);
+    assert.equal((await runDue({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } })).length, 0);
+
+    const runs = await api('GET', `/api/automations/${id}/runs`);
+    assert.equal(runs.data.items.length, 3);
+    const list = await api('GET', '/api/automations');
+    assert.equal(list.data.items[0].sent_total, 2);
+
+    // outro usuário não vê nem roda
+    const other = t.client();
+    await signup(other, 'b@exemplo.com');
+    assert.equal((await other('POST', `/api/automations/${id}/run`)).status, 404);
+    assert.equal((await other('GET', '/api/automations')).data.items.length, 0);
   } finally { t.close(); }
 });
