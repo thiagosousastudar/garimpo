@@ -3,11 +3,11 @@ const { HttpError, parseNum, parseCsv } = require('../util');
 const { search, trends, categories, enrich, clientFor, externalIdFrom } = require('../services/garimpo');
 const { previewLink, fromShopeeBatch, fillImages } = require('../services/linkpreview');
 const { scoreProduct } = require('../services/score');
-const { serializeExtras } = require('../services/extras');
+const { serializeExtras, parseExtras, mergeExtras } = require('../services/extras');
 const { parseBody, insertProduct, mapProduct } = require('./products');
 
 const MARKETS = ['ML', 'SH'];
-const SORTS = ['relevancia', 'vendidos', 'comissao', 'preco', 'nota'];
+const SORTS = ['relevancia', 'ganho', 'vendidos', 'comissao', 'desconto', 'preco', 'nota'];
 const EXTERNAL_ID = { ML: /^MLB\d+$/, SH: /^\d+\.\d+$/ };
 
 /** Garimpo sob demanda: busca nas lojas na hora em que o usuário pede e salva só o que ele escolher. */
@@ -81,14 +81,33 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     if (!items.length) throw new HttpError(400, 'A planilha está vazia.');
     if (items.length > 200) throw new HttpError(400, 'Envie no máximo 200 produtos por vez.');
     await fillImages(items, fetchImpl);
+    let updated = 0;
     for (const it of items) {
       if (it.external_id) {
-        const { rows } = await pool.query('select id from products where user_id = $1 and marketplace = $2 and external_id = $3', [req.uid, 'SH', it.external_id]);
-        it.saved_id = rows[0]?.id || null;
+        const { rows } = await pool.query('select id, commission_pct, sales_k, affiliate_url, extras from products where user_id = $1 and marketplace = $2 and external_id = $3', [req.uid, 'SH', it.external_id]);
+        const cur = rows[0];
+        it.saved_id = cur?.id || null;
+        // Produto já salvo (ex.: cadastrado por link, sem comissão): completa com o que a planilha traz.
+        // Comissão digitada pelo usuário fica; a que veio da loja é atualizada.
+        if (cur) {
+          const sets = [];
+          const vals = [];
+          const autoCom = cur.commission_pct === null || parseExtras(cur.extras).commission_auto;
+          if (it.commission_pct !== null && autoCom && Number(cur.commission_pct) !== it.commission_pct) {
+            vals.push(it.commission_pct); sets.push(`commission_pct = $${vals.length + 2}`);
+            vals.push(mergeExtras(cur.extras, { commission_auto: true })); sets.push(`extras = $${vals.length + 2}`);
+          }
+          if (it.sales_k !== null && Number(cur.sales_k) !== it.sales_k) { vals.push(it.sales_k); sets.push(`sales_k = $${vals.length + 2}`); }
+          if (!cur.affiliate_url && it.affiliate_url) { vals.push(it.affiliate_url); sets.push(`affiliate_url = $${vals.length + 2}`); }
+          if (sets.length) {
+            await pool.query(`update products set ${sets.join(', ')} where id = $1 and user_id = $2`, [cur.id, req.uid, ...vals]);
+            updated++;
+          }
+        }
       }
       if (it.price) Object.assign(it, scoreProduct(it));
     }
-    res.json({ items });
+    res.json({ items, updated });
   });
 
   r.get('/categories', async (req, res) => {

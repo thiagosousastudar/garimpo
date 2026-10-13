@@ -120,6 +120,8 @@ const SORTERS = {
   // Ranking de mais vendidos do Mercado Livre primeiro (1º, 2º...), depois volume de vendas
   vendidos: (a, b) => (a.best_seller_rank || 1e9) - (b.best_seller_rank || 1e9) || (b.sales_k || 0) - (a.sales_k || 0),
   comissao: (a, b) => (b.commission_pct || 0) - (a.commission_pct || 0),
+  ganho: (a, b) => (b.earn_per_sale || 0) - (a.earn_per_sale || 0),
+  desconto: (a, b) => (b.desc || 0) - (a.desc || 0),
   preco: (a, b) => a.price - b.price,
   nota: (a, b) => b.score - a.score,
 };

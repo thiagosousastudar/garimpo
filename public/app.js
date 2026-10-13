@@ -53,7 +53,7 @@
     products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
     mkt: 'todos', cat: 'todas', comMin: 0, ordem: 'score', days: 14, authMode: 'login',
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
-    g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
+    g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', onlyCom: false, sheetBusy: false, minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
     shipFilter: '', // filtro de frete na aba Produtos ('', 'free', 'cheap')
     shipZip: null, // CEP de referência do frete
     psel: {}, // produtos marcados para postar juntos (carrossel)
@@ -167,12 +167,14 @@
   function selectEl(id, name, label, opts, cur) {
     return '<select id="' + id + '" name="' + name + '" aria-label="' + label + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
   }
+  /** Vendas em milhares -> "72 vendidos" ou "8,5 mil vendidos". */
+  function fmtSales(k) { return k >= 1 ? String(Math.round(k * 10) / 10).replace('.', ',') + ' mil vendidos' : Math.round(k * 1000) + ' vendidos'; }
   function statsBlock(p) {
     var hasCom = p.commission_pct != null;
     var fix = p.marketplace === 'ML' ? '<button class="link small" data-tab="conexoes" title="Preencha a tabela de comissão por categoria em Conexões">definir</button>' : '—';
     return '<div class="stats"><div><span>Comissão</span><b class="num">' + (hasCom ? p.commission_pct + '%' : fix) + '</b></div>' +
       '<div><span>Você ganha</span><b class="num earn">' + (hasCom ? brl(p.earn_per_sale) : '—') + '</b><small class="hint">' + (hasCom ? 'por venda' : 'sem comissão') + '</small></div>' +
-      '<div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + (p.sales_k ? ' · ' + p.sales_k + ' mil' : '') + '</b></div></div>';
+      (p.rating || !p.sales_k ? '<div><span>Avaliação</span><b class="num">' + (p.rating ? '★ ' + Number(p.rating).toFixed(1) : '—') + '</b>' + (p.sales_k ? '<small class="hint">' + fmtSales(p.sales_k) + '</small>' : '') + '</div>' : '<div><span>Vendas</span><b class="num">' + fmtSales(p.sales_k) + '</b></div>') + '</div>';
   }
   /** Selos da oferta: ranking, frete grátis, Full, loja oficial, nº de vendedores. */
   function badges(p) {
@@ -220,45 +222,134 @@
       (range ? '<span class="hint num">até ' + brl(p.price_max) + ' conforme a opção</span>' : '') + '</div>';
   }
 
+  var G_SORTS = [['relevancia', 'Recomendados (ordem da loja)'], ['ganho', 'Maior ganho por venda (R$)'], ['vendidos', 'Mais vendidos'], ['comissao', 'Maior comissão (%)'],
+    ['desconto', 'Maior desconto'], ['preco', 'Menor preço'], ['nota', 'Melhor nota geral']];
+  var G_SORTERS = {
+    ganho: function (a, b) { return (b.earn_per_sale || 0) - (a.earn_per_sale || 0); },
+    vendidos: function (a, b) { return (a.best_seller_rank || 1e9) - (b.best_seller_rank || 1e9) || (b.sales_k || 0) - (a.sales_k || 0); },
+    comissao: function (a, b) { return (b.commission_pct || 0) - (a.commission_pct || 0); },
+    desconto: function (a, b) { return (b.desc || 0) - (a.desc || 0); },
+    preco: function (a, b) { return a.price - b.price; },
+    nota: function (a, b) { return b.score - a.score; },
+  };
+  /** Mesma nota do servidor (score.js): 30% desconto, 30% comissão, 20% avaliação, 20% vendas. */
+  function scoreOf(p) {
+    var cl = function (x) { return Math.max(0, Math.min(1, x)); };
+    var desc = p.original_price > p.price ? Math.round((1 - p.price / p.original_price) * 100) : 0;
+    var com = Number(p.commission_pct) || 0;
+    p.desc = desc;
+    p.earn_per_sale = Math.round(p.price * com) / 100;
+    p.score = Math.round(100 * (0.3 * cl(desc / 60) + 0.3 * cl(com / 16) + 0.2 * cl(((Number(p.rating) || 0) - 4) / 1) + 0.2 * cl((Number(p.sales_k) || 0) / 20)));
+    return p;
+  }
+  /** Resultados na ordem e no filtro escolhidos, guardando o índice original (a seleção usa o índice). */
+  function gView() {
+    var g = state.g;
+    var list = g.results.map(function (p, i) { return { p: p, i: i }; }).filter(function (x) { return !g.onlyCom || x.p.commission_pct != null; });
+    var s = G_SORTERS[g.sort];
+    if (s) list.sort(function (a, b) { return s(a.p, b.p) || a.i - b.i; });
+    return list;
+  }
+  /** Destaques entre os resultados: maior ganho, mais vendido e maior desconto. */
+  function gHighlights(list) {
+    var best = function (key) {
+      var top = null, topV = null;
+      list.forEach(function (x) { var v = key(x.p); if (v != null && v > 0 && (topV === null || v > topV)) { top = x; topV = v; } });
+      return top;
+    };
+    var earn = best(function (p) { return p.commission_pct != null ? p.earn_per_sale : null; });
+    var sold = best(function (p) { return p.best_seller_rank ? 1e6 - p.best_seller_rank : p.sales_k || null; });
+    var off = best(function (p) { return p.desc || null; });
+    var tags = {};
+    var add = function (x, t) { if (x) tags[x.i] = (tags[x.i] || []).concat(t); };
+    add(earn, '🏆 Maior ganho'); add(sold, '🔥 Mais vendido'); add(off, '💥 Maior desconto');
+    return { tags: tags, earn: earn, sold: sold, off: off };
+  }
+  function mlComMissing() {
+    var ml = (state.mkts || {}).ML || {};
+    return ml.default_commission == null && !Object.keys(ml.commission_table || {}).length;
+  }
+  /** Mercado Livre sem comissão nesta categoria: campo para preencher ali mesmo (vale para a categoria toda). */
+  function setComInline(p) {
+    if (p.marketplace !== 'ML' || p.commission_pct != null || !p.category_id) return '';
+    return '<div class="setcom"><span>Comissão em <b>' + esc(p.category || 'esta categoria') + '</b>:</span><input type="text" inputmode="decimal" data-comcat="' + esc(p.category_id) + '" placeholder="Ex.: 8" aria-label="Comissão em ' + esc(p.category || '') + ' (%)"><em>%</em>' +
+      '<button type="button" class="btn small" data-comsave="' + esc(p.category_id) + '">OK</button></div>';
+  }
+  function shopeeSheetCard(apiReady) {
+    var g = state.g;
+    return '<section class="card sheetcard"><h3>📄 Garimpar pela planilha da Shopee</h3>' +
+      '<p class="hint">' + (apiReady ? 'Outra forma de garimpar: ' : 'Enquanto a API da Shopee não é liberada, garimpe assim. ') + 'A planilha traz <b>preço, comissão, vendas e o seu link de afiliado</b> de até 100 produtos de uma vez.</p>' +
+      '<ol class="steps"><li>No portal de afiliados da Shopee, abra <b>Ofertas de produtos</b> e ordene por <b>maior comissão</b> ou <b>mais vendidos</b> (dá para filtrar por categoria).</li>' +
+      '<li>Marque os produtos (ou "selecionar todos") e clique em <b>Obter link em massa</b> → baixar CSV.</li>' +
+      '<li>Envie o arquivo aqui. Produtos que você já salvou ganham a comissão e as vendas que faltavam.</li></ol>' +
+      '<div class="row"><label class="btn primary" for="g-sheet"' + (g.sheetBusy ? ' aria-disabled="true"' : '') + '>' + (g.sheetBusy ? 'Lendo a planilha e buscando as fotos…' : 'Enviar planilha (CSV)') + '</label>' +
+      '<input id="g-sheet" class="file-input" type="file" accept=".csv,text/csv" hidden' + (g.sheetBusy ? ' disabled' : '') + '>' +
+      (g.sheetBusy ? '<span class="hint">pode levar até 1 minuto</span>' : '') + '</div></section>';
+  }
+
   function viewGarimpar() {
     var g = state.g;
     var ready = mktReady(g.mkt);
     var chips = [['ML', 'Mercado Livre'], ['SH', 'Shopee']].map(function (m) {
-      return '<button type="button" class="chip" data-gmkt="' + m[0] + '" aria-pressed="' + (g.mkt === m[0]) + '">' + m[1] + (mktReady(m[0]) ? '' : ' · desconectado') + '</button>';
+      return '<button type="button" class="chip" data-gmkt="' + m[0] + '" aria-pressed="' + (g.mkt === m[0]) + '">' + m[1] + (m[0] === 'ML' && !mktReady('ML') ? ' · desconectado' : '') + '</button>';
     }).join('');
-    var sorts = [['relevancia', 'Mais relevantes'], ['vendidos', 'Mais vendidos'], ['comissao', 'Maior comissão'], ['preco', 'Menor preço'], ['nota', 'Maior nota']];
     var form = '<form class="card" id="g-form"><div class="filters" style="padding:0">' + chips + '</div>' +
-      '<div class="row"><input id="g-q" name="q" type="search" class="grow gq" placeholder="O que você quer garimpar? Ex.: air fryer, fone bluetooth" value="' + esc(g.q) + '" required minlength="2" aria-label="Busca"' + (ready ? '' : ' disabled') + '>' +
-      '<button class="btn primary" type="submit"' + (ready && !g.busy ? '' : ' disabled') + '>' + (g.busy ? 'Garimpando…' : 'Garimpar agora') + '</button></div>' +
-      '<div class="filters" style="padding:0">' + selectEl('g-sort', 'sort', 'Ordenar por', sorts, g.sort) +
-      selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
-      (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
-        selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) :
-        selectEl('g-ship', 'ship', 'Frete', SHIP_OPTS, g.ship)) + '</div>' +
+      (ready ? '<div class="row"><input id="g-q" name="q" type="search" class="grow gq" placeholder="O que você quer garimpar? Ex.: air fryer, fone bluetooth" value="' + esc(g.q) + '" required minlength="2" aria-label="Busca">' +
+        '<button class="btn primary" type="submit"' + (!g.busy ? '' : ' disabled') + '>' + (g.busy ? 'Garimpando…' : 'Garimpar agora') + '</button></div>' +
+        '<div class="filters" style="padding:0">' +
+        selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
+        (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
+          selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) :
+          selectEl('g-ship', 'ship', 'Frete', SHIP_OPTS, g.ship)) + '</div>' : '') +
       (g.mkt === 'ML' && ready ? mlExplore(g) : '') + '</form>';
 
-    var note = g.mkt === 'ML' ? '<div class="rule">Primeiro vêm os mais vendidos da categoria (com a posição no ranking), depois os demais produtos com vendedor ativo. O preço é o da oferta mais barata. O Mercado Livre não informa a comissão de afiliado, a avaliação nem o seu link de afiliado: a comissão usa o padrão de Conexões e o link você gera no portal de Afiliados e cola no produto (botão Editar).</div>' : '';
-    if (!ready) {
-      return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form +
-        '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no ' + mktName(g.mkt) + ', conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
+    var head = '<div class="pagehead"><h2>Garimpar</h2><p>Encontre os produtos que mais vendem e que mais pagam comissão, compare e salve os melhores.</p></div>';
+    var pre = '';
+    if (g.mkt === 'SH') pre = shopeeSheetCard(ready);
+    else if (!ready) {
+      return head + form + '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no Mercado Livre, conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
+    } else if (mlComMissing()) {
+      pre = '<div class="rule warnbox"><b>Sem a comissão, não dá para saber quanto você ganha.</b> O Mercado Livre não informa a comissão de afiliado pela API. ' +
+        'Veja os percentuais no seu painel de Afiliados do Mercado Livre e preencha direto nos produtos abaixo (campo "Comissão em…", vale para a categoria inteira) ou de uma vez em <button type="button" class="link" data-tab="conexoes">Conexões → Comissão por categoria</button>.</div>';
     }
+
+    var list = gView();
+    var hl = gHighlights(list);
     var nsel = Object.keys(g.sel).filter(function (k) { return g.sel[k]; }).length;
-    var cards = g.results.map(function (p, i) {
+    var cards = list.map(function (x) {
+      var p = x.p, i = x.i;
       var picked = Boolean(g.sel[i]);
-      return '<article class="card' + (picked ? ' picked' : '') + '">' + thumb(p) +
-        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + '</div></div>' +
-        '<div class="score" title="Nota de prioridade"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
-        badges(p) + priceBlock(p) + shipInfo(p) + statsBlock(p) +
+      var tags = (hl.tags[i] || []).map(function (t) { return '<span class="tag hl">' + t + '</span>'; }).join('');
+      return '<article class="card' + (picked ? ' picked' : '') + '" id="gres-' + i + '">' + thumb(p) +
+        '<div class="prod"><div><h3>' + esc(p.title) + '</h3><div class="meta">' + mktTag(p.marketplace) + (p.shop ? '<span>' + esc(p.shop) + '</span>' : '') + (p.category ? '<span>' + esc(p.category) + '</span>' : '') + '</div></div>' +
+        '<div class="score" title="Nota de prioridade: desconto, comissão, avaliação e vendas"><div><b class="num">' + p.score + '</b><small>nota</small></div></div></div>' +
+        (tags ? '<div class="badges">' + tags + '</div>' : '') + badges(p) + priceBlock(p) + shipInfo(p) + statsBlock(p) + setComInline(p) +
+        (p.marketplace === 'ML' && !p.affiliate_url && !p.saved_id ? '<p class="hint small">Depois de salvar, gere o seu link no portal de Afiliados e cole no produto (Editar).</p>' : '') +
         '<div class="row">' + (p.saved_id ? '<span class="pill posted">Já salvo</span>' : '<label class="pick"><input type="checkbox" data-gpick="' + i + '"' + (picked ? ' checked' : '') + '> Selecionar</label>') +
         '<span class="grow"></span>' + (p.product_url ? '<a class="btn small ghost" href="' + esc(safeUrl(p.product_url)) + '" target="_blank" rel="noopener noreferrer">Ver na loja</a>' : '') + '</div></article>';
     }).join('');
-    var results = g.results.length ? '<div class="grid three" style="margin-top:12px">' + cards + '</div>' :
-      (g.done && !g.busy ? '<div class="empty centered-empty" style="margin-top:12px">Nada encontrado com esses filtros. Tente outra palavra ou afrouxe os filtros.</div>' : '');
-    var bar = g.results.length ? '<div class="gbar"><span class="hint">' + g.results.length + ' resultados · ' + nsel + ' selecionados</span><span class="grow"></span>' +
+
+    var summary = '';
+    if (g.results.length) {
+      var item = function (label, x, val) {
+        return x ? '<button type="button" class="sumit" data-gfocus="' + x.i + '"><span>' + label + '</span><b class="num">' + esc(val) + '</b><small>' + esc(x.p.title.slice(0, 60)) + '</small></button>' : '';
+      };
+      var withCom = g.results.filter(function (p) { return p.commission_pct != null; }).length;
+      summary = '<div class="gsum">' +
+        item('🏆 Maior ganho por venda', hl.earn, hl.earn ? brl(hl.earn.p.earn_per_sale) : '') +
+        item('🔥 Mais vendido', hl.sold, hl.sold ? (hl.sold.p.best_seller_rank ? hl.sold.p.best_seller_rank + 'º no ranking' : fmtSales(hl.sold.p.sales_k)) : '') +
+        item('💥 Maior desconto', hl.off, hl.off ? '−' + hl.off.p.desc + '%' : '') + '</div>' +
+        '<div class="filters gtools">' + selectEl('g-sort', 'sort', 'Ordenar por', G_SORTS, g.sort) +
+        '<label class="check"><input type="checkbox" id="g-onlycom"' + (g.onlyCom ? ' checked' : '') + '> Só com comissão (' + withCom + ' de ' + g.results.length + ')</label></div>';
+    }
+    var results = list.length ? '<div class="grid three" style="margin-top:12px">' + cards + '</div>' :
+      (g.results.length ? '<div class="empty centered-empty" style="margin-top:12px">Nenhum resultado com comissão. Desmarque "Só com comissão" ou preencha a comissão.</div>' :
+        (g.done && !g.busy ? '<div class="empty centered-empty" style="margin-top:12px">Nada encontrado com esses filtros. Tente outra palavra ou afrouxe os filtros.</div>' : ''));
+    var bar = g.results.length ? '<div class="gbar"><span class="hint">' + list.length + ' resultados · ' + nsel + ' selecionados</span><span class="grow"></span>' +
       '<button class="btn small" data-act="g-all">Selecionar todos</button>' +
       (g.more ? '<button class="btn small" data-act="g-more"' + (g.busy ? ' disabled' : '') + '>Carregar mais</button>' : '') +
       '<button class="btn small primary" data-act="g-save"' + (nsel ? '' : ' disabled') + '>Salvar selecionados (' + nsel + ')</button></div>' : '';
-    return '<div class="pagehead"><h2>Garimpar</h2><p>Busque produtos nas lojas na hora que quiser e salve os melhores.</p></div>' + form + note + results + bar;
+    return head + form + pre + summary + results + bar;
   }
 
   /** Atalhos do Mercado Livre: o que está em alta nas buscas e os mais vendidos de uma categoria. */
@@ -1371,6 +1462,23 @@
     if (d.act && actions[d.act]) return actions[d.act](t);
     if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; return render(); }
+    if (d.gfocus !== undefined) { var el = $('#gres-' + d.gfocus); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(function () { el.classList.remove('flash'); }, 1600); } return null; }
+    if (d.comsave) {
+      var inp = document.querySelector('[data-comcat="' + d.comsave + '"]');
+      var pct = Number(String(inp ? inp.value : '').replace(',', '.'));
+      if (!(pct > 0 && pct <= 100)) throw new Error('Digite a comissão em % (ex.: 8).');
+      var ml = (state.mkts && state.mkts.ML) || {};
+      var table = Object.assign({}, ml.commission_table || {});
+      table[d.comsave] = pct;
+      t.disabled = true;
+      return api('PUT', '/api/connections/mercadolivre/commissions', { table: table }).then(function (r) {
+        ml.commission_table = r.table;
+        var n = 0;
+        state.g.results.forEach(function (p) { if (p.marketplace === 'ML' && p.category_id === d.comsave && p.commission_pct == null) { p.commission_pct = pct; scoreOf(p); n++; } });
+        toast('Comissão salva: ' + String(pct).replace('.', ',') + '% para a categoria toda (' + n + ' resultado' + (n === 1 ? '' : 's') + (r.updated ? ', ' + r.updated + ' produto' + (r.updated === 1 ? '' : 's') + ' salvo' + (r.updated === 1 ? '' : 's') : '') + ')');
+        return loadAll().then(render);
+      }).catch(function (err) { t.disabled = false; throw err; });
+    }
     if (d.qfilter !== undefined) { state.qfilter = d.qfilter; return render(); }
     if (d.autoEdit) return autoDialog(autoById(d.autoEdit));
     if (d.autoDel) {
@@ -1495,6 +1603,21 @@
     if (t.dataset.autoToggle) {
       return api('PATCH', '/api/automations/' + t.dataset.autoToggle, { active: t.checked }).then(function () { toast(t.checked ? 'Piloto ligado' : 'Piloto pausado'); return reload(); })
         .catch(function (err) { return reload().then(function () { throw err; }); });
+    }
+    if (t.id === 'g-sort') { state.g.sort = t.value; return render(); } // ordena na hora, sem buscar de novo
+    if (t.id === 'g-onlycom') { state.g.onlyCom = t.checked; return render(); }
+    if (t.id === 'g-sheet' && t.files[0]) {
+      var gs2 = state.g;
+      gs2.sheetBusy = true; render();
+      return t.files[0].text().then(function (txt) { return api('POST', '/api/garimpo/from-shopee-csv', undefined, txt); })
+        .then(function (r) {
+          gs2.mkt = 'SH'; gs2.results = r.items.map(scoreOf); gs2.sel = {}; gs2.done = true; gs2.more = false;
+          if (gs2.sort === 'relevancia') gs2.sort = 'ganho';
+          var n = r.items.length, saved = r.items.filter(function (x) { return x.saved_id; }).length;
+          toast(n + ' produtos da planilha' + (saved ? ' · ' + saved + ' já salvos' : '') + (r.updated ? ' · ' + r.updated + ' atualizados com comissão/vendas' : ''));
+          return r.updated ? loadAll() : null;
+        })
+        .finally(function () { gs2.sheetBusy = false; render(); });
     }
     if (t.dataset.gpick !== undefined) { state.g.sel[t.dataset.gpick] = t.checked; return render(); }
     if (t.id === 'g-cat') {

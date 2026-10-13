@@ -1615,3 +1615,28 @@ test('piloto automático: filtros, só com link de afiliado, não repete, janela
     assert.equal((await other('GET', '/api/automations')).data.items.length, 0);
   } finally { t.close(); }
 });
+
+test('planilha da Shopee completa produto já salvo (comissão, vendas, link) sem mexer na comissão digitada', async () => {
+  const t = await boot({}, { ml: {} });
+  try {
+    const api = t.client();
+    await signup(api);
+    const porLink = (await api('POST', '/api/products', { title: 'Power Bank', marketplace: 'SH', price: 31.99, product_url: 'https://shopee.com.br/product/408715442/22499247158' })).data.product;
+    const digitada = (await api('POST', '/api/products', { title: 'Shorts', marketplace: 'SH', price: 35, commission_pct: 5, affiliate_url: 'https://s.shopee.com.br/meu', product_url: 'https://shopee.com.br/product/1163397054/23394849645' })).data.product;
+    const csv = [
+      'Item Id,Item Name,Price,Sales,Nome da loja,Commission Rate,Commission,Product Link,Offer Link',
+      '22499247158,Carregador Power Bank,"31,99",10mil+,SHR,28%,"R$8,96",https://shopee.com.br/product/408715442/22499247158,https://s.shopee.com.br/5LCczJBazQ',
+      '23394849645,Shorts Tactel,"35,00",66,F&A,13%,"R$4,55",https://shopee.com.br/product/1163397054/23394849645,https://s.shopee.com.br/5VW3BcAxeT',
+    ].join('\n');
+    const r = await api('POST', '/api/garimpo/from-shopee-csv', csv);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.updated, 2);
+    const list = (await api('GET', '/api/products')).data.products;
+    const a = list.find((p) => p.id === porLink.id);
+    assert.deepEqual([a.commission_pct, a.sales_k, a.affiliate_url], [28, 10, 'https://s.shopee.com.br/5LCczJBazQ']);
+    const b = list.find((p) => p.id === digitada.id);
+    assert.deepEqual([b.commission_pct, b.affiliate_url, b.sales_k], [5, 'https://s.shopee.com.br/meu', 0.066], 'comissão e link do usuário ficam');
+    // de novo: nada a atualizar
+    assert.equal((await api('POST', '/api/garimpo/from-shopee-csv', csv)).data.updated, 0);
+  } finally { t.close(); }
+});
