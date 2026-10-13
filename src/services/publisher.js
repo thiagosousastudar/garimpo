@@ -464,6 +464,12 @@ async function processDue({ pool, cfg, fetchImpl, log = console }) {
   } catch (e) {
     log.error(`[piloto] ${e.message}`);
   }
+  // Cupons do dia (postagem automática diária, para quem ligou)
+  try {
+    result.coupons = await require('../routes/coupons').runCouponsDaily({ pool, cfg, fetchImpl, log });
+  } catch (e) {
+    log.error(`[cupons] ${e.message}`);
+  }
   return result;
 }
 

@@ -1777,3 +1777,63 @@ test('carrossel: Meta responde id "0" (foto ainda preparando) — confere os ite
     assert.ok(t.calls.some((c) => /\/CHILD_\d+$/.test(c.path)), 'conferiu as fotos antes de montar de novo');
   } finally { t.close(); }
 });
+
+test('cupons: lê mensagem colada (sem pegar o link de outra pessoa), salva, mensagem do dia, entra na oferta e posta sozinho', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const msg = '10% OFF com MELHORDEHJ\nCompra mínima R$ 149\nLimite de R$ 200\nVence hoje!\n🚨 CUPOM MERCADO LIVRE 🚨\n🎟️ CUPOMON\n📍 30% em R$1, limite R$500\n🎟️ MELHORDEHJ\n📍 10% em R$149, limite R$200\n🔗 ATIVE AQUI: https://mercadolivre.com/sec/DEOUTRAPESSOA';
+    const parsed = (await api('POST', '/api/coupons/parse', { text: msg })).data.items;
+    assert.deepEqual(parsed.map((c) => [c.code, c.amount, c.min_purchase, c.max_discount]), [['MELHORDEHJ', 10, 149, 200], ['CUPOMON', 30, null, 500]]);
+    assert.ok(parsed.every((c) => !c.link), 'não aproveita o link de afiliado de outra pessoa');
+
+    // link precisa ser de loja
+    assert.equal((await api('POST', '/api/coupons', { items: [{ ...parsed[1], link: 'https://evil.example.com/x' }] })).status, 400);
+    const meu = 'https://mercadolivre.com/sec/MEULINK';
+    const saved = await api('POST', '/api/coupons', { items: parsed.map((c) => ({ ...c, link: meu })) });
+    assert.equal(saved.status, 201, JSON.stringify(saved.data));
+    assert.equal(saved.data.created, 2);
+    // repetir o mesmo código atualiza
+    assert.equal((await api('POST', '/api/coupons', { items: [{ ...parsed[1], amount: 35, link: meu }] })).data.updated, 1);
+    // um vencido não entra na mensagem
+    await api('POST', '/api/coupons', { marketplace: 'ML', code: 'VELHO10', amount: 10, expires_on: '2020-01-01', link: meu });
+
+    const list = (await api('GET', '/api/coupons')).data.items;
+    assert.equal(list.find((c) => c.code === 'VELHO10').status, 'vencido');
+    const m = (await api('GET', '/api/coupons/message?channel=whatsapp')).data;
+    assert.equal(m.count, 2);
+    assert.match(m.text, /\*CUPONS MERCADO LIVRE\*/);
+    assert.match(m.text, /\*CUPOMON\*\n📍 35% OFF sem valor mínimo, limite de R\$\s500/);
+    assert.match(m.text, /ATIVE AQUI:\* https:\/\/mercadolivre\.com\/sec\/MEULINK/);
+    assert.doesNotMatch(m.text, /VELHO10|DEOUTRAPESSOA/);
+
+    // oferta do Mercado Livre de R$ 189,90: entra o melhor cupom que vale para o preço
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    const prev = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' })).data.caption;
+    assert.match(prev, /🎟️ Cupom \*CUPOMON\*: 35% OFF/);
+    // Shopee: nenhum cupom da loja, nenhuma linha
+    const sh = (await api('POST', '/api/products', { ...PRODUTO, title: 'Outro', marketplace: 'SH', affiliate_url: 'https://s.shopee.com.br/z' })).data.product;
+    assert.doesNotMatch((await api('POST', '/api/queue/preview', { product_id: sh.id, channel: 'instagram' })).data.caption, /Cupom/);
+
+    // automático: Telegram + Fila do WhatsApp, uma vez por dia
+    await api('PUT', '/api/connections/telegram', { token: '123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789' });
+    await api('PUT', '/api/connections/telegram/chat', { chat_id: '-1001234567890' });
+    assert.equal((await api('PUT', '/api/coupons/settings', { auto: true, time: '00:00', channels: { telegram: true, whatsapp: true } })).status, 200);
+    const { runCouponsDaily } = require('../src/routes/coupons');
+    const quiet = { log() {}, error() {} };
+    assert.equal(await runCouponsDaily({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: quiet }), 1);
+    assert.equal(await runCouponsDaily({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: quiet }), 0, 'não repete no mesmo dia');
+    const tgMsg = opts.shopee.tg.sent.filter((x) => x.method === 'sendMessage').pop();
+    assert.match(tgMsg.text, /<b>CUPONS MERCADO LIVRE<\/b>/);
+    const q = (await api('GET', '/api/queue')).data.items.find((i) => i.kind === 'coupons');
+    assert.ok(q && q.channel === 'whatsapp' && q.status === 'draft');
+
+    // outro usuário não vê
+    const other = t.client();
+    await signup(other, 'b@exemplo.com');
+    assert.equal((await other('GET', '/api/coupons')).data.items.length, 0);
+    assert.equal((await api('POST', '/api/coupons/clean')).data.removed, 1);
+  } finally { t.close(); }
+});

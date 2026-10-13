@@ -189,3 +189,15 @@ textarea{font:inherit;color:var(--ink)}
 .swatches .sw{width:32px;height:32px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0}
 .swatches .sw.on{box-shadow:0 0 0 3px var(--accent)}
 .swatches input[type=color]{width:44px!important;height:34px!important}
+/* cupons */
+.gview{margin:0 0 12px}
+.cupons{display:flex;flex-direction:column;gap:12px;max-width:900px}
+.cupons textarea{width:100%}
+.cplist{display:flex;flex-direction:column;gap:6px;overflow-x:auto}
+.cprow{display:grid;grid-template-columns:28px minmax(110px,1.4fr) 62px minmax(70px,.8fr) minmax(80px,.9fr) minmax(80px,.9fr) minmax(130px,1fr);gap:6px;align-items:center;min-width:640px}
+.cprow input,.cprow select{padding:6px 8px;font-size:14px;min-width:0}
+.cprow .cpcode{text-transform:uppercase;font-weight:700}
+.cphead{font-size:12px;color:var(--muted);font-weight:600}
+.cpitems{display:flex;flex-direction:column;gap:8px}
+.cpitem{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.cpitem.off{opacity:.6}

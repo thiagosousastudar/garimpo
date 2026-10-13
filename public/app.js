@@ -63,6 +63,8 @@
     tgChats: null, // grupos/canais encontrados pelo bot
     pq: '', pflag: '', plimit: 24, pexp: {}, // Produtos: busca, situação, quantos mostrar, cards abertos na lista
     pview: prefGet('pview', 'lista'), // Produtos: 'lista' (compacta) ou 'cards'
+    gview: prefGet('gview', 'produtos'), // Garimpar: 'produtos' ou 'cupons'
+    cp: { items: [], settings: null, loaded: false, parsed: null, text: '', mk: 'ML', link: '', msgChannel: 'whatsapp', msg: null },
     qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
   };
 
@@ -289,9 +291,103 @@
       (g.sheetBusy ? '<span class="hint">pode levar até 1 minuto</span>' : '') + '</div></section>';
   }
 
+  /* ---------- cupons (dentro de Garimpar) ---------- */
+  var CP_STATUS = { valido: ['Válido', 'posted'], hoje: ['Vence hoje', 'scheduled'], vencido: ['Vencido', 'failed'], pausado: ['Pausado', 'draft'] };
+  function cpDesc(c) {
+    var off = c.kind === 'value' ? brl(c.amount) + ' OFF' : String(c.amount).replace('.', ',') + '% OFF';
+    var min = c.min_purchase > 1 ? 'a partir de ' + brl(c.min_purchase) : 'sem mínimo';
+    return off + ' · ' + min + (c.kind !== 'value' && c.max_discount ? ' · limite ' + brl(c.max_discount) : '');
+  }
+  function loadCoupons() {
+    return api('GET', '/api/coupons').then(function (r) { state.cp.items = r.items; state.cp.settings = r.settings; state.cp.today = r.today; state.cp.loaded = true; })
+      .then(loadCouponMsg);
+  }
+  function loadCouponMsg() {
+    return api('GET', '/api/coupons/message?channel=' + state.cp.msgChannel).then(function (r) { state.cp.msg = r; });
+  }
+  /** Linha editável de um cupom lido da mensagem (ou novo). */
+  function cpRow(c, i) {
+    var num = function (v) { return v == null ? '' : String(v).replace('.', ','); };
+    return '<div class="cprow">' +
+      '<label class="check"><input type="checkbox" data-cpsel="' + i + '"' + (c._skip ? '' : ' checked') + ' aria-label="Salvar este cupom"></label>' +
+      '<input type="text" data-cpf="code" data-cpi="' + i + '" value="' + esc(c.code) + '" aria-label="Código" class="cpcode">' +
+      '<select data-cpf="kind" data-cpi="' + i + '" aria-label="Tipo"><option value="percent"' + (c.kind !== 'value' ? ' selected' : '') + '>%</option><option value="value"' + (c.kind === 'value' ? ' selected' : '') + '>R$</option></select>' +
+      '<input type="text" inputmode="decimal" data-cpf="amount" data-cpi="' + i + '" value="' + esc(num(c.amount)) + '" aria-label="Desconto" placeholder="desconto">' +
+      '<input type="text" inputmode="decimal" data-cpf="min_purchase" data-cpi="' + i + '" value="' + esc(num(c.min_purchase)) + '" aria-label="Compra mínima (R$)" placeholder="mínimo R$">' +
+      '<input type="text" inputmode="decimal" data-cpf="max_discount" data-cpi="' + i + '" value="' + esc(num(c.max_discount)) + '" aria-label="Limite (R$)" placeholder="limite R$">' +
+      '<input type="date" data-cpf="expires_on" data-cpi="' + i + '" value="' + esc(c.expires_on || '') + '" aria-label="Validade"></div>';
+  }
+  function viewCupons() {
+    var cp = state.cp;
+    if (!cp.loaded) { loadCoupons().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando cupons…</p>'; }
+    var tg = state.tg || {};
+    var parsed = cp.parsed;
+    var paste = '<section class="card"><h3>📋 Colar cupons</h3>' +
+      '<p class="hint">Cole uma mensagem com cupons (de um grupo, e-mail do Mercado Livre ou o que você copiou do app). O Garimpo lê os códigos, o desconto, a compra mínima e o limite. <b>Confira no app da loja se o cupom está valendo</b> antes de salvar.</p>' +
+      '<div class="row"><select id="cp-mk" aria-label="Loja"><option value="ML"' + (cp.mk === 'ML' ? ' selected' : '') + '>Mercado Livre</option><option value="SH"' + (cp.mk === 'SH' ? ' selected' : '') + '>Shopee</option></select></div>' +
+      '<textarea id="cp-text" rows="5" placeholder="Ex.: 🎟️ CUPOMON — 30% em R$1, limite R$500">' + esc(cp.text || '') + '</textarea>' +
+      '<div class="row end"><button class="btn small" data-act="cp-new">+ Cupom em branco</button><button class="btn small primary" data-act="cp-parse">Ler cupons</button></div>' +
+      (parsed ? (parsed.length ? '<div class="cplist"><div class="cprow cphead"><span></span><span>Código</span><span>Tipo</span><span>Desconto</span><span>Mínimo R$</span><span>Limite R$</span><span>Validade</span></div>' + parsed.map(cpRow).join('') + '</div>' +
+        '<div class="field"><label for="cp-link">Seu link de afiliado para ativar os cupons</label><input id="cp-link" type="url" value="' + esc(cp.link || '') + '" placeholder="https://mercadolivre.com/sec/... (gere no seu painel de Afiliados)">' +
+        '<p class="hint">Gere o link no seu painel de Afiliados (de preferência da página de cupons ou de ofertas da loja). O link de quem mandou a mensagem <b>não</b> é aproveitado: a comissão seria dela.</p></div>' +
+        '<div class="row end"><button class="btn small" data-act="cp-cancel">Cancelar</button><button class="btn small primary" data-act="cp-save">Salvar cupons marcados</button></div>'
+        : '<p class="err">Não encontrei cupons nessa mensagem. Use "+ Cupom em branco" para cadastrar à mão.</p>') : '') + '</section>';
+
+    var rows = cp.items.map(function (c) {
+      var st = CP_STATUS[c.status] || CP_STATUS.valido;
+      return '<div class="cpitem' + (c.status === 'vencido' || c.status === 'pausado' ? ' off' : '') + '"><div class="grow"><div class="row" style="gap:8px"><b class="num">' + esc(c.code) + '</b>' + mktTag(c.marketplace) + '<span class="pill ' + st[1] + '">' + st[0] + '</span></div>' +
+        '<div class="hint">' + esc(cpDesc(c)) + (c.expires_on ? ' · até ' + esc(c.expires_on.split('-').reverse().join('/')) : '') + (c.link ? '' : ' · <span class="err">sem link</span>') + '</div></div>' +
+        '<div class="row"><button class="btn small ghost" data-cpedit="' + c.id + '">Editar</button>' +
+        '<button class="btn small ghost" data-cptoggle="' + c.id + '">' + (c.active ? 'Pausar' : 'Ativar') + '</button>' +
+        '<button class="btn small ghost danger" data-cpdel="' + c.id + '">Excluir</button></div></div>';
+    }).join('');
+    var expired = cp.items.filter(function (c) { return c.status === 'vencido'; }).length;
+    var list = '<section class="card"><h3>🎟️ Seus cupons</h3>' + (rows ? '<div class="cpitems">' + rows + '</div>' : '<p class="hint">Nenhum cupom ainda. Cole uma mensagem acima ou cadastre em branco.</p>') +
+      (expired ? '<div class="row end"><button class="btn small ghost" data-act="cp-clean">Apagar ' + expired + ' vencido' + (expired > 1 ? 's' : '') + '</button></div>' : '') +
+      '<p class="hint">Cupons válidos também entram sozinhos no texto das ofertas da mesma loja quando o produto atende a compra mínima ("🎟️ Cupom X: …").</p></section>';
+
+    var m = cp.msg || {};
+    var msgCard = '<section class="card"><h3>📣 Mensagem dos cupons de hoje</h3>' +
+      '<div class="seg" role="group" aria-label="Canal"><button type="button" data-cpch="whatsapp" aria-pressed="' + (cp.msgChannel === 'whatsapp') + '">WhatsApp / Telegram</button><button type="button" data-cpch="instagram" aria-pressed="' + (cp.msgChannel === 'instagram') + '">Instagram</button></div>' +
+      (m.text ? '<textarea id="cp-msg" rows="10" readonly>' + esc(m.text) + '</textarea>' +
+        (m.missing_link ? '<p class="err small">Algum cupom está sem o seu link: edite e cole o link de afiliado.</p>' : '') +
+        '<div class="row end"><button class="btn small" data-act="cp-copy">Copiar</button>' +
+        (cp.msgChannel === 'whatsapp' ? '<button class="btn small" data-act="cp-wa">Abrir no WhatsApp</button>' +
+          '<button class="btn small primary" data-act="cp-tg"' + (tg.ready ? '' : ' disabled title="Conecte o Telegram em Conexões"') + '>Enviar no Telegram</button>' : '') + '</div>'
+        : '<p class="hint">Nenhum cupom válido hoje.</p>') + '</section>';
+
+    var s = cp.settings || { auto: false, time: '09:00', channels: { telegram: true, whatsapp: true } };
+    var auto = '<section class="card"><h3>🤖 Postar os cupons todo dia</h3>' +
+      '<form id="cp-auto" class="stack"><label class="check"><input type="checkbox" name="auto"' + (s.auto ? ' checked' : '') + '> Ligado</label>' +
+      '<div class="row"><label for="cp-time">Horário</label><input id="cp-time" name="time" type="time" value="' + esc(s.time) + '" style="max-width:130px"></div>' +
+      '<label class="check"><input type="checkbox" name="telegram"' + (s.channels.telegram ? ' checked' : '') + '> Telegram (posta sozinho)' + (tg.ready ? '' : ' <span class="hint">· conecte em Conexões</span>') + '</label>' +
+      '<label class="check"><input type="checkbox" name="whatsapp"' + (s.channels.whatsapp ? ' checked' : '') + '> WhatsApp (fica pronto na Fila para você enviar)</label>' +
+      '<p class="hint">Uma vez por dia, no horário escolhido (Brasília), só com os cupons válidos. Sem cupom válido, não posta nada.</p>' +
+      '<div class="row end"><button class="btn small primary" type="submit">Salvar</button></div></form></section>';
+    return '<div class="cupons">' + paste + list + msgCard + auto + '</div>';
+  }
+  function cpEditDialog(c) {
+    var num = function (v) { return v == null ? '' : String(v).replace('.', ','); };
+    var inner = field('code', 'Código', c.code, 'required') +
+      '<div class="cols"><div class="field"><label for="kind">Tipo</label><select id="kind" name="kind"><option value="percent"' + (c.kind !== 'value' ? ' selected' : '') + '>% de desconto</option><option value="value"' + (c.kind === 'value' ? ' selected' : '') + '>R$ de desconto</option></select></div>' +
+      field('amount', 'Desconto', num(c.amount), 'inputmode="decimal" required') + '</div>' +
+      '<div class="cols">' + field('min_purchase', 'Compra mínima (R$)', num(c.min_purchase), 'inputmode="decimal" placeholder="sem mínimo"') + field('max_discount', 'Limite do desconto (R$)', num(c.max_discount), 'inputmode="decimal" placeholder="sem limite"') + '</div>' +
+      '<div class="field"><label for="expires_on">Validade (último dia)</label><input id="expires_on" name="expires_on" type="date" value="' + esc(c.expires_on || '') + '"></div>' +
+      field('link', 'Seu link de afiliado para ativar', c.link, 'inputmode="url" placeholder="https://mercadolivre.com/sec/..."') +
+      field('notes', 'Observação (só para você)', c.notes, 'maxlength="200"');
+    openDialog('Editar cupom', inner, 'Salvar', function (d) {
+      return api('PATCH', '/api/coupons/' + c.id, d).then(function () { toast('Cupom salvo'); return loadCoupons().then(render); });
+    });
+  }
+
   function viewGarimpar() {
     var g = state.g;
     var ready = mktReady(g.mkt);
+    var switcher = '<div class="seg gview" role="group" aria-label="O que garimpar"><button type="button" data-gview="produtos" aria-pressed="' + (state.gview !== 'cupons') + '">🔎 Produtos</button>' +
+      '<button type="button" data-gview="cupons" aria-pressed="' + (state.gview === 'cupons') + '">🎟️ Cupons</button></div>';
+    if (state.gview === 'cupons') {
+      return '<div class="pagehead"><h2>Garimpar</h2><p>Cupons das lojas: cole, confira e o Garimpo monta e posta as mensagens.</p></div>' + switcher + viewCupons();
+    }
     var chips = [['ML', 'Mercado Livre'], ['SH', 'Shopee']].map(function (m) {
       return '<button type="button" class="chip" data-gmkt="' + m[0] + '" aria-pressed="' + (g.mkt === m[0]) + '">' + m[1] + (m[0] === 'ML' && !mktReady('ML') ? ' · desconectado' : '') + '</button>';
     }).join('');
@@ -309,7 +405,7 @@
     var pre = '';
     if (g.mkt === 'SH') pre = shopeeSheetCard(ready);
     else if (!ready) {
-      return head + form + '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no Mercado Livre, conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
+      return head + switcher + form + '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no Mercado Livre, conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
     } else if (mlComMissing()) {
       pre = '<div class="rule warnbox"><b>Sem a comissão, não dá para saber quanto você ganha.</b> O Mercado Livre não informa a comissão de afiliado pela API. ' +
         'Veja os percentuais no seu painel de Afiliados do Mercado Livre e preencha direto nos produtos abaixo (campo "Comissão em…", vale para a categoria inteira) ou de uma vez em <button type="button" class="link" data-tab="conexoes">Conexões → Comissão por categoria</button>.</div>';
@@ -351,7 +447,7 @@
       '<button class="btn small" data-act="g-all">Selecionar todos</button>' +
       (g.more ? '<button class="btn small" data-act="g-more"' + (g.busy ? ' disabled' : '') + '>Carregar mais</button>' : '') +
       '<button class="btn small primary" data-act="g-save"' + (nsel ? '' : ' disabled') + '>Salvar selecionados (' + nsel + ')</button></div>' : '';
-    return head + form + pre + summary + results + bar;
+    return head + switcher + form + pre + summary + results + bar;
   }
 
   /** Atalhos do Mercado Livre: o que está em alta nas buscas e os mais vendidos de uma categoria. */
@@ -533,7 +629,7 @@
       }
       var nProd = 1;
       try { nProd = q.product_ids ? JSON.parse(q.product_ids).length : 1; } catch (_) { nProd = 1; }
-      return '<article class="card qitem" data-q="' + q.id + '"><header><div><h3>' + esc(q.product_title || 'Produto removido') + (nProd > 1 ? ' <span class="hint">+ ' + (nProd - 1) + ' produto' + (nProd > 2 ? 's' : '') + '</span>' : '') + '</h3>' +
+      return '<article class="card qitem" data-q="' + q.id + '"><header><div><h3>' + (q.kind === 'coupons' ? '🎟️ Cupons do dia' : esc(q.product_title || 'Produto removido')) + (nProd > 1 ? ' <span class="hint">+ ' + (nProd - 1) + ' produto' + (nProd > 2 ? 's' : '') + '</span>' : '') + '</h3>' +
         '<div class="meta">' + (q.product_marketplace ? mktTag(q.product_marketplace) : '') + '<span>' + (isIg ? 'Instagram' : 'WhatsApp') + '</span>' + (q.automation_id ? '<span class="tag plain">🤖 Piloto</span>' : '') +
         (q.scheduled_at && q.status === 'scheduled' ? '<span class="num">· ' + fmtWhen(q.scheduled_at) + '</span>' : '') + '</div></div>' +
         '<span class="pill ' + q.status + '">' + STATUS[q.status] + '</span></header>' + media +
@@ -969,6 +1065,25 @@
     'disconnect-ig': function () { return api('DELETE', '/api/connections/instagram').then(reload).then(function () { toast('Instagram desconectado'); }); },
     'disconnect-sh': function () { return api('DELETE', '/api/connections/shopee').then(reload).then(function () { toast('Shopee desconectada'); }); },
     'disconnect-ml': function () { return api('DELETE', '/api/connections/mercadolivre').then(reload).then(function () { toast('Mercado Livre desconectado'); }); },
+    'cp-parse': function () {
+      var cp = state.cp; cp.text = $('#cp-text').value; cp.mk = $('#cp-mk').value;
+      return api('POST', '/api/coupons/parse', { text: cp.text, marketplace: cp.mk }).then(function (r) { cp.parsed = r.items; render(); });
+    },
+    'cp-new': function () { var cp = state.cp; cp.mk = $('#cp-mk').value; cp.parsed = (cp.parsed || []).concat([{ marketplace: cp.mk, code: '', kind: 'percent', amount: null, min_purchase: null, max_discount: null, expires_on: '' }]); render(); },
+    'cp-cancel': function () { state.cp.parsed = null; render(); },
+    'cp-save': function () {
+      var cp = state.cp;
+      var items = cp.parsed.filter(function (c) { return !c._skip; }).map(function (c) { return Object.assign({}, c, { marketplace: c.marketplace || cp.mk, link: cp.link }); });
+      if (!items.length) throw new Error('Marque pelo menos um cupom.');
+      return api('POST', '/api/coupons', { items: items }).then(function (r) {
+        toast((r.created ? r.created + ' cupom(ns) salvo(s)' : '') + (r.updated ? (r.created ? ' · ' : '') + r.updated + ' atualizado(s)' : ''));
+        cp.parsed = null; cp.text = ''; return loadCoupons().then(render);
+      });
+    },
+    'cp-clean': function () { return api('POST', '/api/coupons/clean').then(function (r) { toast(r.removed + ' vencido(s) apagado(s)'); return loadCoupons().then(render); }); },
+    'cp-copy': function () { copyText(state.cp.msg.text); },
+    'cp-wa': function () { var t = state.cp.msg.text; copyText(t); window.open(waLink(t), '_blank', 'noopener'); },
+    'cp-tg': function () { return api('POST', '/api/coupons/send-telegram').then(function () { toast('Cupons enviados no Telegram'); }); },
     'auto-new': function () { autoDialog(null); },
     'tg-find': function () {
       return api('GET', '/api/connections/telegram/chats').then(function (r) {
@@ -1587,6 +1702,11 @@
         return loadAll().then(render);
       }).catch(function (err) { t.disabled = false; throw err; });
     }
+    if (d.gview) { state.gview = d.gview; prefSet('gview', d.gview); return render(); }
+    if (d.cpch) { state.cp.msgChannel = d.cpch; return loadCouponMsg().then(render); }
+    if (d.cpedit) { return cpEditDialog(state.cp.items.filter(function (c) { return c.id === Number(d.cpedit); })[0]); }
+    if (d.cptoggle) { var cc = state.cp.items.filter(function (c) { return c.id === Number(d.cptoggle); })[0]; return api('PATCH', '/api/coupons/' + cc.id, { active: !cc.active }).then(loadCoupons).then(render); }
+    if (d.cpdel) { if (!confirm('Excluir este cupom?')) return null; return api('DELETE', '/api/coupons/' + d.cpdel).then(loadCoupons).then(render); }
     if (d.qfilter !== undefined) { state.qfilter = d.qfilter; return render(); }
     if (d.autoEdit) return autoDialog(autoById(d.autoEdit));
     if (d.autoDel) {
@@ -1719,6 +1839,9 @@
       return api('PATCH', '/api/automations/' + t.dataset.autoToggle, { active: t.checked }).then(function () { toast(t.checked ? 'Piloto ligado' : 'Piloto pausado'); return reload(); })
         .catch(function (err) { return reload().then(function () { throw err; }); });
     }
+    if (t.dataset.cpsel !== undefined && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpsel)]._skip = !t.checked; return null; }
+    if (t.id === 'cp-mk') { state.cp.mk = t.value; return null; }
+    if (t.dataset.cpf && t.tagName === 'SELECT' && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpi)][t.dataset.cpf] = t.value; return null; }
     if (t.id === 'g-sort') { state.g.sort = t.value; return render(); } // ordena na hora, sem buscar de novo
     if (t.id === 'g-onlycom') { state.g.onlyCom = t.checked; return render(); }
     if (t.id === 'g-sheet' && t.files[0]) {
@@ -1756,6 +1879,10 @@
 
   document.addEventListener('input', function (e) {
     var t = e.target;
+    // cupons: guarda o que é digitado sem redesenhar
+    if (t.dataset && t.dataset.cpf && state.cp.parsed) { var cpi = state.cp.parsed[Number(t.dataset.cpi)]; if (cpi) cpi[t.dataset.cpf] = t.dataset.cpf === 'code' ? t.value.toUpperCase() : t.value; return; }
+    if (t.id === 'cp-text') { state.cp.text = t.value; return; }
+    if (t.id === 'cp-link') { state.cp.link = t.value; return; }
     // busca em Produtos: redesenha só a lista, para não perder o foco do campo
     if (t.id === 'f-q') { state.pq = t.value; state.plimit = P_PAGE; var pl = $('#plist'); if (pl) pl.innerHTML = productsList(); return; }
     if (t.dataset && t.dataset.caption) { var c = $('#cnt-' + t.dataset.caption); if (c) c.textContent = t.value.length; }
@@ -1799,6 +1926,12 @@
           return reload();
         })
         .catch(function (err) { tb.disabled = false; if (errEl) errEl.textContent = err.message; });
+    } else if (e.target.id === 'cp-auto') {
+      e.preventDefault();
+      var fa = e.target;
+      api('PUT', '/api/coupons/settings', { auto: fa.auto.checked, time: fa.time.value, channels: { telegram: fa.telegram.checked, whatsapp: fa.whatsapp.checked } })
+        .then(function (r) { state.cp.settings = r.settings; toast(r.settings.auto ? 'Cupons automáticos às ' + r.settings.time : 'Postagem automática de cupons desligada'); })
+        .catch(function (err) { toast(err.message); });
     } else if (e.target.id === 'g-form') {
       e.preventDefault();
       state.g.q = $('#g-q').value.trim();

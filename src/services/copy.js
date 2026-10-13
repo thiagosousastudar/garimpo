@@ -25,6 +25,8 @@ function salesText(k, cap) {
   return cap && t ? t[0].toUpperCase() + t.slice(1) : t;
 }
 
+const { bestCouponFor, couponLine } = require('./coupons');
+
 function hashtags(p) {
   const base = TAGS[String(p.category || '').toLowerCase()] || '';
   const all = `${base} #achadinhos ${p.marketplace === 'ML' ? '#mercadolivre' : '#shopee'} #ofertas`.split(/\s+/).filter(Boolean);
@@ -105,6 +107,7 @@ function templateCopy(p, channel) {
       '',
       ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 ${from ? 'A partir de' : 'Por'}: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 ${from ? 'A partir de' : 'Por apenas'}: *${brl(p.price)}*`]),
       ...(from ? ['📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha'] : []),
+      ...(p._coupon ? [couponLine(p._coupon, 'whatsapp')] : []),
       ...waPerks(p),
       '',
       `👉 ${p.affiliate_url || PLACEHOLDER}`,
@@ -121,6 +124,7 @@ function templateCopy(p, channel) {
     `✨ ${p.title}`,
     '',
     ...igPrice(p),
+    ...(p._coupon ? [couponLine(p._coupon, 'instagram')] : []),
     ...(perks.length ? ['', ...perks] : []),
     ...(hl.length ? ['', ...hl] : []),
     '',
@@ -183,10 +187,16 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
 }
 
 /** Gera o texto. Usa IA se pedida e configurada; se falhar, cai no modelo e avisa. */
-async function buildCaption(p, channel, { ai, cfg, fetchImpl }) {
+async function buildCaption(p0, channel, { ai, cfg, fetchImpl, coupons }) {
+  // cupom cadastrado que combina com o produto (mesma loja, compra mínima atendida) entra no texto
+  const coupon = coupons && coupons.length ? bestCouponFor(p0, coupons) : null;
+  const p = coupon ? { ...p0, _coupon: coupon } : p0;
   if (ai && cfg.anthropicKey) {
     try {
-      return { caption: await aiCopy(p, channel, { cfg, fetchImpl }), source: 'ia' };
+      const text = await aiCopy(p, channel, { cfg, fetchImpl });
+      return { caption: coupon ? `${text}
+
+${couponLine(coupon, channel)}` : text, source: 'ia' };
     } catch (e) {
       return { caption: templateCopy(p, channel), source: 'modelo', warning: `IA indisponível (${e.message}). Usei o modelo padrão.` };
     }
