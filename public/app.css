@@ -207,3 +207,15 @@ textarea{font:inherit;color:var(--ink)}
 .dmitem textarea{width:100%;font-size:14px}
 .dmsent{white-space:pre-wrap;font:inherit;font-size:13px;color:var(--muted);margin:6px 0 0}
 .dmset summary,.card>summary{cursor:pointer}
+/* Direct: pessoas e relatório */
+.person .pinfo h3 a{color:inherit;text-decoration:none}
+.person .pinfo h3 a:hover{text-decoration:underline}
+.barrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
+.barrow:first-of-type{border-top:0}
+.barlabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar{flex:0 0 35%;height:8px;background:var(--surface2);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+.hours{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:120px;margin:8px 0}
+.hours span{display:flex;flex-direction:column;justify-content:flex-end;height:100%;align-items:center}
+.hours i{display:block;width:100%;background:var(--gold);border-radius:4px 4px 0 0;min-height:3px}
+.hours small{font-size:10px;color:var(--muted);height:14px}

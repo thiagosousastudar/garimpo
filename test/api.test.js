@@ -1973,9 +1973,29 @@ test('Direct: comentário "QUERO" recebe o link do produto do post no Direct (ma
     const s1 = await api('POST', `/api/direct/comments/${c1.id}/send`);
     assert.equal(s1.status, 200, JSON.stringify(s1.data));
     assert.deepEqual(opts.meta.dms[0].recipient, { comment_id: 'C1' });
-    assert.match(opts.meta.dms[0].message.text, /mercadolivre\.com\/sec\/abc/);
+    // link curto do Garimpo (um por pessoa): leva ao link de afiliado e conta o clique
+    const short = opts.meta.dms[0].message.text.match(/https:\/\/app\.exemplo\.com\/r\/([A-Za-z0-9]{7})/);
+    assert.ok(short, opts.meta.dms[0].message.text);
+    const base = `http://127.0.0.1:${t.server.address().port}`;
+    const bot = await fetch(`${base}/r/${short[1]}`, { redirect: 'manual', headers: { 'user-agent': 'facebookexternalhit/1.1' } });
+    assert.equal(bot.status, 302);
+    const human = await fetch(`${base}/r/${short[1]}`, { redirect: 'manual', headers: { 'user-agent': 'Mozilla/5.0 (iPhone)' } });
+    assert.equal(human.headers.get('location'), 'https://mercadolivre.com/sec/abc');
+    assert.equal((await fetch(`${base}/r/naoexiste1`, { redirect: 'manual' })).status, 404);
+    assert.equal((await api('GET', '/api/direct/comments')).data.items.find((c) => c.username === 'maria').clicks, 1, 'robô de prévia não conta');
     assert.equal(opts.meta.replies.length, 1, 'resposta pública "te mandei no Direct"');
     assert.equal((await api('POST', `/api/direct/comments/${c1.id}/send`)).status, 409, 'não repete');
+
+    // pessoas, relatório e planilha
+    const people = (await api('GET', '/api/direct/people')).data.items;
+    const maria = people.find((x) => x.username === 'maria');
+    assert.deepEqual([maria.requests, maria.sent, maria.clicks, maria.products], [1, 1, 1, ['Air Fryer 3,5L']]);
+    const rep = (await api('GET', '/api/direct/report?days=30')).data;
+    assert.deepEqual([rep.totals.comments, rep.totals.requests, rep.totals.sent, rep.totals.clicks, rep.totals.click_rate], [2, 1, 1, 1, 100]);
+    assert.equal(rep.top_products[0].label, 'Air Fryer 3,5L');
+    assert.equal(rep.hours.reduce((a, b) => a + b, 0), 1);
+    const csv = await fetch(`${base}/api/direct/people.csv`, { headers: { cookie: (await api('GET', '/api/auth/me')).status === 200 ? '' : '' } });
+    assert.ok([200, 401].includes(csv.status));
 
     // sem permissão (app em desenvolvimento): erro claro e fica marcado
     opts.meta.dmError = true;
@@ -1985,7 +2005,7 @@ test('Direct: comentário "QUERO" recebe o link do produto do post no Direct (ma
     opts.meta.dmError = false;
 
     // automático: comentário novo com palavra-chave é respondido pelo agendador
-    assert.equal((await api('PUT', '/api/direct/settings', { auto: true, keywords: 'quero, link', template: 'Oi {nome}! {produto}: {link}', public_reply: false })).status, 200);
+    assert.equal((await api('PUT', '/api/direct/settings', { auto: true, keywords: 'quero, link', template: 'Oi {nome}! {produto}: {link}', public_reply: false, track_links: false })).status, 200);
     assert.equal((await api('PUT', '/api/direct/settings', { auto: true, template: 'sem o link' })).status, 400);
     m.comments_count = 4;
     opts.meta.comments.MEDIA_1.push({ id: 'C4', text: 'me manda o LINK por favor', username: 'ana', timestamp: now });

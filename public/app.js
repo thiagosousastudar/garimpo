@@ -798,8 +798,69 @@
       dm.settings ? null : api('GET', '/api/direct/settings').then(function (r) { dm.settings = r.settings; dm.defaults = r.defaults; }),
     ]).then(function () { dm.loaded = true; });
   }
+  /* ---------- Direct: Pessoas (mini-CRM) e Relatório ---------- */
+  function dmSwitch() {
+    var v = state.dm.view || 'comentarios';
+    return '<div class="seg gview" role="group" aria-label="Seção do Direct">' + [['comentarios', '💬 Comentários'], ['pessoas', '👥 Pessoas'], ['relatorio', '📊 Relatório']].map(function (o) {
+      return '<button type="button" data-dmview="' + o[0] + '" aria-pressed="' + (v === o[0]) + '">' + o[1] + '</button>';
+    }).join('') + '</div>';
+  }
+  function loadDmPeople() {
+    return api('GET', '/api/direct/people?q=' + encodeURIComponent(state.dm.q || '')).then(function (r) { state.dm.people = r.items; state.dm.peopleTotal = r.total; });
+  }
+  function loadDmReport() {
+    return api('GET', '/api/direct/report?days=' + (state.dm.days || 30)).then(function (r) { state.dm.report = r; });
+  }
+  function viewDmPeople() {
+    var dm = state.dm;
+    if (!dm.people) { loadDmPeople().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando pessoas…</p>'; }
+    var rows = dm.people.map(function (p) {
+      return '<div class="prow person"><div class="pinfo"><h3><a href="https://www.instagram.com/' + esc(encodeURIComponent(p.username)) + '/" target="_blank" rel="noopener noreferrer">@' + esc(p.username) + '</a>' +
+        (p.frequent ? ' <span class="tag hl">⭐ cliente frequente</span>' : '') + '</h3>' +
+        '<div class="pline"><span><b class="num">' + p.requests + '</b> pedido' + (p.requests === 1 ? '' : 's') + '</span><span><b class="num">' + p.sent + '</b> Direct' + (p.sent === 1 ? '' : 's') + '</span>' +
+        '<span class="' + (p.clicks ? 'earn' : 'hint') + '"><b class="num">' + p.clicks + '</b> clique' + (p.clicks === 1 ? '' : 's') + '</span><span class="hint">último ' + esc(ago(p.last_at)) + '</span></div>' +
+        (p.products.length ? '<div class="hint small">' + esc(p.products.join(' · ').slice(0, 160)) + '</div>' : '') + '</div></div>';
+    }).join('');
+    return '<div class="psearch"><input id="dm-q" type="search" placeholder="Buscar por @ ou produto…" value="' + esc(dm.q || '') + '" aria-label="Buscar pessoas">' +
+      '<a class="btn" href="/api/direct/people.csv" download>⬇ Exportar planilha</a></div>' +
+      '<p class="hint pcount">' + dm.peopleTotal + ' pessoa' + (dm.peopleTotal === 1 ? '' : 's') + ' · "cliente frequente" = 3 pedidos ou mais</p>' +
+      (rows ? '<div class="prodlist">' + rows + '</div>' : '<div class="empty centered-empty">Ninguém por aqui ainda. As pessoas aparecem quando comentam nos seus posts.</div>');
+  }
+  function bars(list, max) {
+    return list.map(function (e) {
+      var w = max ? Math.max(4, Math.round((e.n / max) * 100)) : 0;
+      return '<div class="barrow"><span class="barlabel">' + e.label + '</span><span class="bar"><i style="width:' + w + '%"></i></span><b class="num">' + e.n + '</b></div>';
+    }).join('');
+  }
+  function viewDmReport() {
+    var dm = state.dm;
+    if (!dm.report) { loadDmReport().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando relatório…</p>'; }
+    var r = dm.report, t = r.totals;
+    var kp = [['Comentários', t.comments], ['Pediram o link', t.requests], ['Pessoas', t.people], ['Directs enviados', t.sent], ['Cliques', t.clicks], ['Taxa de clique', t.click_rate + '%']];
+    var maxP = r.top_products.length ? r.top_products[0].n : 0;
+    var maxH = Math.max.apply(null, r.hours.concat([0]));
+    var best = r.hours.indexOf(maxH);
+    var hours = '<div class="hours">' + r.hours.map(function (n, h) {
+      return '<span title="' + h + 'h: ' + n + ' pedido(s)"><i style="height:' + (maxH ? Math.max(3, Math.round((n / maxH) * 100)) : 3) + '%"></i><small>' + (h % 3 === 0 ? h : '') + '</small></span>';
+    }).join('') + '</div>';
+    return '<div class="seg" role="group" aria-label="Período" style="margin-bottom:12px">' + [[7, '7 dias'], [30, '30 dias'], [90, '90 dias']].map(function (o) {
+      return '<button type="button" data-dmdays="' + o[0] + '" aria-pressed="' + (r.days === o[0]) + '">' + o[1] + '</button>';
+    }).join('') + '</div>' +
+      '<div class="kpis">' + kp.map(function (k) { return '<div class="kpi"><span>' + k[0] + '</span><b class="num">' + k[1] + '</b></div>'; }).join('') + '</div>' +
+      '<p class="hint">Taxa de clique = pessoas que clicaram no link ÷ Directs enviados. Os cliques são medidos pelo link curto do Garimpo (robôs de prévia não contam).</p>' +
+      '<div class="panels"><section class="card"><h3>🏆 Produtos mais pedidos</h3>' + (r.top_products.length ? bars(r.top_products.map(function (e) { return { n: e.n, label: esc(e.label || 'Produto') }; }), maxP) : '<p class="hint">Sem pedidos no período.</p>') + '</section>' +
+      '<section class="card"><h3>🕐 Horários com mais pedidos</h3>' + (maxH ? hours + '<p class="hint">Pico às <b>' + best + 'h</b>: um bom horário para postar.</p>' : '<p class="hint">Sem pedidos no período.</p>') +
+      (Object.keys(r.weekdays).length ? '<p class="hint">Por dia: ' + Object.keys(r.weekdays).map(function (d) { return esc(d) + ' ' + r.weekdays[d]; }).join(' · ') + '</p>' : '') + '</section></div>' +
+      '<section class="card" style="margin-top:12px"><h3>📸 Posts que mais geraram pedidos</h3>' + (r.top_posts.length ? r.top_posts.map(function (p) {
+        return '<div class="barrow"><span class="barlabel">' + (p.label ? '<a href="' + esc(safeUrl(p.label)) + '" target="_blank" rel="noopener noreferrer">' + esc(p.title.slice(0, 60)) + ' ↗</a>' : esc(p.title.slice(0, 60))) + '</span><b class="num">' + p.n + ' pedido' + (p.n === 1 ? '' : 's') + '</b></div>';
+      }).join('') : '<p class="hint">Sem pedidos no período.</p>') + '</section>';
+  }
+
   function viewDirect() {
     var dm = state.dm;
+    var head0 = '<div class="pagehead"><h2>Direct</h2><p>Quem pede o link nos comentários, quem clicou e o que mais vende.</p></div>';
+    if (dm.view === 'pessoas') return head0 + dmSwitch() + viewDmPeople();
+    if (dm.view === 'relatorio') return head0 + dmSwitch() + viewDmReport();
     if (!dm.loaded) { loadDirect().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando comentários…</p>'; }
     if (!(state.conn && state.conn.connected)) {
       return '<div class="pagehead"><h2>Direct</h2></div><div class="empty centered-empty">Conecte o Instagram na aba Conexões para receber os comentários.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
@@ -815,6 +876,7 @@
         '<div class="meta"><span>' + esc(c.commented_at ? ago(c.commented_at) : '') + '</span>' + (c.products.length ? '<span>' + esc(c.products.map(function (p) { return p.title; }).join(', ').slice(0, 70)) + '</span>' : '<span class="err">post sem produto do Garimpo</span>') +
         (c.permalink ? '<a class="small" href="' + esc(safeUrl(c.permalink)) + '" target="_blank" rel="noopener noreferrer">ver post ↗</a>' : '') + '</div></div>' +
         '<span class="pill ' + st[1] + '">' + st[0] + '</span></header>' +
+        (c.clicks ? '<p class="ok small">👆 Clicou no link' + (c.clicks > 1 ? ' (' + c.clicks + 'x)' : '') + '</p>' : (c.status === 'enviado' ? '<p class="hint small">Ainda não clicou no link</p>' : '')) +
         '<p class="dmtext">💬 ' + esc(c.text || '') + '</p>' +
         (c.status === 'enviado' ? '<details><summary class="hint">Mensagem enviada ' + esc(c.sent_at ? ago(c.sent_at) : '') + '</summary><pre class="dmsent">' + esc(c.reply_text || '') + '</pre></details>' : '') +
         (c.error && c.status !== 'enviado' ? '<p class="err small">' + esc(c.error) + '</p>' : '') +
@@ -829,13 +891,14 @@
       '<div class="field"><label for="dm-tpl">Mensagem do Direct</label><textarea id="dm-tpl" name="template" rows="6">' + esc(s.template) + '</textarea>' +
       '<p class="hint">Use {nome} (o @ da pessoa), {produto} e {link}. Em post com vários produtos, vai a lista numerada (ou só o número que a pessoa comentou).</p></div>' +
       '<label class="check"><input type="checkbox" name="public_reply"' + (s.public_reply ? ' checked' : '') + '> Responder também no comentário ("Te mandei no Direct! 💌"), o que ajuda o post a aparecer mais</label>' +
+      '<label class="check"><input type="checkbox" name="track_links"' + (s.track_links !== false ? ' checked' : '') + '> Medir cliques: o link vai encurtado pelo Garimpo (um por pessoa) e leva ao seu link de afiliado</label>' +
       '<div class="row end"><button class="btn small" type="button" data-act="dm-defaults">Restaurar padrão</button><button class="btn small primary" type="submit">Salvar</button></div></form></details>';
     var meta = '<details class="card"><summary><b>🔓 Liberar para todos os clientes (Análise da Meta)</b></summary><ol class="steps" style="margin-top:8px">' +
       '<li>Hoje o seu app da Meta está em <b>modo de desenvolvimento</b>: a Meta só mostra comentários e só deixa mandar Direct para <b>contas cadastradas no app</b> (você e testadoras).</li>' +
       '<li>Para testar já: em developers.facebook.com → seu app → Funções do app → adicione uma segunda conta do Instagram como <b>Testadora do Instagram</b>, aceite o convite nessa conta e comente "QUERO" num post seu.</li>' +
       '<li>Para todos os clientes: no app, peça <b>Acesso avançado</b> às permissões <b>instagram_business_manage_comments</b> e <b>instagram_business_manage_messages</b>, envie para a Análise do App com um vídeo do fluxo e use as páginas de <a href="/privacidade.html" target="_blank">Política de Privacidade</a> e <a href="/exclusao-de-dados.html" target="_blank">Exclusão de Dados</a> do Garimpo.</li>' +
       '<li>Depois de aprovado, mude o app para o modo <b>Ao vivo</b>. Pronto: funciona com qualquer pessoa.</li></ol></details>';
-    return '<div class="pagehead"><h2>Direct</h2><p>Quem comentar "QUERO" nos seus posts recebe o link do produto no Direct, pela resposta oficial do Instagram (até 7 dias depois do comentário, 1 mensagem por comentário).</p></div>' +
+    return '<div class="pagehead"><h2>Direct</h2><p>Quem comentar "QUERO" nos seus posts recebe o link do produto no Direct, pela resposta oficial do Instagram (até 7 dias depois do comentário, 1 mensagem por comentário).</p></div>' + dmSwitch() +
       '<div class="toolbar"><button class="btn primary" data-act="dm-sync">🔄 Buscar comentários agora</button><span class="hint">' + (dm.syncedAt ? 'Última busca ' + esc(ago(dm.syncedAt)) : 'Ainda não buscou') + '</span></div>' +
       settings + meta +
       '<div class="filters" style="margin-top:12px">' + chips + '</div>' +
@@ -1776,7 +1839,7 @@
     if (!t) return;
     var d = t.dataset;
     if (d.act && actions[d.act]) return actions[d.act](t);
-    if (d.tab) { state.tab = d.tab; if (d.tab === 'direct') state.dm.loaded = false; render(); window.scrollTo(0, 0); return; }
+    if (d.tab) { state.tab = d.tab; if (d.tab === 'direct') { state.dm.loaded = false; state.dm.people = null; state.dm.report = null; } render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; state.plimit = P_PAGE; return render(); }
     if (d.pview) { state.pview = d.pview; prefSet('pview', d.pview); state.pexp = {}; return render(); }
     if (d.pexp) { state.pexp[d.pexp] = !state.pexp[d.pexp]; render(); var pe = $('#prod-' + d.pexp); if (pe && state.pexp[d.pexp]) pe.scrollIntoView({ block: 'nearest' }); return null; }
@@ -1797,6 +1860,8 @@
         return loadAll().then(render);
       }).catch(function (err) { t.disabled = false; throw err; });
     }
+    if (d.dmview) { state.dm.view = d.dmview; state.dm.people = null; state.dm.report = null; if (d.dmview === 'comentarios') state.dm.loaded = false; return render(); }
+    if (d.dmdays) { state.dm.days = Number(d.dmdays); state.dm.report = null; return render(); }
     if (d.dmfilter) { state.dm.filter = d.dmfilter; return loadDirect().then(render); }
     if (d.dmsend) {
       var dmText = ($('#dm-' + d.dmsend) || {}).value;
@@ -1947,6 +2012,7 @@
     if (t.dataset.cpsel !== undefined && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpsel)]._skip = !t.checked; return null; }
     if (t.id === 'cp-mk') { state.cp.mk = t.value; return null; }
     if (t.dataset.cpf && t.tagName === 'SELECT' && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpi)][t.dataset.cpf] = t.value; return null; }
+    if (t.id === 'dm-q') { state.dm.q = t.value; return loadDmPeople().then(render); }
     if (t.id === 'g-sort') { state.g.sort = t.value; return render(); } // ordena na hora, sem buscar de novo
     if (t.id === 'g-onlycom') { state.g.onlyCom = t.checked; return render(); }
     if (t.id === 'g-official') { state.g.official = t.checked; return render(); }
@@ -2042,7 +2108,7 @@
     } else if (e.target.id === 'dm-form') {
       e.preventDefault();
       var df = e.target;
-      api('PUT', '/api/direct/settings', { auto: df.auto.checked, keywords: df.keywords.value, template: df.template.value, public_reply: df.public_reply.checked })
+      api('PUT', '/api/direct/settings', { auto: df.auto.checked, keywords: df.keywords.value, template: df.template.value, public_reply: df.public_reply.checked, track_links: df.track_links.checked })
         .then(function (r) { state.dm.settings = r.settings; toast(r.settings.auto ? 'Respostas automáticas ligadas' : 'Configuração salva (envio manual)'); render(); })
         .catch(function (err) { toast(err.message); });
     } else if (e.target.id === 'cp-auto') {

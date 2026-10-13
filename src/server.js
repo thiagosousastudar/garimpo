@@ -56,6 +56,13 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
 
   app.use('/api/cron', cronRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/img', imageRoutes({ cfg, fetchImpl })); // público: o Instagram baixa as fotos ajustadas daqui
+  // Link curto do Garimpo: conta o clique e leva ao link de afiliado
+  app.get('/r/:code', async (req, res) => {
+    const target = await require('./services/links').resolveLink(pool, req.params.code, req.headers['user-agent']);
+    if (!target) return res.status(404).send('Link não encontrado.');
+    res.set('cache-control', 'no-store');
+    res.redirect(302, target);
+  });
   app.use('/api/auth', authRoutes({ pool, cfg }));
   const guard = requireAuth(cfg);
   app.use('/api/products', guard, productRoutes({ pool, cfg, fetchImpl }));

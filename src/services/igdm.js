@@ -24,6 +24,7 @@ function settingsOf(u) {
     keywords: kws.length ? kws : DEFAULT_KEYWORDS,
     template: u?.dm_template && u.dm_template.trim() ? u.dm_template : DEFAULT_TEMPLATE,
     public_reply: u?.dm_public_reply !== false,
+    track_links: u?.dm_track_links !== false,
   };
 }
 
@@ -135,7 +136,16 @@ async function sendFor({ pool, cfg, fetchImpl, uid, commentRowId, text: custom }
   const s = settingsOf((await pool.query('select * from users where id = $1', [uid])).rows[0]);
   let text = custom && String(custom).trim();
   if (!text) {
-    const { products } = await productsForMedia(pool, uid, row.media_id);
+    let { products } = await productsForMedia(pool, uid, row.media_id);
+    // link curto por pessoa: mostra quem pediu e clicou (leva ao mesmo link de afiliado)
+    if (s.track_links) {
+      const { createLink } = require('./links');
+      products = await Promise.all(products.map(async (p) => {
+        const target = p.affiliate_url || p.product_url;
+        if (!target) return p;
+        try { return { ...p, affiliate_url: (await createLink(pool, cfg, { uid, productId: p.id, commentId: row.id, target })).url }; } catch (_) { return p; }
+      }));
+    }
     text = buildMessage(s, row, products);
     if (!text) throw new HttpError(400, 'Este post não tem produto com link ligado a ele. Escreva a mensagem e envie.');
   }
