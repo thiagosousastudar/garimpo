@@ -468,7 +468,7 @@
     if (!list.length) {
       return '<div class="empty centered-empty">' + (state.products.length ? 'Nenhum produto com esses filtros' + (state.pq ? ' e essa busca' : '') + '.' : 'Nenhum produto ainda. Use a aba Garimpar, Cadastrar por links ou importe um CSV.') + '</div>';
     }
-    return count + '<div class="' + (compact ? 'plist' : 'grid three') + '">' + body + '</div>' +
+    return count + '<div class="' + (compact ? 'prodlist' : 'grid three') + '">' + body + '</div>' +
       (shown.length < list.length ? '<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-act="p-more">Mostrar mais ' + Math.min(P_PAGE, list.length - shown.length) + '</button><button class="btn ghost" data-act="p-all">Mostrar todos (' + list.length + ')</button></div>' : '');
   }
 
@@ -1308,7 +1308,7 @@
   /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
   var DEFAULT_COLOR = '#E8457A';
   function coverDefaultTitle(tpl) {
-    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : 'Achadinho do dia';
+    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : tpl === 'relampago' ? 'Baixou o preço!' : tpl === 'minimal' ? 'Achado do dia' : 'Achadinho do dia';
   }
   /** Foto usada nos modelos de 1 produto: a escolhida, senão a 1ª marcada no post (que não seja a capa), senão a do produto. */
   function coverPhoto() {
@@ -1317,22 +1317,40 @@
     var first = post.media.filter(function (m) { return m.type === 'image' && m.url !== cv.url; })[0];
     return first ? first.url : post.product.image_url;
   }
+  var COVER_TPLS = [['oferta', 'Oferta'], ['achadinho', 'Achadinho'], ['foto', 'Foto em destaque'], ['relampago', 'Baixou o preço'], ['minimal', 'Clean']];
+  var COVER_FORMATS = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16'], ['square', 'Quadrado 1:1']];
+  var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
+  var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
   function coverPanel() {
     var cv = post.cover;
-    var tpls = post.group ? [['lista', 'Top ' + post.products.length], ['oferta', 'Oferta'], ['achadinho', 'Achadinho']] : [['oferta', 'Oferta'], ['achadinho', 'Achadinho do dia']];
+    var tpls = post.group ? [['lista', 'Top ' + post.products.length]].concat(COVER_TPLS) : COVER_TPLS;
     var photos = post.group || cv.tpl === 'lista' ? [] : mediaPool().filter(function (m) { return m.type === 'image' && m.url !== cv.url; });
     var cur = coverPhoto();
-    return '<div class="coverbox"><canvas id="cover-canvas" width="1080" height="1350" aria-label="Prévia da capa"></canvas><div class="coverctl">' +
-      '<div class="seg" role="group" aria-label="Modelo">' + tpls.map(function (t) { return '<button type="button" data-ctpl="' + t[0] + '" aria-pressed="' + (cv.tpl === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="field"><label for="cover-title">Título</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '"></div>' +
+    var fmt = cv.format || 'feed';
+    var opts = cv.opts || {};
+    var seg = function (label, list, key, curV) {
+      return '<div class="field"><label>' + label + '</label><div class="seg wrapseg" role="group" aria-label="' + label + '">' + list.map(function (t) {
+        return '<button type="button" data-' + key + '="' + t[0] + '" aria-pressed="' + (curV === t[0]) + '">' + t[1] + '</button>';
+      }).join('') + '</div></div>';
+    };
+    return '<div class="coverbox"><div class="coverprev"><canvas id="cover-canvas" class="fmt-' + fmt + '" width="1080" height="1350" aria-label="Prévia da capa"></canvas>' +
+      '<button type="button" class="btn small" data-act="cover-download"' + (cv.busy ? ' disabled' : '') + '>⬇ Baixar imagem</button></div><div class="coverctl">' +
+      seg('Modelo', tpls, 'ctpl', cv.tpl) + seg('Formato', COVER_FORMATS, 'cfmt', fmt) +
+      '<div class="field"><label for="cover-title">Título</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '" placeholder="(sem título)"></div>' +
       (photos.length > 1 ? '<div class="field"><label>Foto do produto</label><div class="gallery">' + photos.map(function (m) {
         return '<button type="button" class="gpic' + (cur === m.url ? ' on' : '') + '" data-cphoto="' + esc(m.url) + '"><img src="' + esc(safeUrl(m.url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
       }).join('') + '</div></div>' : '') +
-      '<div class="cols"><div class="field"><label for="cover-color">Cor da marca</label><input id="cover-color" type="color" value="' + esc(cv.color) + '"></div>' +
-      '<div class="field"><label for="cover-handle">Seu @ no rodapé</label><input id="cover-handle" type="text" maxlength="31" autocomplete="off" value="' + esc(cv.handle) + '" placeholder="seuperfil"></div></div>' +
+      '<div class="field"><label for="cover-cta">Chamada no rodapé</label><select id="cover-cta">' + COVER_CTAS.map(function (c) { return '<option' + ((cv.cta || 'LINK NA BIO') === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="field"><label>Mostrar</label><div class="row"><label class="check"><input type="checkbox" id="cover-opt-off"' + (opts.off !== false ? ' checked' : '') + '> Desconto e preço "de"</label>' +
+      '<label class="check"><input type="checkbox" id="cover-opt-seals"' + (opts.seals !== false ? ' checked' : '') + '> Selos (frete grátis, loja oficial, ranking)</label></div></div>' +
+      '<div class="field"><label>Cor da marca</label><div class="swatches">' + COVER_COLORS.map(function (c) {
+        return '<button type="button" class="sw' + (String(cv.color).toLowerCase() === c.toLowerCase() ? ' on' : '') + '" data-ccolor="' + c + '" style="background:' + c + '" aria-label="Cor ' + c + '"></button>';
+      }).join('') + '<input id="cover-color" type="color" value="' + esc(cv.color) + '" aria-label="Outra cor"></div></div>' +
+      '<div class="field"><label for="cover-handle">Seu @ no rodapé</label><input id="cover-handle" type="text" maxlength="31" autocomplete="off" value="' + esc(cv.handle) + '" placeholder="seuperfil"></div>' +
       '<label class="pick"><input type="checkbox" id="cover-save"' + (cv.saveDefault ? ' checked' : '') + '> Usar esta cor e este @ nas próximas capas</label>' +
+      (fmt === 'story' ? '<p class="hint">Stories: baixe a imagem e poste pelo app do Instagram, colocando o adesivo de link no espaço pontilhado.</p>' : '') +
       '<div class="row end"><button type="button" class="btn small" data-act="cover-close">Fechar</button>' +
-      '<button type="button" class="btn small primary" data-act="cover-use"' + (cv.busy ? ' disabled' : '') + '>' + (cv.busy ? 'Gerando…' : cv.url ? 'Atualizar capa' : 'Usar como 1ª imagem') + '</button></div></div></div>';
+      (fmt === 'story' ? '' : '<button type="button" class="btn small primary" data-act="cover-use"' + (cv.busy ? ' disabled' : '') + '>' + (cv.busy ? 'Gerando…' : cv.url ? 'Atualizar capa' : 'Usar como 1ª imagem') + '</button>') + '</div></div></div>';
   }
   var coverImgs = {};
   function coverImage(url) { if (!url) return Promise.resolve(null); return coverImgs[url] || (coverImgs[url] = window.GarimpoCover.loadImage(url)); }
@@ -1345,7 +1363,7 @@
     return Promise.all([window.GarimpoCover.fontsReady(), Promise.all(urls.map(coverImage))]).then(function (r) {
       var canvas = $('#cover-canvas');
       if (!canvas || !post || !post.cover || post.cover.seq !== seq) return;
-      window.GarimpoCover.render(canvas, { template: cv.tpl, title: cv.title, color: cv.color, handle: cv.handle, products: post.products, images: r[1] });
+      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, products: post.products, images: r[1] });
     });
   }
   var coverRaf = 0;
@@ -1400,13 +1418,28 @@
       if (!post.cover) {
         var tpl = post.group ? 'lista' : 'oferta';
         post.cover = {
-          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true,
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {},
           color: state.brand.color || DEFAULT_COLOR,
           handle: state.brand.handle || (state.conn && state.conn.username) || '',
         };
       }
       post.cover.open = true;
       renderPost();
+    },
+    /** Baixa a capa como está na prévia (JPEG no tamanho do formato escolhido). */
+    'cover-download': function () {
+      var cv = post.cover, canvas = $('#cover-canvas');
+      if (!canvas) return null;
+      return Promise.resolve(drawCover()).then(function () {
+        return new Promise(function (resolve, reject) {
+          try { canvas.toBlob(function (b) { if (b) resolve(b); else reject(new Error('Não consegui gerar a imagem.')); }, 'image/jpeg', 0.95); }
+          catch (e) { reject(new Error('Não consegui gerar a imagem: ' + e.message)); }
+        });
+      }).then(function (b) {
+        var name = 'capa-' + (cv.format || 'feed') + '-' + String(post.product.title || 'produto').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) + '.jpg';
+        downloadFile(new File([b], name, { type: 'image/jpeg' }));
+        toast('Imagem baixada');
+      });
     },
     'cover-close': function () { post.cover.open = false; renderPost(); },
     /** Exporta a prévia em JPEG 1080x1350, envia ao armazenamento e põe como 1ª imagem do post. */
@@ -1584,6 +1617,8 @@
       cv.tpl = d.ctpl;
       return renderPost();
     }
+    if (d.cfmt && post && post.cover) { post.cover.format = d.cfmt; prefSet('coverFormat', d.cfmt); return renderPost(); }
+    if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
     if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.waGuide = false; post.note = null; return loadPreview(false); }
@@ -1665,6 +1700,10 @@
           });
         });
       }, Promise.resolve()).finally(function () { if (post) { post.busy = false; renderPost(); } });
+    }
+    if (t.id === 'cover-cta' && post && post.cover) { post.cover.cta = t.value; prefSet('coverCta', t.value); drawCoverSoon(); return null; }
+    if ((t.id === 'cover-opt-off' || t.id === 'cover-opt-seals') && post && post.cover) {
+      post.cover.opts = Object.assign({}, post.cover.opts); post.cover.opts[t.id === 'cover-opt-off' ? 'off' : 'seals'] = t.checked; drawCoverSoon(); return null;
     }
     if (t.id === 'cover-save' && post && post.cover) { post.cover.saveDefault = t.checked; return null; }
     if (t.dataset.psel) {

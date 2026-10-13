@@ -113,8 +113,13 @@
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + size, y); ctx.moveTo(x + size * 0.6, y - size * 0.38);
     ctx.lineTo(x + size, y); ctx.lineTo(x + size * 0.6, y + size * 0.38); ctx.stroke();
   }
-  function seals(p) {
+  /** Opções ligadas por padrão: desconto (selo e preço "de") e selos (frete, loja oficial, ranking). */
+  function opt(d, k) { return !d.opts || d.opts[k] !== false; }
+  function offOf(p, d) { return opt(d, 'off') ? discount(p) : 0; }
+  function rankOf(p, d) { return opt(d, 'seals') ? p.best_seller_rank : null; }
+  function seals(p, d) {
     var s = [];
+    if (d && !opt(d, 'seals')) return s;
     if (p.free_shipping) s.push(p.full ? 'FRETE GRÁTIS · FULL' : 'FRETE GRÁTIS');
     if (p.official_store) s.push('LOJA OFICIAL');
     return s;
@@ -135,7 +140,7 @@
 
   /** Oferta: foto grande num cartão, selo de desconto, nome, "de/por" e preço em destaque. */
   T.oferta = function (ctx, d) {
-    var p = d.products[0], c = d.color, off = discount(p);
+    var p = d.products[0], c = d.color, off = offOf(p, d);
     ctx.fillStyle = shade(c, 0.9); ctx.fillRect(0, 0, W, H);
     pill(ctx, (d.title || 'ACHADINHO DO DIA').toUpperCase(), W / 2, 52, { bg: c, fg: onColor(c), size: 42, family: DISPLAY, padX: 40, align: 'center' });
     shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 60, 160, 960, 740, 44); ctx.fill(); shadow(ctx, false);
@@ -146,7 +151,7 @@
       ctx.font = font(700, fit(ctx, '-' + off + '%', 200, 86, 50, 700, DISPLAY), DISPLAY); ctx.fillText('-' + off + '%', 905, 238);
       ctx.font = font(700, 34, BODY); ctx.fillText('OFF', 905, 285); ctx.textAlign = 'left';
     }
-    if (p.best_seller_rank) pill(ctx, p.best_seller_rank + 'º MAIS VENDIDO', 92, 832, { bg: GOLD, fg: INK, size: 30 });
+    if (rankOf(p, d)) pill(ctx, p.best_seller_rank + 'º MAIS VENDIDO', 92, 832, { bg: GOLD, fg: INK, size: 30 });
     // bloco de baixo (nome + preço) centralizado entre o cartão (y 900) e o rodapé (y 1264)
     ctx.font = font(600, 44, BODY);
     var lines = wrap(ctx, p.title, 960, 2);
@@ -161,7 +166,7 @@
     ctx.fillStyle = shade(c, -0.18);
     ctx.font = font(700, fit(ctx, brl(p.price), 560, 128, 70, 700, DISPLAY), DISPLAY);
     ctx.fillText(brl(p.price), 56, y + 112);
-    seals(p).slice(0, 2).forEach(function (s, i, all) {
+    seals(p, d).slice(0, 2).forEach(function (s, i, all) {
       pill(ctx, s, 1020, y + 112 - (all.length - i) * 66 + 8, { bg: '#FFFFFF', fg: shade(c, -0.25), size: 28, align: 'right' });
     });
     footer(ctx, d, c);
@@ -169,7 +174,7 @@
 
   /** Achadinho: fundo na cor da marca, título grande, foto central e etiqueta de preço inclinada. */
   T.achadinho = function (ctx, d) {
-    var p = d.products[0], c = d.color, fg = onColor(c), off = discount(p);
+    var p = d.products[0], c = d.color, fg = onColor(c), off = offOf(p, d);
     ctx.fillStyle = c; ctx.fillRect(0, 0, W, H);
     var g = ctx.createRadialGradient(W / 2, 640, 80, W / 2, 640, 720);
     g.addColorStop(0, shade(c, 0.35)); g.addColorStop(1, c); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
@@ -191,7 +196,7 @@
     ctx.restore();
     // selos à esquerda, só os que cabem antes da etiqueta de preço (que começa em x ~560)
     var sx = 60;
-    seals(p).concat(p.best_seller_rank ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []).slice(0, 2).forEach(function (s) {
+    seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []).slice(0, 2).forEach(function (s) {
       ctx.font = font(700, 28, BODY);
       if (sx + ctx.measureText(s).width + 52 > 540) return;
       sx += pill(ctx, s, sx, 1130, { bg: '#FFFFFF', fg: shade(c, -0.3), size: 28 }) + 14;
@@ -217,7 +222,7 @@
       contain(ctx, d.images[i], x + 24, y + 24, cw - 48, ch - 120);
       ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x + 46, y + 46, 34, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = onColor(c); ctx.textAlign = 'center'; ctx.font = font(700, 38, DISPLAY); ctx.fillText(String(i + 1), x + 46, y + 59); ctx.textAlign = 'left';
-      var off = discount(p);
+      var off = offOf(p, d);
       var range = Number(p.price_max) > Number(p.price);
       var w = pill(ctx, (range ? 'a partir de ' : '') + brl(p.price), x + 24, y + ch - 84, { bg: shade(c, -0.15), fg: onColor(shade(c, -0.15)), size: range ? 26 : 34, family: DISPLAY });
       if (off > 0) pill(ctx, '-' + off + '%', x + 24 + w + 10, y + ch - 80, { bg: GOLD, fg: INK, size: 28 });
@@ -226,15 +231,140 @@
     footer(ctx, { handle: d.handle, cta: 'ARRASTA PRO LADO' }, c);
   };
 
+  /** Foto em destaque: foto grande no fundo branco, faixa na cor da marca com nome e preço. */
+  T.foto = function (ctx, d) {
+    var p = d.products[0], c = d.color, fg = onColor(c), off = offOf(p, d);
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, H);
+    contain(ctx, d.images[0], 50, 120, 980, 760);
+    if (d.title) pill(ctx, d.title.toUpperCase(), 60, 40, { bg: c, fg: fg, size: 34, family: DISPLAY, padX: 30 });
+    if (off > 0) {
+      ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(930, 150, 104, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = INK; ctx.textAlign = 'center';
+      ctx.font = font(700, fit(ctx, '-' + off + '%', 176, 76, 44, 700, DISPLAY), DISPLAY); ctx.fillText('-' + off + '%', 930, 158);
+      ctx.font = font(700, 30, BODY); ctx.fillText('OFF', 930, 200); ctx.textAlign = 'left';
+    }
+    // faixa de baixo
+    ctx.fillStyle = c; roundRect(ctx, 0, 900, W, H - 900, 0); ctx.fill();
+    ctx.fillStyle = shade(c, -0.15); ctx.fillRect(0, 900, W, 10);
+    ctx.fillStyle = fg; ctx.font = font(600, 42, BODY);
+    var lines = wrap(ctx, p.title, 960, 2);
+    lines.forEach(function (l, i) { ctx.fillText(l, 60, 975 + i * 52); });
+    var y = 975 + lines.length * 52 + 10;
+    var range = Number(p.price_max) > Number(p.price);
+    if (off > 0) { ctx.font = font(500, 36, BODY); ctx.globalAlpha = 0.8; strike(ctx, 'de ' + brl(p.original_price), 60, y + 30); ctx.globalAlpha = 1; y += 44; }
+    ctx.font = font(700, fit(ctx, (range ? 'a partir de ' : '') + brl(p.price), 640, 112, 60, 700, DISPLAY), DISPLAY);
+    ctx.fillText((range ? 'a partir de ' : '') + brl(p.price), 58, Math.min(y + 100, H - 110));
+    seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []).slice(0, 2).forEach(function (s, i) {
+      pill(ctx, s, 1020, 1050 + i * 66, { bg: '#FFFFFF', fg: shade(c, -0.3), size: 26, align: 'right' });
+    });
+    footer(ctx, d, shade(c, -0.25));
+  };
+
+  /** Baixou o preço: fundo escuro, desconto gigante em amarelo, foto em cartão e "de/por". */
+  T.relampago = function (ctx, d) {
+    var p = d.products[0], c = d.color, off = offOf(p, d);
+    ctx.fillStyle = '#141418'; ctx.fillRect(0, 0, W, H);
+    // raios de luz atrás da foto
+    ctx.save(); ctx.translate(W / 2, 620); ctx.fillStyle = 'rgba(255,201,60,0.07)';
+    for (var i = 0; i < 12; i++) { ctx.rotate(Math.PI / 6); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(900, -120); ctx.lineTo(900, 120); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+    var title = (d.title || (off > 0 ? 'BAIXOU O PREÇO!' : 'ACHADO DO DIA')).toUpperCase();
+    ctx.fillStyle = GOLD; ctx.textAlign = 'center';
+    ctx.font = font(700, fit(ctx, title, 960, 120, 56, 700, DISPLAY), DISPLAY); ctx.fillText(title, W / 2, 150);
+    ctx.textAlign = 'left';
+    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, 150, 210, 780, 640, 48); ctx.fill(); shadow(ctx, false);
+    contain(ctx, d.images[0], 190, 245, 700, 570);
+    if (off > 0) {
+      ctx.save(); ctx.translate(890, 250); ctx.rotate(0.18);
+      ctx.fillStyle = c; roundRect(ctx, -150, -70, 300, 140, 30); ctx.fill();
+      ctx.fillStyle = onColor(c); ctx.textAlign = 'center'; ctx.font = font(700, 84, DISPLAY); ctx.fillText('-' + off + '%', 0, 28);
+      ctx.restore(); ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = '#FFFFFF'; ctx.font = font(600, 40, BODY); ctx.textAlign = 'center';
+    var lines = wrap(ctx, p.title, 940, 2);
+    lines.forEach(function (l, j) { ctx.fillText(l, W / 2, 925 + j * 50); });
+    var y = 925 + lines.length * 50;
+    if (off > 0) { ctx.fillStyle = '#A0A0AA'; ctx.font = font(500, 40, BODY); var t = 'de ' + brl(p.original_price); var tw = ctx.measureText(t).width; ctx.textAlign = 'left'; strike(ctx, t, W / 2 - tw / 2, y + 40); y += 50; }
+    var range = Number(p.price_max) > Number(p.price);
+    var price = (range ? 'a partir de ' : 'por ') + brl(p.price);
+    ctx.textAlign = 'center'; ctx.fillStyle = GOLD;
+    ctx.font = font(700, fit(ctx, price, 960, 120, 60, 700, DISPLAY), DISPLAY); ctx.fillText(price, W / 2, Math.min(y + 120, H - 120));
+    ctx.textAlign = 'left';
+    footer(ctx, d, GOLD);
+  };
+
+  /** Clean: fundo claro, foto solta, tipografia simples e um detalhe na cor da marca. */
+  T.minimal = function (ctx, d) {
+    var p = d.products[0], c = d.color, off = offOf(p, d);
+    ctx.fillStyle = '#F7F5F0'; ctx.fillRect(0, 0, W, H);
+    contain(ctx, d.images[0], 90, 90, 900, 780);
+    ctx.fillStyle = c; ctx.fillRect(60, 910, 90, 10);
+    if (d.title) { ctx.fillStyle = shade(c, -0.25); ctx.font = font(700, 30, BODY); ctx.fillText(d.title.toUpperCase(), 170, 925); }
+    ctx.fillStyle = INK; ctx.font = font(700, 50, DISPLAY);
+    var lines = wrap(ctx, p.title, 960, 2);
+    lines.forEach(function (l, i) { ctx.fillText(l, 60, 1000 + i * 60); });
+    var y = 1000 + lines.length * 60 + 20;
+    var range = Number(p.price_max) > Number(p.price);
+    ctx.fillStyle = shade(c, -0.2);
+    ctx.font = font(700, fit(ctx, brl(p.price), 520, 100, 60, 700, DISPLAY), DISPLAY);
+    var label = (range ? 'a partir de ' : '');
+    if (label) { ctx.font = font(600, 34, BODY); ctx.fillText(label, 60, y + 10); y += 30; ctx.font = font(700, fit(ctx, brl(p.price), 520, 100, 60, 700, DISPLAY), DISPLAY); }
+    ctx.fillText(brl(p.price), 56, y + 80);
+    var pw = ctx.measureText(brl(p.price)).width;
+    if (off > 0) {
+      ctx.fillStyle = MUTED; ctx.font = font(500, 36, BODY); strike(ctx, brl(p.original_price), 80 + pw, y + 78);
+      pill(ctx, '-' + off + '%', 1020, y + 30, { bg: INK, fg: '#FFFFFF', size: 34, align: 'right' });
+    }
+    var s = seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []);
+    if (s.length) { ctx.fillStyle = MUTED; ctx.font = font(600, 26, BODY); ctx.fillText(s.slice(0, 3).join('  ·  '), 60, Math.min(y + 135, H - 110)); }
+    footer(ctx, d, INK);
+  };
+
+  /* ---------- formatos ---------- */
+  var FORMATS = { feed: [1080, 1350], story: [1080, 1920], square: [1080, 1080] };
+
   /**
-   * Desenha a capa no canvas. d = { template, title, color, handle, products: [...], images: [Image|null] }.
+   * Desenha a capa no canvas. d = { template, format, title, color, handle, cta, opts, products: [...], images: [Image|null] }.
+   * O desenho é feito em 1080x1350 (feed); "story" e "square" encaixam esse desenho e completam o espaço.
    */
   function render(canvas, d) {
-    canvas.width = W; canvas.height = H;
+    var size = FORMATS[d.format] || FORMATS.feed;
+    canvas.width = size[0]; canvas.height = size[1];
     var ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-    (T[d.template] || T.oferta)(ctx, d);
+    ctx.clearRect(0, 0, size[0], size[1]);
+    var draw = T[d.template] || T.oferta;
+    if (!FORMATS[d.format] || d.format === 'feed') return draw(ctx, d);
+    var base = document.createElement('canvas'); base.width = W; base.height = H;
+    // nos Stories o link fica no adesivo, logo abaixo da capa
+    var bctx = base.getContext('2d');
+    draw(bctx, d.format === 'story' && (!d.cta || d.cta === 'LINK NA BIO') ? Object.assign({}, d, { cta: 'LINK AQUI EMBAIXO' }) : d);
+    var c = d.color, bg;
+    try { var px = bctx.getImageData(4, 4, 1, 1).data; bg = hex([px[0], px[1], px[2]]); } catch (_) { bg = shade(c, 0.9); } // cor do fundo do modelo
+    if (d.format === 'square') {
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 1080, 1080);
+      var k = 1080 / H; ctx.drawImage(base, (1080 - W * k) / 2, 0, W * k, 1080);
+      return null;
+    }
+    // Stories 9:16: faixa de cima com o título, capa no meio e espaço embaixo para o adesivo de link
+    var g = ctx.createLinearGradient(0, 0, 0, 1920);
+    g.addColorStop(0, c); g.addColorStop(1, shade(c, -0.25));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 1080, 1920);
+    var fg = onColor(c);
+    ctx.fillStyle = fg; ctx.textAlign = 'center';
+    ctx.font = font(700, 64, DISPLAY); ctx.fillText('✨ NOVO ACHADINHO ✨', 540, 150);
+    ctx.font = font(500, 34, BODY); ctx.fillText(d.handle ? '@' + d.handle : 'corre que é oferta', 540, 205);
+    var s = 0.86, bw = W * s, bh = H * s;
+    shadow(ctx, true); ctx.fillStyle = '#FFFFFF'; roundRect(ctx, (1080 - bw) / 2, 250, bw, bh, 36); ctx.fill(); shadow(ctx, false);
+    ctx.save(); roundRect(ctx, (1080 - bw) / 2, 250, bw, bh, 36); ctx.clip();
+    ctx.drawImage(base, (1080 - bw) / 2, 250, bw, bh); ctx.restore();
+    // área do adesivo de link (o Instagram não deixa colocar o link pela imagem; aqui fica o lugar dele)
+    var ty = 250 + bh + 60;
+    ctx.setLineDash([18, 14]); ctx.strokeStyle = fg; ctx.lineWidth = 4; ctx.globalAlpha = 0.85;
+    roundRect(ctx, 190, ty, 700, 150, 75); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.font = font(700, 40, DISPLAY); ctx.fillText(d.cta && d.cta !== 'LINK NA BIO' ? d.cta : 'TOQUE NO LINK 👇', 540, ty + 90);
+    ctx.textAlign = 'left';
+    return null;
   }
 
-  window.GarimpoCover = { W: W, H: H, render: render, loadImage: loadImage, fontsReady: fontsReady, templates: Object.keys(T) };
+  window.GarimpoCover = { W: W, H: H, FORMATS: FORMATS, render: render, loadImage: loadImage, fontsReady: fontsReady, templates: Object.keys(T) };
 })();
