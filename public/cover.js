@@ -330,42 +330,51 @@
   var CREAM = '#F6F1EA', GOLDLINE = '#B08D57', DEEP = '#1F1B16';
   T.premium = function (ctx, d) {
     var p = d.products[0], off = offOf(p, d);
+    var LABEL = '#8C6B3F', SOFT = '#5E5241'; // dourado e cinza-quente mais escuros: contraste para leitura
+    var spacing = function (v) { if (ctx.letterSpacing !== undefined) ctx.letterSpacing = v; };
     ctx.fillStyle = CREAM; ctx.fillRect(0, 0, W, H);
     // moldura fina dourada
     ctx.strokeStyle = GOLDLINE; ctx.lineWidth = 2; ctx.strokeRect(36, 36, W - 72, H - 72);
     // rótulo
     var label = (d.title || 'SELEÇÃO PREMIUM').toUpperCase();
-    ctx.fillStyle = GOLDLINE; ctx.textAlign = 'center';
-    ctx.font = font(600, 26, BODY);
-    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '6px';
-    ctx.fillText(label, W / 2, 104);
-    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
-    ctx.fillRect(W / 2 - 40, 124, 80, 2);
+    ctx.fillStyle = LABEL; ctx.textAlign = 'center';
+    spacing('5px'); ctx.font = font(600, fit(ctx, label, 820, 34, 24, 600, BODY), BODY);
+    ctx.fillText(label, W / 2, 108);
+    spacing('0px');
+    ctx.fillStyle = GOLDLINE; ctx.fillRect(W / 2 - 50, 128, 100, 3);
     // foto
-    ctx.fillStyle = '#FFFFFF'; shadow(ctx, true); roundRect(ctx, 96, 160, W - 192, 720, 8); ctx.fill(); shadow(ctx, false);
-    contain(ctx, d.images[0], 126, 190, W - 252, 660);
-    // nome em serifa
-    ctx.fillStyle = DEEP; ctx.font = font(600, 54, SERIF);
-    var lines = wrap(ctx, p.title, 860, 2);
-    lines.forEach(function (l, i) { ctx.fillText(l, W / 2, 960 + i * 62); });
-    var y = 960 + lines.length * 62 + 14;
-    // selos em texto pequeno
-    var s = seals(p, d).map(function (x) { return x.charAt(0) + x.slice(1).toLowerCase(); });
+    ctx.fillStyle = '#FFFFFF'; shadow(ctx, true); roundRect(ctx, 110, 160, W - 220, 600, 8); ctx.fill(); shadow(ctx, false);
+    contain(ctx, d.images[0], 140, 186, W - 280, 548);
+    // nome em serifa, maior
+    ctx.fillStyle = DEEP; ctx.font = font(600, 64, SERIF);
+    var lines = wrap(ctx, p.title, 900, 2);
+    lines.forEach(function (l, i) { ctx.fillText(l, W / 2, 846 + i * 72); });
+    var y = 846 + (lines.length - 1) * 72 + 24;
+    // selos legíveis
+    var s = seals(p, d).map(function (x) { return (x.charAt(0) + x.slice(1).toLowerCase()).replace(/full/, 'Full'); });
     if (rankOf(p, d)) s.push(p.best_seller_rank + 'º mais vendido');
-    if (s.length) { ctx.fillStyle = '#8A7A63'; ctx.font = font(500, 26, BODY); ctx.fillText(s.slice(0, 3).join('   ·   '), W / 2, y + 10); y += 44; }
-    // preço sóbrio
+    if (s.length) {
+      var sealTxt = s.slice(0, 3).join('  ·  ');
+      ctx.fillStyle = SOFT; ctx.font = font(500, fit(ctx, sealTxt, 900, 34, 26, 500, BODY), BODY);
+      ctx.fillText(sealTxt, W / 2, y + 44);
+      y += 62;
+    }
+    // preço
     var range = Number(p.price_max) > Number(p.price);
-    ctx.fillStyle = DEEP; ctx.font = font(500, fit(ctx, brl(p.price), 600, 84, 50, 500, SERIF), SERIF);
-    ctx.fillText((range ? 'a partir de ' : '') + brl(p.price), W / 2, Math.min(y + 84, H - 150));
-    if (off > 0) { ctx.fillStyle = '#8A7A63'; ctx.font = font(500, 26, BODY); ctx.fillText('antes ' + brl(p.original_price), W / 2, Math.min(y + 140, H - 112)); }
-    // rodapé discreto
-    ctx.fillStyle = GOLDLINE; ctx.fillRect(96, H - 96, W - 192, 1);
-    var foot = ((d.cta || 'LINK NA BIO') + (d.handle ? '   ·   @' + d.handle : '')).toUpperCase();
-    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '3px';
-    var fs2 = 24; ctx.font = font(600, fs2, BODY);
-    while (fs2 > 16 && ctx.measureText(foot).width > 860) { fs2 -= 1; ctx.font = font(600, fs2, BODY); } // cabe dentro da moldura
-    ctx.fillStyle = DEEP; ctx.fillText(foot, W / 2, H - 58);
-    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
+    var priceTxt = (range ? 'a partir de ' : '') + brl(p.price);
+    // números sem serifa: os da serifa "descem" da linha e cansam a leitura
+    spacing('1px'); ctx.fillStyle = DEEP; ctx.font = font(600, fit(ctx, priceTxt, 860, 92, 60, 600, BODY), BODY);
+    var py = Math.min(y + 116, H - 200);
+    ctx.fillText(priceTxt, W / 2, py); spacing('0px');
+    if (off > 0) { ctx.fillStyle = SOFT; ctx.font = font(500, 36, BODY); ctx.fillText('antes ' + brl(p.original_price), W / 2, py + 62); }
+    // rodapé
+    ctx.fillStyle = GOLDLINE; ctx.fillRect(96, H - 108, W - 192, 2);
+    var foot = ((d.cta || 'LINK NA BIO') + (d.handle ? '  ·  @' + d.handle : '')).toUpperCase();
+    spacing('2px');
+    var fs2 = 30; ctx.font = font(600, fs2, BODY);
+    while (fs2 > 20 && ctx.measureText(foot).width > 900) { fs2 -= 1; ctx.font = font(600, fs2, BODY); } // cabe dentro da moldura
+    ctx.fillStyle = DEEP; ctx.fillText(foot, W / 2, H - 60);
+    spacing('0px');
     ctx.textAlign = 'left';
   };
 
