@@ -47,7 +47,10 @@ function cleanConfig(c) {
       shipping: ['free', 'cheap'].includes(f.shipping) ? f.shipping : '',
       price_min: parseNum(f.price_min) || null,
       price_max: parseNum(f.price_max) || null,
+      official_only: f.official_only === true,
     },
+    // "premium": texto de curadoria (sóbrio, foco em qualidade); padrão: tom animado da Anninha
+    tone: c?.tone === 'premium' ? 'premium' : 'anninha',
     window: {
       start: HHMM.test(c?.window?.start) ? c.window.start : '08:00',
       end: HHMM.test(c?.window?.end) ? c.window.end : '22:00',
@@ -94,6 +97,7 @@ function passes(p, f) {
   if (f.min_commission && (Number(p.commission_pct) || 0) < f.min_commission) return false;
   if (f.price_min && p.price < f.price_min) return false;
   if (f.price_max && p.price > f.price_max) return false;
+  if (f.official_only && !isOfficial(p)) return false;
   if (f.shipping) {
     const free = p.free_shipping === true || p.shipping_cost === 0;
     if (f.shipping === 'free' && !free) return false;
@@ -101,6 +105,9 @@ function passes(p, f) {
   }
   return true;
 }
+
+/** Loja oficial (Mercado Livre) ou loja oficial/Mall na Shopee (pelo nome da loja). */
+const isOfficial = (p) => p.official_store === true || /oficial|official|\bmall\b/i.test(`${p.shop || ''} ${p.notes || ''}`);
 
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -171,7 +178,7 @@ async function sendInstagram({ pool, cfg, fetchImpl, automation, config, row, pr
   if (today >= config.ig_daily_max) return `limite diário de ${config.ig_daily_max} posts atingido`;
   const images = [...new Set((product.images && product.images.length ? product.images : [product.image_url]).filter(Boolean))].slice(0, 3);
   if (!images.length) return 'produto sem foto';
-  const caption = (await buildCaption(row, 'instagram', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id) })).caption;
+  const caption = (await buildCaption(row, 'instagram', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
   const carousel = images.length > 1;
   const ins = await pool.query(
     `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, media_items, automation_id)
@@ -184,17 +191,17 @@ async function sendInstagram({ pool, cfg, fetchImpl, automation, config, row, pr
   return done.status === 'posted' ? 'publicado' : done.status === 'processing' ? 'publicando' : done.status;
 }
 
-async function sendTelegram({ pool, cfg, fetchImpl, automation, row, product }) {
+async function sendTelegram({ pool, cfg, fetchImpl, automation, config, row, product }) {
   const c = (await pool.query('select tg_token_enc, tg_chat_id from connections where user_id = $1', [automation.user_id])).rows[0];
   if (!c || !c.tg_token_enc || !c.tg_chat_id) return 'Telegram não conectado';
-  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id) })).caption;
+  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
   await createTelegramClient({ token: decrypt(c.tg_token_enc, cfg.encryptionKey), fetchImpl })
     .sendOffer(c.tg_chat_id, { photo: product.image_url, text });
   return 'enviado';
 }
 
-async function queueWhatsapp({ pool, cfg, fetchImpl, automation, row }) {
-  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id) })).caption;
+async function queueWhatsapp({ pool, cfg, fetchImpl, automation, config, row }) {
+  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
   await pool.query(
     `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, automation_id)
        values ($1,$2,'whatsapp',$3,'none',null,$4)`,
@@ -288,4 +295,4 @@ async function runDue({ pool, cfg, fetchImpl, log = console, now = new Date() })
   return results;
 }
 
-module.exports = { cleanConfig, runOnce, runNow, runDue, inWindow, localClock, sourceFor, passes };
+module.exports = { cleanConfig, runOnce, runNow, runDue, inWindow, localClock, sourceFor, passes, isOfficial };

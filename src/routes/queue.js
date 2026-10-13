@@ -46,7 +46,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     const prod = await pool.query('select * from products where id = $1 and user_id = $2', [Number(body?.product_id), uid]);
     if (!prod.rows.length) throw new HttpError(404, 'Produto não encontrado.');
     const p = prod.rows[0];
-    const out = await buildCaption(p, channel, { ai: Boolean(body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, uid), follow: await followHandle(pool, uid) });
+    const out = await buildCaption(p, channel, { ai: Boolean(body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, uid), follow: await followHandle(pool, uid), tone: body?.tone === 'premium' ? 'premium' : undefined });
     let media_type = 'none';
     let media_url = null;
     if (channel === 'instagram') {
@@ -194,7 +194,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     if (!EDITABLE.includes(cur.status)) throw new HttpError(409, 'Este item não pode mais ser editado.');
     const prod = await pool.query('select * from products where id = $1 and user_id = $2', [cur.product_id, req.uid]);
     if (!prod.rows.length) throw new HttpError(404, 'O produto deste item foi removido.');
-    const out = await buildCaption(prod.rows[0], cur.channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, req.uid), follow: await followHandle(pool, req.uid) });
+    const out = await buildCaption(prod.rows[0], cur.channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, req.uid), follow: await followHandle(pool, req.uid), tone: req.body?.tone === 'premium' ? 'premium' : undefined });
     await pool.query('update queue_items set caption = $1 where id = $2', [out.caption, cur.id]);
     res.json({ item: await getItem(cur.id, req.uid), warning: out.warning });
   });

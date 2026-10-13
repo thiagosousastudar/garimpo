@@ -94,7 +94,57 @@ function waPerks(p) {
   return out;
 }
 
+/* ---------- tom Premium: curadoria, qualidade, poucos emojis, preço discreto ---------- */
+const PREMIUM_HOOKS = ['Seleção da Anninha ✨', 'Curadoria do dia ✨', 'Vale o investimento ✨', 'Escolhido a dedo ✨'];
+const PREMIUM_CLOSERS = ['Qualidade que se sente no uso.', 'Um item para ter por muitos anos.', 'Escolha de quem não abre mão de qualidade.'];
+
+/** Selos de confiança, em texto sóbrio (só o que for verdade). */
+function premiumTrust(p) {
+  const d = details(p);
+  const out = [];
+  if (d.official_store || /oficial|official|\bmall\b/i.test(`${p.shop || ''} ${p.notes || ''}`)) out.push('Loja oficial');
+  if (d.brand) out.push(`Marca ${d.brand}`);
+  if (Number(p.rating) >= 4.5) out.push(`Avaliação ${Number(p.rating).toFixed(1).replace('.', ',')} ★`);
+  if (d.warranty) out.push(String(d.warranty).replace(/^Garantia (de )?(f[áa]brica|vendedor):\s*/i, 'Garantia de '));
+  if (d.full) out.push('Entrega Full');
+  else if (d.free_shipping) out.push('Frete grátis');
+  return out.slice(0, 4);
+}
+
+/** Preço discreto: "R$ 1.299,00 (antes R$ 1.599,00)", "a partir de R$ X". */
+function premiumPrice(p, wa) {
+  const { desc } = scoreProduct(p);
+  const from = details(p).price_max > Number(p.price);
+  const b = (s) => (wa ? `*${s}*` : s);
+  const off = desc > 0 && p.original_price ? ` (antes ${brl(p.original_price)})` : '';
+  return `${from ? 'A partir de ' : 'Por '}${b(brl(p.price))}${off}`;
+}
+
+function premiumCopy(p, channel) {
+  const wa = channel === 'whatsapp';
+  const feats = highlights(p);
+  const trust = premiumTrust(p);
+  const lines = [
+    wa ? `✨ *${pick(PREMIUM_HOOKS).replace(' ✨', '')}*` : pick(PREMIUM_HOOKS),
+    '',
+    wa ? `*${p.title}*` : p.title,
+  ];
+  if (feats.length) lines.push('', ...feats.map((x) => `· ${x}`));
+  if (trust.length) lines.push('', trust.join(' · '));
+  lines.push('', premiumPrice(p, wa));
+  if (p._coupon) lines.push(couponLine(p._coupon, channel));
+  if (wa) {
+    lines.push('', `👉 ${p.affiliate_url || PLACEHOLDER}`, '', pick(PREMIUM_CLOSERS));
+  } else {
+    const cat = TAGS[String(p.category || '').toLowerCase()] || '';
+    const tags = [...new Set(`#selecaopremium #curadoria ${cat} #${p.marketplace === 'ML' ? 'mercadolivre' : 'shopee'}`.split(/\s+/).filter(Boolean))].join(' ');
+    lines.push('', 'Link na bio.', 'Preços e estoque podem mudar.', '', tags);
+  }
+  return lines.join('\n');
+}
+
 function templateCopy(p, channel) {
+  if (p._tone === 'premium') return premiumCopy(p, channel);
   const f = facts(p);
   if (channel === 'whatsapp') {
     const { desc } = scoreProduct(p);
@@ -165,8 +215,9 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
     garantia: details(p).warranty || null,
     posicao_mais_vendidos: details(p).best_seller_rank || null,
   };
-  const formato =
-    channel === 'whatsapp'
+  const formato = p._tone === 'premium'
+    ? `Texto ${channel === 'whatsapp' ? 'de WhatsApp (use *negrito* do WhatsApp no nome e no preço)' : 'de legenda do Instagram'} em tom de curadoria premium, elegante e sóbrio: primeira linha "Seleção da Anninha ✨", nome do produto, 2 ou 3 linhas sobre qualidade, material, uso e durabilidade (só com base nos dados), selos de confiança em uma linha (loja oficial, marca, garantia, avaliação, se houver), o preço de forma discreta${channel === 'whatsapp' ? `, a linha "👉 ${p.affiliate_url || PLACEHOLDER}"` : ', "Link na bio." e 3 a 5 hashtags'}. No máximo 2 emojis. Nada de caixa alta, exclamações em excesso, "baratinho", "corre" ou urgência.`
+    : channel === 'whatsapp'
       ? `Mensagem de WhatsApp da Anninha, como uma amiga animada que achou algo incrível: primeira linha em *negrito* e caixa alta com emoji, nome do produto em *negrito*, "De: ~preço original~" riscado (se houver) e "Por: *preço*", cada destaque numa linha com emoji (frete grátis, mais vendido etc., só se os dados disserem), depois a linha "👉 ${p.affiliate_url || PLACEHOLDER}" e um fechamento animado. Use a formatação do WhatsApp (*negrito*, ~riscado~). Sem prazos ou "tempo limitado" inventados; pode dizer que o preço pode mudar.`
       : 'Legenda de Instagram: gancho forte na primeira linha, 3 a 4 benefícios curtos com emojis, chamada para "link na bio", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
   const prompt = `Escreva em português do Brasil. ${formato}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
@@ -192,7 +243,8 @@ async function buildCaption(p0, channel, opts) {
   return { ...out, caption: withFollow(out.caption, opts.follow, channel) };
 }
 
-async function buildCaptionRaw(p0, channel, { ai, cfg, fetchImpl, coupons }) {
+async function buildCaptionRaw(p00, channel, { ai, cfg, fetchImpl, coupons, tone }) {
+  const p0 = tone === 'premium' ? { ...p00, _tone: 'premium' } : p00;
   // cupom cadastrado que combina com o produto (mesma loja, compra mínima atendida) entra no texto
   const coupon = coupons && coupons.length ? bestCouponFor(p0, coupons) : null;
   const p = coupon ? { ...p0, _coupon: coupon } : p0;

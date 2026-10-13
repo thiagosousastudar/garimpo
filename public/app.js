@@ -249,11 +249,15 @@
   /** Resultados na ordem e no filtro escolhidos, guardando o índice original (a seleção usa o índice). */
   function gView() {
     var g = state.g;
-    var list = g.results.map(function (p, i) { return { p: p, i: i }; }).filter(function (x) { return !g.onlyCom || x.p.commission_pct != null; });
+    var list = g.results.map(function (p, i) { return { p: p, i: i }; }).filter(function (x) {
+      return (!g.onlyCom || x.p.commission_pct != null) && (!g.official || isOfficialP(x.p)) && (!g.priceMin || x.p.price >= g.priceMin);
+    });
     var s = G_SORTERS[g.sort];
     if (s) list.sort(function (a, b) { return s(a.p, b.p) || a.i - b.i; });
     return list;
   }
+  /** Loja oficial no Mercado Livre, ou loja oficial/Mall na Shopee (pelo nome da loja). */
+  function isOfficialP(p) { return p.official_store === true || /oficial|official|\bmall\b/i.test((p.shop || '') + ' ' + (p.notes || '')); }
   /** Destaques entre os resultados: maior ganho, mais vendido e maior desconto. */
   function gHighlights(list) {
     var best = function (key) {
@@ -438,10 +442,12 @@
         item('🔥 Mais vendido', hl.sold, hl.sold ? (hl.sold.p.best_seller_rank ? hl.sold.p.best_seller_rank + 'º no ranking' : fmtSales(hl.sold.p.sales_k)) : '') +
         item('💥 Maior desconto', hl.off, hl.off ? '−' + hl.off.p.desc + '%' : '') + '</div>' +
         '<div class="filters gtools">' + selectEl('g-sort', 'sort', 'Ordenar por', G_SORTS, g.sort) +
-        '<label class="check"><input type="checkbox" id="g-onlycom"' + (g.onlyCom ? ' checked' : '') + '> Só com comissão (' + withCom + ' de ' + g.results.length + ')</label></div>';
+        '<label class="check"><input type="checkbox" id="g-onlycom"' + (g.onlyCom ? ' checked' : '') + '> Só com comissão (' + withCom + ' de ' + g.results.length + ')</label>' +
+        '<label class="check"><input type="checkbox" id="g-official"' + (g.official ? ' checked' : '') + '> 💎 Só lojas oficiais (' + g.results.filter(isOfficialP).length + ')</label>' +
+        '<label class="check">Preço a partir de R$ <input type="text" inputmode="decimal" id="g-pmin" value="' + (g.priceMin ? String(g.priceMin).replace('.', ',') : '') + '" placeholder="qualquer" style="width:90px"></label></div>';
     }
     var results = list.length ? '<div class="grid three" style="margin-top:12px">' + cards + '</div>' :
-      (g.results.length ? '<div class="empty centered-empty" style="margin-top:12px">Nenhum resultado com comissão. Desmarque "Só com comissão" ou preencha a comissão.</div>' :
+      (g.results.length ? '<div class="empty centered-empty" style="margin-top:12px">Nenhum resultado com esses filtros. Desmarque algum filtro (comissão, lojas oficiais, preço) ou preencha a comissão.</div>' :
         (g.done && !g.busy ? '<div class="empty centered-empty" style="margin-top:12px">Nada encontrado com esses filtros. Tente outra palavra ou afrouxe os filtros.</div>' : ''));
     var bar = g.results.length ? '<div class="gbar"><span class="hint">' + list.length + ' resultados · ' + nsel + ' selecionados</span><span class="grow"></span>' +
       '<button class="btn small" data-act="g-all">Selecionar todos</button>' +
@@ -672,11 +678,12 @@
     if (f.shipping) filt.push(f.shipping === 'free' ? 'frete grátis' : 'frete grátis ou barato');
     if (f.price_min) filt.push('a partir de ' + brl(f.price_min));
     if (f.price_max) filt.push('até ' + brl(f.price_max));
+    if (f.official_only) filt.push('só lojas oficiais');
     var iv = INTERVALS.filter(function (x) { return x[0] === c.interval_min; })[0];
     var chans = Object.keys(CH_NAMES).filter(function (k) { return c.channels[k]; }).map(function (k) { return CH_NAMES[k] + (k === 'instagram' ? ' (até ' + c.ig_daily_max + '/dia)' : ''); });
     return '<b>De onde:</b> ' + esc(src.join(' + ')) + '<br><b>Filtros:</b> ' + esc(filt.join(', ') || 'nenhum') +
       '<br><b>Quando:</b> 1 oferta ' + esc(iv ? iv[1] : '') + ', das ' + esc(c.window.start) + ' às ' + esc(c.window.end) + ', sem repetir por ' + c.dedup_days + ' dia' + (c.dedup_days > 1 ? 's' : '') +
-      '<br><b>Para:</b> ' + esc(chans.join(', '));
+      '<br><b>Para:</b> ' + esc(chans.join(', ')) + (c.tone === 'premium' ? '<br><b>Texto:</b> 💎 Premium' : '');
   }
 
   function runLine(r) {
@@ -709,7 +716,7 @@
     }).join('');
     return '<div class="pagehead"><h2>Piloto automático</h2><p>Escolha de onde vêm as ofertas, os filtros, o horário e os canais. O Garimpo envia sozinho: <b>Instagram</b> e <b>Telegram</b> direto; no <b>WhatsApp</b> a oferta fica pronta na Fila e você compartilha com foto em um toque.</p></div>' +
       warn.map(function (w) { return '<p class="err">' + esc(w) + '</p>'; }).join('') +
-      '<div class="row" style="margin-bottom:12px"><button class="btn primary" data-act="auto-new">+ Novo piloto</button></div>' +
+      '<div class="row" style="margin-bottom:12px"><button class="btn primary" data-act="auto-new">+ Novo piloto</button><button class="btn" data-act="auto-new-premium">💎 Novo piloto Premium</button></div>' +
       (cards ? '<div class="grid">' + cards + '</div>' : '<div class="empty centered-empty">Nenhum piloto ainda. Crie um: por exemplo, "1 oferta da Shopee com 30% off a cada hora, das 9h às 21h, no Telegram e no WhatsApp".</div>') +
       '<section class="card" style="margin-top:14px"><h3>Como funciona</h3><ol class="steps">' +
       '<li>A cada rodada o piloto pega <b>1 oferta</b>: a fonte da vez, só itens com o seu link de afiliado, dentro dos filtros, sem repetir o que já mandou no período escolhido. Entre as melhores notas ele sorteia, para variar.</li>' +
@@ -719,14 +726,21 @@
       '<li>Fora do horário escolhido o piloto descansa. "Rodar agora" funciona a qualquer hora, para testar.</li></ol></section>';
   }
 
-  function autoDialog(a) {
-    var c = (a && a.config) || { sources: { saved: true, marketplaces: ['ML', 'SH'], keywords: [], shopee_queries: [] }, filters: { min_discount: 20, min_commission: 0, shipping: '', price_min: null, price_max: null },
+  /** Pré-configuração da Linha Premium: produtos de loja oficial a partir de R$ 150, texto de curadoria, ritmo calmo. */
+  function premiumPreset() {
+    return { sources: { saved: true, marketplaces: ['ML', 'SH'], keywords: [], shopee_queries: [] }, filters: { min_discount: 0, min_commission: 0, shipping: '', price_min: 150, price_max: null, official_only: true },
+      window: { start: '10:00', end: '21:00' }, interval_min: 240, dedup_days: 14, tone: 'premium',
+      channels: { instagram: Boolean(state.conn && state.conn.connected), telegram: Boolean(state.tg && state.tg.ready), whatsapp: true }, ig_daily_max: 2 };
+  }
+  function autoDialog(a, preset) {
+    var c = (a && a.config) || (preset === 'premium' ? premiumPreset() : null) || { sources: { saved: true, marketplaces: ['ML', 'SH'], keywords: [], shopee_queries: [] }, filters: { min_discount: 20, min_commission: 0, shipping: '', price_min: null, price_max: null },
       window: { start: '09:00', end: '21:00' }, interval_min: 60, dedup_days: 7, channels: { instagram: false, telegram: Boolean(state.tg && state.tg.ready), whatsapp: true }, ig_daily_max: 4 };
     var shOk = mktReady('SH');
     var chk = function (name, value, on, label) { return '<label class="check"><input type="checkbox" name="' + name + '" value="' + value + '"' + (on ? ' checked' : '') + '> ' + label + '</label>'; };
     var opt = function (list, cur) { return list.map(function (o) { return '<option value="' + o[0] + '"' + (String(o[0]) === String(cur) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); };
     var numv = function (v) { return v == null || v === 0 ? '' : String(v).replace('.', ','); };
-    var inner = field('a_name', 'Nome do piloto', a ? a.name : 'Ofertas do dia', 'required maxlength="60"') +
+    var inner = field('a_name', 'Nome do piloto', a ? a.name : preset === 'premium' ? 'Linha Premium' : 'Ofertas do dia', 'required maxlength="60"') +
+      (preset === 'premium' ? '<p class="hint">💎 Já veio configurado para a Linha Premium: só lojas oficiais, a partir de R$ 150, texto de curadoria, até 2 posts por dia no Instagram. Ajuste o que quiser.</p>' : '') +
       '<fieldset class="fs"><legend>De onde vêm as ofertas</legend>' +
       chk('saved', '1', c.sources.saved, 'Meus produtos salvos (com link de afiliado)') +
       '<div class="row">' + chk('mk', 'ML', c.sources.marketplaces.indexOf('ML') > -1, 'Mercado Livre') + chk('mk', 'SH', c.sources.marketplaces.indexOf('SH') > -1, 'Shopee') + '</div>' +
@@ -738,7 +752,9 @@
       field('min_commission', 'Comissão mínima (%)', numv(c.filters.min_commission), 'inputmode="decimal" placeholder="0"') + '</div><div class="cols">' +
       field('price_min', 'Preço de (R$)', numv(c.filters.price_min), 'inputmode="decimal" placeholder="qualquer"') +
       field('price_max', 'Preço até (R$)', numv(c.filters.price_max), 'inputmode="decimal" placeholder="qualquer"') + '</div>' +
-      '<div class="field"><label for="a_ship">Frete</label><select id="a_ship" name="shipping">' + opt(SHIP_OPTS, c.filters.shipping) + '</select></div></fieldset>' +
+      '<div class="field"><label for="a_ship">Frete</label><select id="a_ship" name="shipping">' + opt(SHIP_OPTS, c.filters.shipping) + '</select></div>' +
+      chk('official_only', '1', c.filters.official_only, '💎 Só lojas oficiais (Mercado Livre: loja oficial · Shopee: Mall/oficial)') + '</fieldset>' +
+      '<fieldset class="fs"><legend>Texto</legend><div class="field"><label for="a_tone">Tom do texto</label><select id="a_tone" name="tone">' + opt([['anninha', 'Anninha (animado, de achadinho)'], ['premium', '💎 Premium (curadoria, sóbrio)']], c.tone || 'anninha') + '</select></div></fieldset>' +
       '<fieldset class="fs"><legend>Quando</legend><div class="cols">' +
       '<div class="field"><label for="a_start">Das</label><input id="a_start" name="start" type="time" value="' + esc(c.window.start) + '" required></div>' +
       '<div class="field"><label for="a_end">Até</label><input id="a_end" name="end" type="time" value="' + esc(c.window.end) + '" required></div></div><div class="cols">' +
@@ -757,7 +773,8 @@
         name: fd.get('a_name'), active: fd.get('active') === '1',
         config: {
           sources: { saved: fd.get('saved') === '1', marketplaces: fd.getAll('mk'), keywords: fd.get('keywords') || '', shopee_queries: fd.get('shopee_queries') || '' },
-          filters: { min_discount: fd.get('min_discount'), min_commission: fd.get('min_commission'), price_min: fd.get('price_min'), price_max: fd.get('price_max'), shipping: fd.get('shipping') },
+          filters: { min_discount: fd.get('min_discount'), min_commission: fd.get('min_commission'), price_min: fd.get('price_min'), price_max: fd.get('price_max'), shipping: fd.get('shipping'), official_only: fd.get('official_only') === '1' },
+          tone: fd.get('tone'),
           window: { start: fd.get('start'), end: fd.get('end') }, interval_min: Number(fd.get('interval_min')), dedup_days: Number(fd.get('dedup_days')),
           channels: { instagram: fd.getAll('ch').indexOf('instagram') > -1, telegram: fd.getAll('ch').indexOf('telegram') > -1, whatsapp: fd.getAll('ch').indexOf('whatsapp') > -1 },
           ig_daily_max: Number(fd.get('ig_daily_max')),
@@ -1085,6 +1102,7 @@
     'cp-wa': function () { var t = state.cp.msg.text; copyText(t); window.open(waLink(t), '_blank', 'noopener'); },
     'cp-tg': function () { return api('POST', '/api/coupons/send-telegram').then(function () { toast('Cupons enviados no Telegram'); }); },
     'auto-new': function () { autoDialog(null); },
+    'auto-new-premium': function () { autoDialog(null, 'premium'); },
     'tg-find': function () {
       return api('GET', '/api/connections/telegram/chats').then(function (r) {
         state.tgChats = r.chats;
@@ -1234,7 +1252,7 @@
   function openPost(arg) {
     var list = (Array.isArray(arg) ? arg : [arg]).filter(Boolean);
     if (!list.length) return null;
-    post = { products: list, product: list[0], group: list.length > 1, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', media: [], uploads: [], busy: true };
+    post = { products: list, product: list[0], group: list.length > 1, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', media: [], uploads: [], busy: true, tone: prefGet('tone', 'anninha') };
     renderPost();
     if (!dlg.open) dlg.showModal();
     return (post.group ? Promise.resolve(null) : freshBeforeQueue(list[0])).then(function (msg) { if (post) post.note = msg; return loadPreview(false); });
@@ -1245,7 +1263,7 @@
     post.busy = true; post.error = null; renderPost();
     var req = post.group
       ? api('POST', '/api/queue/preview-group', { product_ids: post.products.map(function (p) { return p.id; }), channel: post.channel, ai: ai })
-      : api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai });
+      : api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai, tone: post.tone });
     return req.then(function (r) {
       if (!post) return;
       post.caption = r.caption;
@@ -1338,7 +1356,7 @@
       media +
       '<textarea id="post-cap" aria-label="Texto do post"' + (locked ? ' readonly' : '') + '>' + esc(post.busy && !post.caption ? 'Preparando o texto…' : post.caption) + '</textarea>' +
       (ig ? '<p class="hint"><span id="post-cnt">' + post.caption.length + '</span>/2200 caracteres</p>' : '') +
-      (post.status ? '' : '<div class="row"><button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
+      (post.status ? '' : '<div class="row">' + (post.group ? '' : '<div class="seg" role="group" aria-label="Tom do texto"><button type="button" data-ptone="anninha" aria-pressed="' + (post.tone !== 'premium') + '"' + (post.busy ? ' disabled' : '') + '>Tom Anninha</button><button type="button" data-ptone="premium" aria-pressed="' + (post.tone === 'premium') + '"' + (post.busy ? ' disabled' : '') + '>💎 Premium</button></div>') + '<button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
         (state.ai ? '<button class="btn small" data-act="post-regen-ai"' + (post.busy ? ' disabled' : '') + '>Refazer com IA</button>' : '') + '</div>') +
       '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
     if (post.cover && post.cover.open) drawCover();
@@ -1428,7 +1446,7 @@
   /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
   var DEFAULT_COLOR = '#E8457A';
   function coverDefaultTitle(tpl) {
-    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : tpl === 'relampago' ? 'Baixou o preço!' : tpl === 'minimal' ? 'Achado do dia' : 'Achadinho do dia';
+    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : tpl === 'relampago' ? 'Baixou o preço!' : tpl === 'minimal' ? 'Achado do dia' : tpl === 'premium' ? 'Seleção premium' : 'Achadinho do dia';
   }
   /** Foto usada nos modelos de 1 produto: a escolhida, senão a 1ª marcada no post (que não seja a capa), senão a do produto. */
   function coverPhoto() {
@@ -1437,7 +1455,7 @@
     var first = post.media.filter(function (m) { return m.type === 'image' && m.url !== cv.url; })[0];
     return first ? first.url : post.product.image_url;
   }
-  var COVER_TPLS = [['oferta', 'Oferta'], ['achadinho', 'Achadinho'], ['foto', 'Foto em destaque'], ['relampago', 'Baixou o preço'], ['minimal', 'Clean']];
+  var COVER_TPLS = [['premium', '💎 Premium'], ['oferta', 'Oferta'], ['achadinho', 'Achadinho'], ['foto', 'Foto em destaque'], ['relampago', 'Baixou o preço'], ['minimal', 'Clean']];
   var COVER_FORMATS = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16'], ['square', 'Quadrado 1:1']];
   var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
@@ -1536,7 +1554,7 @@
     'cover-open': function () {
       if (!window.GarimpoCover) throw new Error('O editor de capa não carregou. Atualize a página (Ctrl+F5).');
       if (!post.cover) {
-        var tpl = post.group ? 'lista' : 'oferta';
+        var tpl = post.group ? 'lista' : post.tone === 'premium' ? 'premium' : 'oferta';
         post.cover = {
           tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {},
           color: state.brand.color || DEFAULT_COLOR,
@@ -1746,6 +1764,7 @@
     if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
     if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
+    if (d.ptone && post && post.tone !== d.ptone) { post.tone = d.ptone; prefSet('tone', d.ptone); return loadPreview(false); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.waGuide = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
     if (d.gmkt) { var g = state.g; if (g.mkt !== d.gmkt) { g.mkt = d.gmkt; g.results = []; g.sel = {}; g.done = false; g.more = false; } return render(); }
@@ -1845,6 +1864,8 @@
     if (t.dataset.cpf && t.tagName === 'SELECT' && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpi)][t.dataset.cpf] = t.value; return null; }
     if (t.id === 'g-sort') { state.g.sort = t.value; return render(); } // ordena na hora, sem buscar de novo
     if (t.id === 'g-onlycom') { state.g.onlyCom = t.checked; return render(); }
+    if (t.id === 'g-official') { state.g.official = t.checked; return render(); }
+    if (t.id === 'g-pmin') { state.g.priceMin = Number(String(t.value).replace(/\./g, '').replace(',', '.')) || 0; return render(); }
     if (t.id === 'g-sheet' && t.files[0]) {
       var gs2 = state.g;
       gs2.sheetBusy = true; render();

@@ -1897,3 +1897,38 @@ test('link do ML que cai na vitrine de afiliado (/social/): acha o produto certo
     assert.equal(sb.data.saved, 1, JSON.stringify(sb.data));
   } finally { t.close(); }
 });
+
+test('linha Premium: texto de curadoria (sem caixa alta/urgência) e piloto só com lojas oficiais acima do preço mínimo', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', { ...PRODUTO, title: 'Cafeteira Premium', price: 549, original_price: 699, rating: 4.8 })).data.product;
+    const ig = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram', tone: 'premium' })).data.caption;
+    assert.match(ig, /^(Seleção da Anninha|Curadoria do dia|Vale o investimento|Escolhido a dedo) ✨/);
+    assert.match(ig, /Por R\$\s549,00 \(antes R\$\s699,00\)/);
+    assert.match(ig, /#selecaopremium/);
+    assert.doesNotMatch(ig, /OFF|CORRE|😱|Você economiza/);
+    const wa = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp', tone: 'premium' })).data.caption;
+    assert.match(wa, /Por \*R\$\s549,00\*/);
+    // padrão continua o tom da Anninha
+    assert.match((await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram' })).data.caption, /🔥/);
+
+    // piloto premium: só loja oficial e a partir de R$ 150
+    await api('PATCH', `/api/products/${p.id}`, { notes: 'Loja: Nespresso Oficial' });
+    const barato = (await api('POST', '/api/products', { ...PRODUTO, title: 'Barato Oficial', price: 49, affiliate_url: 'https://mercadolivre.com/sec/b', notes: 'Loja: X Oficial' })).data.product;
+    const caro = (await api('POST', '/api/products', { ...PRODUTO, title: 'Caro Sem Loja Oficial', price: 900, affiliate_url: 'https://mercadolivre.com/sec/c' })).data.product;
+    await api('PUT', '/api/connections/telegram', { token: '123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789' });
+    await api('PUT', '/api/connections/telegram/chat', { chat_id: '-1001234567890' });
+    const a = await api('POST', '/api/automations', { name: 'Linha Premium', config: { sources: { saved: true }, filters: { price_min: 150, official_only: true },
+      window: { start: '00:00', end: '23:59' }, interval_min: 240, dedup_days: 14, tone: 'premium', channels: { telegram: true } } });
+    assert.equal(a.status, 201, JSON.stringify(a.data));
+    assert.equal(a.data.config.tone, 'premium');
+    const r = await api('POST', `/api/automations/${a.data.id}/run`);
+    assert.equal(r.data.title, 'Cafeteira Premium', JSON.stringify(r.data));
+    const sent = opts.shopee.tg.sent.filter((m) => m.method === 'sendPhoto' || m.method === 'sendMessage').pop();
+    assert.match(sent.caption || sent.text, /Por <b>R\$\s549,00<\/b>/);
+    assert.ok(barato && caro);
+  } finally { t.close(); }
+});

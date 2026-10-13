@@ -46,6 +46,8 @@
       document.fonts.load('700 100px "Bricolage Grotesque"'),
       document.fonts.load('600 40px Figtree'),
       document.fonts.load('400 40px Figtree'),
+      document.fonts.load('600 54px "Cormorant Garamond"'),
+      document.fonts.load('500 80px "Cormorant Garamond"'),
     ]).catch(function () {});
   }
 
@@ -318,6 +320,53 @@
     var s = seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []);
     if (s.length) { ctx.fillStyle = MUTED; ctx.font = font(600, 26, BODY); ctx.fillText(s.slice(0, 3).join('  ·  '), 60, Math.min(y + 135, H - 110)); }
     footer(ctx, d, INK);
+  };
+
+  /**
+   * Premium: curadoria elegante. Fundo off-white, filete dourado, foto grande sem moldura chamativa,
+   * nome em serifa, preço sóbrio, desconto discreto ("antes R$ X") e selos em texto pequeno.
+   */
+  var SERIF = '"Cormorant Garamond", Georgia, "Times New Roman", serif';
+  var CREAM = '#F6F1EA', GOLDLINE = '#B08D57', DEEP = '#1F1B16';
+  T.premium = function (ctx, d) {
+    var p = d.products[0], off = offOf(p, d);
+    ctx.fillStyle = CREAM; ctx.fillRect(0, 0, W, H);
+    // moldura fina dourada
+    ctx.strokeStyle = GOLDLINE; ctx.lineWidth = 2; ctx.strokeRect(36, 36, W - 72, H - 72);
+    // rótulo
+    var label = (d.title || 'SELEÇÃO PREMIUM').toUpperCase();
+    ctx.fillStyle = GOLDLINE; ctx.textAlign = 'center';
+    ctx.font = font(600, 26, BODY);
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '6px';
+    ctx.fillText(label, W / 2, 104);
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
+    ctx.fillRect(W / 2 - 40, 124, 80, 2);
+    // foto
+    ctx.fillStyle = '#FFFFFF'; shadow(ctx, true); roundRect(ctx, 96, 160, W - 192, 720, 8); ctx.fill(); shadow(ctx, false);
+    contain(ctx, d.images[0], 126, 190, W - 252, 660);
+    // nome em serifa
+    ctx.fillStyle = DEEP; ctx.font = font(600, 54, SERIF);
+    var lines = wrap(ctx, p.title, 860, 2);
+    lines.forEach(function (l, i) { ctx.fillText(l, W / 2, 960 + i * 62); });
+    var y = 960 + lines.length * 62 + 14;
+    // selos em texto pequeno
+    var s = seals(p, d).map(function (x) { return x.charAt(0) + x.slice(1).toLowerCase(); });
+    if (rankOf(p, d)) s.push(p.best_seller_rank + 'º mais vendido');
+    if (s.length) { ctx.fillStyle = '#8A7A63'; ctx.font = font(500, 26, BODY); ctx.fillText(s.slice(0, 3).join('   ·   '), W / 2, y + 10); y += 44; }
+    // preço sóbrio
+    var range = Number(p.price_max) > Number(p.price);
+    ctx.fillStyle = DEEP; ctx.font = font(500, fit(ctx, brl(p.price), 600, 84, 50, 500, SERIF), SERIF);
+    ctx.fillText((range ? 'a partir de ' : '') + brl(p.price), W / 2, Math.min(y + 84, H - 150));
+    if (off > 0) { ctx.fillStyle = '#8A7A63'; ctx.font = font(500, 26, BODY); ctx.fillText('antes ' + brl(p.original_price), W / 2, Math.min(y + 140, H - 112)); }
+    // rodapé discreto
+    ctx.fillStyle = GOLDLINE; ctx.fillRect(96, H - 96, W - 192, 1);
+    var foot = ((d.cta || 'LINK NA BIO') + (d.handle ? '   ·   @' + d.handle : '')).toUpperCase();
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '3px';
+    var fs2 = 24; ctx.font = font(600, fs2, BODY);
+    while (fs2 > 16 && ctx.measureText(foot).width > 860) { fs2 -= 1; ctx.font = font(600, fs2, BODY); } // cabe dentro da moldura
+    ctx.fillStyle = DEEP; ctx.fillText(foot, W / 2, H - 58);
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
+    ctx.textAlign = 'left';
   };
 
   /* ---------- formatos ---------- */
