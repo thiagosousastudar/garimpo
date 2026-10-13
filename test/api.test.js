@@ -38,6 +38,14 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
         (meta.posts = meta.posts || []).unshift({ id: 'MEDIA_1', permalink: 'https://instagram.com/p/abc', caption: meta.lastCaption, timestamp: ts });
         return json(200, { id: 'MEDIA_1' });
       }
+      // comentários e Direct (resposta privada)
+      if (u.pathname.endsWith('/comments')) return json(200, { data: (meta.comments || {})[u.pathname.split('/').slice(-2)[0]] || [] });
+      if (u.pathname.endsWith('/messages')) {
+        if (meta.dmError) return json(400, { error: { message: '(#10) Application does not have permission for this action', code: 10 } });
+        (meta.dms = meta.dms || []).push({ recipient: JSON.parse(body.recipient), message: JSON.parse(body.message) });
+        return json(200, { recipient_id: 'IGSID1', message_id: 'm_1' });
+      }
+      if (u.pathname.endsWith('/replies')) { (meta.replies = meta.replies || []).push({ comment: u.pathname.split('/').slice(-2)[0], text: body.message }); return json(200, { id: 'R1' }); }
       if (u.pathname.endsWith('/media') && (opts.method || 'GET') === 'GET') return json(200, { data: meta.posts || [] });
       if (u.pathname.endsWith('/media')) {
         if (failMedia) return json(400, { error: { message: `Invalid token ${body.access_token}` } });
@@ -1930,5 +1938,66 @@ test('linha Premium: texto de curadoria (sem caixa alta/urgência) e piloto só 
     const sent = opts.shopee.tg.sent.filter((m) => m.method === 'sendPhoto' || m.method === 'sendMessage').pop();
     assert.match(sent.caption || sent.text, /Por <b>R\$\s549,00<\/b>/);
     assert.ok(barato && caro);
+  } finally { t.close(); }
+});
+
+test('Direct: comentário "QUERO" recebe o link do produto do post no Direct (manual e automático), sem repetir', async () => {
+  const opts = { meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const post = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Air fryer', media_type: 'image', media_url: PRODUTO.image_url });
+    assert.equal(post.data.item.status, 'posted');
+    const now = new Date().toISOString().replace(/\.\d+Z$/, '+0000');
+    const m = opts.meta.posts.find((x) => x.id === 'MEDIA_1');
+    m.comments_count = 3;
+    opts.meta.comments = { MEDIA_1: [
+      { id: 'C1', text: 'QUERO!! 😍', username: 'maria', timestamp: now },
+      { id: 'C2', text: 'que lindo', username: 'joao', timestamp: now },
+      { id: 'C3', text: 'quero sim', username: 'loja_teste', timestamp: now }, // a própria conta
+    ] };
+    const sync = await api('POST', '/api/direct/sync');
+    assert.equal(sync.status, 200, JSON.stringify(sync.data));
+    assert.equal(sync.data.fresh, 2);
+    const list = (await api('GET', '/api/direct/comments')).data.items;
+    const c1 = list.find((c) => c.username === 'maria');
+    const c2 = list.find((c) => c.username === 'joao');
+    assert.equal(c1.matched, true);
+    assert.equal(c2.matched, false);
+    assert.match(c1.preview, /Oi, maria!.*\n[\s\S]*👉 https:\/\/mercadolivre\.com\/sec\/abc/);
+
+    // envio manual
+    const s1 = await api('POST', `/api/direct/comments/${c1.id}/send`);
+    assert.equal(s1.status, 200, JSON.stringify(s1.data));
+    assert.deepEqual(opts.meta.dms[0].recipient, { comment_id: 'C1' });
+    assert.match(opts.meta.dms[0].message.text, /mercadolivre\.com\/sec\/abc/);
+    assert.equal(opts.meta.replies.length, 1, 'resposta pública "te mandei no Direct"');
+    assert.equal((await api('POST', `/api/direct/comments/${c1.id}/send`)).status, 409, 'não repete');
+
+    // sem permissão (app em desenvolvimento): erro claro e fica marcado
+    opts.meta.dmError = true;
+    const e = await api('POST', `/api/direct/comments/${c2.id}/send`, { text: 'Oi! Segue o link: https://mercadolivre.com/sec/abc' });
+    assert.equal(e.status, 502);
+    assert.match(e.data.error, /modo de desenvolvimento/);
+    opts.meta.dmError = false;
+
+    // automático: comentário novo com palavra-chave é respondido pelo agendador
+    assert.equal((await api('PUT', '/api/direct/settings', { auto: true, keywords: 'quero, link', template: 'Oi {nome}! {produto}: {link}', public_reply: false })).status, 200);
+    assert.equal((await api('PUT', '/api/direct/settings', { auto: true, template: 'sem o link' })).status, 400);
+    m.comments_count = 4;
+    opts.meta.comments.MEDIA_1.push({ id: 'C4', text: 'me manda o LINK por favor', username: 'ana', timestamp: now });
+    await t.pool.query('update users set dm_synced_at = null');
+    const { runDmTick } = require('../src/services/igdm');
+    assert.equal(await runDmTick({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { log() {}, error() {} } }), 1);
+    assert.equal(opts.meta.dms.pop().message.text, 'Oi ana! Air Fryer 3,5L: https://mercadolivre.com/sec/abc');
+    assert.equal(opts.meta.replies.length, 1, 'resposta pública desligada');
+
+    // outro usuário não vê
+    const other = t.client();
+    await signup(other, 'b@exemplo.com');
+    assert.equal((await other('GET', '/api/direct/comments')).data.items.length, 0);
   } finally { t.close(); }
 });

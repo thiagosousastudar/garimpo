@@ -201,3 +201,9 @@ textarea{font:inherit;color:var(--ink)}
 .cpitems{display:flex;flex-direction:column;gap:8px}
 .cpitem{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:8px 10px}
 .cpitem.off{opacity:.6}
+/* Direct */
+.dmitem.asked{border-color:var(--gold)}
+.dmtext{margin:6px 0;font-size:15px}
+.dmitem textarea{width:100%;font-size:14px}
+.dmsent{white-space:pre-wrap;font:inherit;font-size:13px;color:var(--muted);margin:6px 0 0}
+.dmset summary,.card>summary{cursor:pointer}

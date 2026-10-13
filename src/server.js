@@ -13,6 +13,7 @@ const { cronRoutes } = require('./routes/cron');
 const { garimpoRoutes } = require('./routes/garimpo');
 const { automationRoutes } = require('./routes/automations');
 const { couponRoutes } = require('./routes/coupons');
+const { directRoutes } = require('./routes/dm');
 const { createStorage } = require('./services/storage');
 const { startScheduler } = require('./services/publisher');
 
@@ -63,6 +64,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   app.use('/api/media', guard, mediaRoutes({ cfg, storage, fetchImpl }));
   app.use('/api/earnings', guard, earningsRoutes({ pool, cfg }));
   app.use('/api/coupons', guard, couponRoutes({ pool, cfg, fetchImpl }));
+  app.use('/api/direct', guard, directRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/automations', guard, automationRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/connections', guard, connectionRoutes({ pool, cfg, fetchImpl }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));

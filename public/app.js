@@ -65,6 +65,7 @@
     pview: prefGet('pview', 'lista'), // Produtos: 'lista' (compacta) ou 'cards'
     gview: prefGet('gview', 'produtos'), // Garimpar: 'produtos' ou 'cupons'
     cp: { items: [], settings: null, loaded: false, parsed: null, text: '', mk: 'ML', link: '', msgChannel: 'whatsapp', msg: null },
+    dm: { items: [], loaded: false, filter: 'pedidos', settings: null, defaults: null, syncedAt: null }, // Direct
     qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
   };
 
@@ -145,6 +146,7 @@
     var tabs = [['garimpar', 'Garimpar', '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'],
       ['descobrir', 'Produtos', '<path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8V6a3 3 0 016 0v2"/>'],
       ['fila', 'Fila', '<path d="M4 6h16M4 12h16M4 18h10"/>'],
+      ['direct', 'Direct', '<path d="M21 11.5a8.4 8.4 0 01-12.2 7.5L3 21l2-5.6A8.5 8.5 0 1121 11.5z"/>'],
       ['piloto', 'Piloto', '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M2 13v2M22 13v2"/>'],
       ['ganhos', 'Ganhos', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
       ['conexoes', 'Conexões', '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 0011 18.7l1-1"/>']];
@@ -787,6 +789,59 @@
   function autoById(id) { return state.autos.filter(function (a) { return a.id === Number(id); })[0]; }
   function loadRuns(id) { return api('GET', '/api/automations/' + id + '/runs').then(function (r) { runsOpen[id] = r.items; }); }
 
+  /* ---------- Direct: comentários "QUERO" e resposta com o link ---------- */
+  var DM_STATUS = { novo: ['Aguardando', 'scheduled'], enviando: ['Enviando', 'publishing'], enviado: ['Enviado', 'posted'], erro: ['Erro', 'failed'], ignorado: ['Ignorado', 'draft'], fora_do_prazo: ['Prazo de 7 dias passou', 'draft'] };
+  function loadDirect() {
+    var dm = state.dm;
+    return Promise.all([
+      api('GET', '/api/direct/comments?filter=' + dm.filter).then(function (r) { dm.items = r.items; dm.syncedAt = r.synced_at; }),
+      dm.settings ? null : api('GET', '/api/direct/settings').then(function (r) { dm.settings = r.settings; dm.defaults = r.defaults; }),
+    ]).then(function () { dm.loaded = true; });
+  }
+  function viewDirect() {
+    var dm = state.dm;
+    if (!dm.loaded) { loadDirect().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando comentários…</p>'; }
+    if (!(state.conn && state.conn.connected)) {
+      return '<div class="pagehead"><h2>Direct</h2></div><div class="empty centered-empty">Conecte o Instagram na aba Conexões para receber os comentários.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
+    }
+    var s = dm.settings || { auto: false, keywords: [], template: '', public_reply: true };
+    var chips = [['pedidos', 'Pediram o link'], ['pendentes', 'Pendentes'], ['todos', 'Todos']].map(function (f) {
+      return '<button class="chip" data-dmfilter="' + f[0] + '" aria-pressed="' + (dm.filter === f[0]) + '">' + f[1] + '</button>';
+    }).join('');
+    var rows = dm.items.map(function (c) {
+      var st = DM_STATUS[c.status] || DM_STATUS.novo;
+      var canSend = c.status === 'novo' || c.status === 'erro' || c.status === 'ignorado';
+      return '<article class="card dmitem' + (c.matched ? ' asked' : '') + '"><header><div><h3>@' + esc(c.username || 'alguém') + (c.matched ? ' <span class="tag hl">pediu o link</span>' : '') + '</h3>' +
+        '<div class="meta"><span>' + esc(c.commented_at ? ago(c.commented_at) : '') + '</span>' + (c.products.length ? '<span>' + esc(c.products.map(function (p) { return p.title; }).join(', ').slice(0, 70)) + '</span>' : '<span class="err">post sem produto do Garimpo</span>') +
+        (c.permalink ? '<a class="small" href="' + esc(safeUrl(c.permalink)) + '" target="_blank" rel="noopener noreferrer">ver post ↗</a>' : '') + '</div></div>' +
+        '<span class="pill ' + st[1] + '">' + st[0] + '</span></header>' +
+        '<p class="dmtext">💬 ' + esc(c.text || '') + '</p>' +
+        (c.status === 'enviado' ? '<details><summary class="hint">Mensagem enviada ' + esc(c.sent_at ? ago(c.sent_at) : '') + '</summary><pre class="dmsent">' + esc(c.reply_text || '') + '</pre></details>' : '') +
+        (c.error && c.status !== 'enviado' ? '<p class="err small">' + esc(c.error) + '</p>' : '') +
+        (canSend ? '<textarea id="dm-' + c.id + '" rows="5" aria-label="Mensagem do Direct" placeholder="Escreva a mensagem com o link">' + esc(c.preview || '') + '</textarea>' +
+          '<div class="actions"><button class="btn small primary" data-dmsend="' + c.id + '">💌 Enviar no Direct</button>' + (c.status !== 'ignorado' ? '<button class="btn small ghost" data-dmignore="' + c.id + '">Ignorar</button>' : '') + '</div>' : '') +
+        '</article>';
+    }).join('');
+    var settings = '<details class="card dmset"' + (dm.items.length ? '' : ' open') + '><summary><b>⚙️ Respostas automáticas</b> <span class="hint">' + (s.auto ? '· ligado' : '· desligado (você revisa e envia)') + '</span></summary>' +
+      '<form id="dm-form" class="stack" style="margin-top:10px">' +
+      '<label class="check"><input type="checkbox" name="auto"' + (s.auto ? ' checked' : '') + '> <b>Enviar sozinho</b>: quem comentar uma palavra-chave recebe o link no Direct em até 3 minutos</label>' +
+      '<div class="field"><label for="dm-kw">Palavras-chave (separe por vírgula)</label><input id="dm-kw" name="keywords" type="text" value="' + esc(s.keywords.join(', ')) + '"></div>' +
+      '<div class="field"><label for="dm-tpl">Mensagem do Direct</label><textarea id="dm-tpl" name="template" rows="6">' + esc(s.template) + '</textarea>' +
+      '<p class="hint">Use {nome} (o @ da pessoa), {produto} e {link}. Em post com vários produtos, vai a lista numerada (ou só o número que a pessoa comentou).</p></div>' +
+      '<label class="check"><input type="checkbox" name="public_reply"' + (s.public_reply ? ' checked' : '') + '> Responder também no comentário ("Te mandei no Direct! 💌"), o que ajuda o post a aparecer mais</label>' +
+      '<div class="row end"><button class="btn small" type="button" data-act="dm-defaults">Restaurar padrão</button><button class="btn small primary" type="submit">Salvar</button></div></form></details>';
+    var meta = '<details class="card"><summary><b>🔓 Liberar para todos os clientes (Análise da Meta)</b></summary><ol class="steps" style="margin-top:8px">' +
+      '<li>Hoje o seu app da Meta está em <b>modo de desenvolvimento</b>: a Meta só mostra comentários e só deixa mandar Direct para <b>contas cadastradas no app</b> (você e testadoras).</li>' +
+      '<li>Para testar já: em developers.facebook.com → seu app → Funções do app → adicione uma segunda conta do Instagram como <b>Testadora do Instagram</b>, aceite o convite nessa conta e comente "QUERO" num post seu.</li>' +
+      '<li>Para todos os clientes: no app, peça <b>Acesso avançado</b> às permissões <b>instagram_business_manage_comments</b> e <b>instagram_business_manage_messages</b>, envie para a Análise do App com um vídeo do fluxo e use as páginas de <a href="/privacidade.html" target="_blank">Política de Privacidade</a> e <a href="/exclusao-de-dados.html" target="_blank">Exclusão de Dados</a> do Garimpo.</li>' +
+      '<li>Depois de aprovado, mude o app para o modo <b>Ao vivo</b>. Pronto: funciona com qualquer pessoa.</li></ol></details>';
+    return '<div class="pagehead"><h2>Direct</h2><p>Quem comentar "QUERO" nos seus posts recebe o link do produto no Direct, pela resposta oficial do Instagram (até 7 dias depois do comentário, 1 mensagem por comentário).</p></div>' +
+      '<div class="toolbar"><button class="btn primary" data-act="dm-sync">🔄 Buscar comentários agora</button><span class="hint">' + (dm.syncedAt ? 'Última busca ' + esc(ago(dm.syncedAt)) : 'Ainda não buscou') + '</span></div>' +
+      settings + meta +
+      '<div class="filters" style="margin-top:12px">' + chips + '</div>' +
+      (rows ? '<div class="grid">' + rows + '</div>' : '<div class="empty centered-empty">' + (dm.filter === 'pedidos' ? 'Nenhum pedido de link ainda. Toque em "Buscar comentários agora".' : 'Nenhum comentário por aqui.') + '</div>');
+  }
+
   function viewGanhos() {
     var s = state.summary; if (!s) return '';
     var k = s.kpis;
@@ -929,7 +984,7 @@
     var scroll = window.scrollY;
     if (state.loading) { app.innerHTML = '<p class="hint" style="padding-top:40vh;text-align:center">Carregando…</p>'; return; }
     if (!state.user) { app.innerHTML = viewLogin(); return; }
-    var body = state.tab === 'garimpar' ? viewGarimpar() : state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'piloto' ? viewPiloto() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
+    var body = state.tab === 'garimpar' ? viewGarimpar() : state.tab === 'descobrir' ? viewDescobrir() : state.tab === 'fila' ? viewFila() : state.tab === 'piloto' ? viewPiloto() : state.tab === 'direct' ? viewDirect() : state.tab === 'ganhos' ? viewGanhos() : viewConexoes();
     app.innerHTML = shell(body);
     window.scrollTo(0, scroll);
   }
@@ -1101,6 +1156,19 @@
     'cp-copy': function () { copyText(state.cp.msg.text); },
     'cp-wa': function () { var t = state.cp.msg.text; copyText(t); window.open(waLink(t), '_blank', 'noopener'); },
     'cp-tg': function () { return api('POST', '/api/coupons/send-telegram').then(function () { toast('Cupons enviados no Telegram'); }); },
+    'dm-sync': function (t) {
+      t.disabled = true; t.textContent = 'Buscando…';
+      return api('POST', '/api/direct/sync').then(function (r) {
+        toast(r.fresh ? r.fresh + ' comentário(s) novo(s)' + (r.sent ? ' · ' + r.sent + ' link(s) enviado(s)' : '') : 'Nenhum comentário novo');
+        return loadDirect().then(render);
+      }).catch(function (err) { return loadDirect().then(render).then(function () { throw err; }); });
+    },
+    'dm-defaults': function () {
+      var d = state.dm.defaults || {};
+      var f = $('#dm-form'); if (!f) return;
+      f.keywords.value = (d.keywords || []).join(', '); f.template.value = d.template || '';
+      toast('Padrão restaurado: toque em Salvar para manter');
+    },
     'auto-new': function () { autoDialog(null); },
     'auto-new-premium': function () { autoDialog(null, 'premium'); },
     'tg-find': function () {
@@ -1708,7 +1776,7 @@
     if (!t) return;
     var d = t.dataset;
     if (d.act && actions[d.act]) return actions[d.act](t);
-    if (d.tab) { state.tab = d.tab; render(); window.scrollTo(0, 0); return; }
+    if (d.tab) { state.tab = d.tab; if (d.tab === 'direct') state.dm.loaded = false; render(); window.scrollTo(0, 0); return; }
     if (d.mkt) { state.mkt = d.mkt; state.plimit = P_PAGE; return render(); }
     if (d.pview) { state.pview = d.pview; prefSet('pview', d.pview); state.pexp = {}; return render(); }
     if (d.pexp) { state.pexp[d.pexp] = !state.pexp[d.pexp]; render(); var pe = $('#prod-' + d.pexp); if (pe && state.pexp[d.pexp]) pe.scrollIntoView({ block: 'nearest' }); return null; }
@@ -1729,6 +1797,14 @@
         return loadAll().then(render);
       }).catch(function (err) { t.disabled = false; throw err; });
     }
+    if (d.dmfilter) { state.dm.filter = d.dmfilter; return loadDirect().then(render); }
+    if (d.dmsend) {
+      var dmText = ($('#dm-' + d.dmsend) || {}).value;
+      t.disabled = true; t.textContent = 'Enviando…';
+      return api('POST', '/api/direct/comments/' + d.dmsend + '/send', { text: dmText }).then(function () { toast('Link enviado no Direct 💌'); return loadDirect().then(render); })
+        .catch(function (err) { return loadDirect().then(render).then(function () { throw err; }); });
+    }
+    if (d.dmignore) { return api('POST', '/api/direct/comments/' + d.dmignore + '/ignore').then(function () { return loadDirect().then(render); }); }
     if (d.gview) { state.gview = d.gview; prefSet('gview', d.gview); return render(); }
     if (d.cpch) { state.cp.msgChannel = d.cpch; return loadCouponMsg().then(render); }
     if (d.cpedit) { return cpEditDialog(state.cp.items.filter(function (c) { return c.id === Number(d.cpedit); })[0]); }
@@ -1963,6 +2039,12 @@
           return reload();
         })
         .catch(function (err) { tb.disabled = false; if (errEl) errEl.textContent = err.message; });
+    } else if (e.target.id === 'dm-form') {
+      e.preventDefault();
+      var df = e.target;
+      api('PUT', '/api/direct/settings', { auto: df.auto.checked, keywords: df.keywords.value, template: df.template.value, public_reply: df.public_reply.checked })
+        .then(function (r) { state.dm.settings = r.settings; toast(r.settings.auto ? 'Respostas automáticas ligadas' : 'Configuração salva (envio manual)'); render(); })
+        .catch(function (err) { toast(err.message); });
     } else if (e.target.id === 'cp-auto') {
       e.preventDefault();
       var fa = e.target;

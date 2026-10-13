@@ -104,6 +104,33 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
       return out;
     },
 
+    /* ---------- comentários e Direct (resposta privada a comentário) ---------- */
+
+    /** Posts recentes do perfil: [{ id, timestamp, comments_count, permalink }]. */
+    async recentMedia({ igUserId, token, limit = 10 }) {
+      const d = await call('GET', `/${igUserId}/media`, { fields: 'id,timestamp,comments_count,permalink', limit }, token);
+      return d.data || [];
+    },
+
+    /** Comentários de um post: [{ id, text, timestamp, username, from: { id, username } }]. */
+    async comments({ mediaId, token, limit = 50 }) {
+      const d = await call('GET', `/${mediaId}/comments`, { fields: 'id,text,timestamp,username,from{id,username}', limit }, token);
+      return d.data || [];
+    },
+
+    /**
+     * Resposta privada: manda uma mensagem no Direct de quem comentou (1 por comentário, até 7 dias depois).
+     * É o recurso oficial da Meta para "comenta QUERO que eu te mando".
+     */
+    async privateReply({ igUserId, token, commentId, text }) {
+      return call('POST', `/${igUserId}/messages`, { recipient: JSON.stringify({ comment_id: commentId }), message: JSON.stringify({ text }) }, token);
+    },
+
+    /** Resposta pública no comentário (ex.: "Te mandei no Direct!"). */
+    async replyComment({ commentId, token, text }) {
+      return call('POST', `/${commentId}/replies`, { message: text }, token);
+    },
+
     /** Devolve IN_PROGRESS, FINISHED, ERROR, EXPIRED ou PUBLISHED. */
     async containerStatus({ containerId, token }) {
       const st = await call('GET', `/${containerId}`, { fields: 'status_code' }, token);
