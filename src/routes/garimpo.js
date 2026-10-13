@@ -121,6 +121,7 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     if (list.length > 200) throw new HttpError(400, 'Salve no máximo 200 produtos por vez.');
     const saved = [];
     let skipped = 0;
+    const dups = [];
     const errors = [];
     const full = await enrich({ pool, cfg, fetchImpl, uid: req.uid, items: list.filter((x) => x && typeof x === 'object') });
     for (const it of full) {
@@ -137,11 +138,15 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
         else if (it.price_max !== undefined) it.price_max = parseNum(it.price_max);
         saved.push(mapProduct(await insertProduct(pool, req.uid, d, ext, serializeExtras(it))));
       } catch (e) {
-        if (e.status === 409) skipped++;
+        if (e.status === 409) { skipped++; dups.push({ title: String(it.title || '').slice(0, 80), existing_id: e.existingId || null }); }
         else errors.push({ title: String(it.title || '').slice(0, 80), error: e.message });
       }
     }
-    res.json({ saved: saved.length, skipped, errors, products: saved });
+    // nome do produto que já estava salvo, para a tela dizer qual é
+    for (const d of dups) {
+      if (d.existing_id) d.existing_title = (await pool.query('select title from products where id = $1 and user_id = $2', [d.existing_id, req.uid])).rows[0]?.title || null;
+    }
+    res.json({ saved: saved.length, skipped, duplicates: dups, errors, products: saved });
   });
 
   return r;

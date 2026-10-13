@@ -64,7 +64,35 @@ async function openGraph(url, fetchImpl) {
     image_url: meta('og:image') || null,
     description: desc.replace(/^Compre .+? na Shopee Brasil!\s*/, '').slice(0, 300) || null,
     price: Number.isFinite(price) && price > 0 ? price : null,
+    // códigos MLB citados na página (a vitrine de afiliado /social/ traz o produto compartilhado entre eles)
+    ml_ids: [...new Set(html.match(/MLB\d{4,12}/g) || [])].slice(0, 12),
   };
+}
+
+/** Palavras de um nome para comparar (sem acento, minúsculas, 3+ letras). */
+const words = (s) => new Set(String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+
+/** Quanto dois nomes de produto coincidem (0 a 1), pela parte comum sobre o nome menor. */
+function titleMatch(a, b) {
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let common = 0;
+  for (const w of A) if (B.has(w)) common++;
+  return common / Math.min(A.size, B.size);
+}
+
+/** Entre códigos MLB, o produto cujo nome bate com o título (consulta oficial, no máximo 6). */
+async function matchByTitle(title, ids, mlClient) {
+  let best = null;
+  for (const cand of ids.slice(0, 6)) {
+    let item;
+    try { item = await mlClient.getItem(cand); } catch (_) { continue; }
+    if (!item || !item.price) continue;
+    const score = titleMatch(title, item.title);
+    if (score >= 0.6 && (!best || score > best.score)) best = { item, score };
+    if (score >= 0.9) break;
+  }
+  return best ? best.item : null;
 }
 
 const shopeeIds = (u) => {
@@ -98,8 +126,15 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, externalId
     }
     const og = await openGraph(finalUrl, fetchImpl).catch(() => null);
     if (!og || !og.title) return { link, error: 'Não consegui ler este produto do Mercado Livre. Use o link da página do produto.' };
+    // Vitrine de afiliado (/social/...): o produto vem cifrado no link; acha entre os códigos da página o que tem o mesmo nome
+    const social = /\/social\//i.test(new URL(finalUrl).pathname);
+    if (!id && mlClient && og.ml_ids && og.ml_ids.length) {
+      const found = await matchByTitle(og.title, og.ml_ids, mlClient);
+      if (found) return { ...found, link, affiliate_url: link, source: 'api' };
+    }
     return { marketplace: 'ML', external_id: id, title: og.title, image_url: og.image_url, price: og.price, original_price: null,
-      product_url: finalUrl.split('?')[0], affiliate_url: link, link, source: 'preview' };
+      // a vitrine é a mesma para todos os produtos: não serve como endereço do produto (nem para achar duplicados)
+      product_url: social ? null : finalUrl.split('?')[0], affiliate_url: link, link, source: 'preview' };
   }
 
   const ids = shopeeIds(finalUrl) || shopeeIds(link);

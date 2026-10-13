@@ -1206,7 +1206,8 @@
       if (missing.length) { var el = $('#links-err'); if (el) el.textContent = 'Falta o preço de ' + missing.length + ' produto(s).'; return null; }
       links.saving = true; renderLinks();
       return api('POST', '/api/garimpo/save', { items: ok }).then(function (r) {
-        toast(r.saved + ' cadastrado' + (r.saved === 1 ? '' : 's') + (r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro: ' + r.errors[0].error : ''));
+        var dupMsg = (r.duplicates || []).map(function (x) { return '"' + (x.title || '').slice(0, 40) + '" já estava cadastrado' + (x.existing_title && x.existing_title !== x.title ? ' (como "' + x.existing_title.slice(0, 40) + '")' : ''); }).join('; ');
+        toast(r.saved + ' cadastrado' + (r.saved === 1 ? '' : 's') + (dupMsg ? '. ' + dupMsg : r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro: ' + r.errors[0].error : ''));
         links = null; dlg.close();
         state.tab = 'descobrir';
         return reload();

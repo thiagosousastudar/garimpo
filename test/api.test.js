@@ -84,6 +84,12 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     }
     if (u.hostname === 'shopee.com.br') return page(200, '<html><body>app</body></html>');
     if (u.hostname === 'mercadolivre.com' && u.pathname === '/sec/abc') return page(301, '', 'https://www.mercadolivre.com.br/air-fryer/p/MLB9001');
+    // link de afiliado que cai na vitrine (/social/): produto cifrado; a página cita vários códigos MLB
+    if (u.hostname === 'mercadolivre.com' && /^\/sec\/vitrine/.test(u.pathname)) return page(301, '', `https://www.mercadolivre.com.br/social/anninha?ref=${u.pathname.slice(-1)}`);
+    if (u.hostname === 'www.mercadolivre.com.br' && u.pathname.startsWith('/social/')) {
+      const title = u.searchParams.get('ref') === '2' ? 'Kit 10 Potes 750ml Com Tampa' : 'Air Fryer Catálogo';
+      return page(200, `<html><head><meta property="og:title" content="${title} | Mercado Livre"></head><body>MLB9002 MLB9001 MLB7777777</body></html>`);
+    }
     if (u.hostname === 'www.mercadolivre.com.br') return page(200, '<html></html>');
     if (u.hostname === 'evil.example.com') { ml.evilHit = true; return page(200, '<html></html>'); }
     if (u.hostname.endsWith('mlstatic.com') && ml.imgs && ml.imgs[u.pathname]) {
@@ -689,7 +695,10 @@ test('produtos: bloqueia duplicados no cadastro, na edição e na importação',
     // mesmo anúncio com outro texto no link
     const dup = await api('POST', '/api/products', { ...PRODUTO, title: 'Outro nome', product_url: 'https://produto.mercadolivre.com.br/MLB-1234567890-outro' });
     assert.equal(dup.status, 409);
-    const b = await api('POST', '/api/products', { ...PRODUTO, product_url: 'https://produto.mercadolivre.com.br/MLB-999999999-x' });
+    // mesmo link de afiliado = mesmo produto (mesmo que o endereço do anúncio seja outro)
+    const sameAff = await api('POST', '/api/products', { ...PRODUTO, title: 'Outro', product_url: 'https://produto.mercadolivre.com.br/MLB-888888888-x' });
+    assert.equal(sameAff.status, 409);
+    const b = await api('POST', '/api/products', { ...PRODUTO, affiliate_url: 'https://mercadolivre.com/sec/outro', product_url: 'https://produto.mercadolivre.com.br/MLB-999999999-x' });
     assert.equal(b.status, 201);
     const edit = await api('PATCH', `/api/products/${b.data.product.id}`, { product_url: link });
     assert.equal(edit.status, 409);
@@ -1863,5 +1872,28 @@ test('convite para seguir o perfil: @ no Instagram (antes das hashtags) e link n
     const wa = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' })).data.caption;
     assert.match(wa, /📲 Segue a gente no Instagram: https:\/\/www\.instagram\.com\/anninhaachadinhospraticos\/$/);
     assert.equal(wa.split('anninhaachadinhospraticos').length - 1, 1, 'só uma vez');
+  } finally { t.close(); }
+});
+
+test('link do ML que cai na vitrine de afiliado (/social/): acha o produto certo pelo nome e não confunde produtos diferentes', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/connections/mercadolivre', { client_id: '123456', client_secret: 'segredo-123456', default_commission: 10 });
+    await t.pool.query(`update marketplace_connections set access_token_enc = $1, token_expires_at = $2`,
+      [require('../src/util').encrypt('APP_USR-x', t.cfg.encryptionKey), new Date(Date.now() + 36e5).toISOString()]);
+    // 1) vitrine com o produto "Air Fryer Catálogo": acha MLB9001 pela API
+    const r = await api('POST', '/api/garimpo/from-links', { links: ['https://mercadolivre.com/sec/vitrine1'] });
+    const [a] = r.data.items;
+    assert.equal(a.external_id, 'MLB9001', JSON.stringify(a));
+    assert.equal(a.source, 'api');
+    assert.equal((await api('POST', '/api/garimpo/save', { items: [a] })).data.saved, 1);
+    // 2) outro produto que também cai na vitrine (nome não bate com nada da API): salva sem usar a vitrine como endereço
+    const [b] = (await api('POST', '/api/garimpo/from-links', { links: ['https://mercadolivre.com/sec/vitrine2'] })).data.items;
+    assert.equal(b.product_url, null);
+    assert.match(b.title, /Potes/);
+    const sb = await api('POST', '/api/garimpo/save', { items: [{ ...b, price: 33.9 }] });
+    assert.equal(sb.data.saved, 1, JSON.stringify(sb.data));
   } finally { t.close(); }
 });

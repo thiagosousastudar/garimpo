@@ -163,12 +163,15 @@ const COLS = ['title', 'marketplace', 'category', 'price', 'original_price', 'ra
 const DUPLICATE = 'Este produto já está cadastrado.';
 
 /** Procura o mesmo produto já cadastrado (mesmo código na loja ou mesmo link). */
-async function findDuplicate(pool, uid, { marketplace, external_id, product_url }, exceptId = 0) {
-  if (!external_id && !product_url) return null;
+async function findDuplicate(pool, uid, { marketplace, external_id, product_url: rawUrl, affiliate_url }, exceptId = 0) {
+  // Endereços que não identificam um produto (vitrine de afiliado do ML, páginas genéricas) não servem para achar duplicados
+  const product_url = rawUrl && !/\/social\//i.test(rawUrl) ? rawUrl : null;
+  if (!external_id && !product_url && !affiliate_url) return null;
+  // O mesmo link de afiliado é o mesmo produto (cada produto tem o seu link)
   const { rows } = await pool.query(
     `select id from products where user_id = $1 and id <> $2 and (
-       (marketplace = $3 and external_id = $4) or product_url = $5) limit 1`,
-    [uid, exceptId, marketplace, external_id || '', product_url || '']
+       (marketplace = $3 and external_id = $4) or product_url = $5 or affiliate_url = $6) limit 1`,
+    [uid, exceptId, marketplace, external_id || '', product_url || '', affiliate_url || '']
   );
   return rows[0] ? rows[0].id : null;
 }
