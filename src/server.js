@@ -8,7 +8,7 @@ const { productRoutes } = require('./routes/products');
 const { queueRoutes } = require('./routes/queue');
 const { earningsRoutes } = require('./routes/earnings');
 const { connectionRoutes } = require('./routes/connections');
-const { mediaRoutes } = require('./routes/media');
+const { mediaRoutes, imageRoutes } = require('./routes/media');
 const { cronRoutes } = require('./routes/cron');
 const { garimpoRoutes } = require('./routes/garimpo');
 const { automationRoutes } = require('./routes/automations');
@@ -53,6 +53,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   });
 
   app.use('/api/cron', cronRoutes({ pool, cfg, fetchImpl }));
+  app.use('/api/img', imageRoutes({ cfg, fetchImpl })); // público: o Instagram baixa as fotos ajustadas daqui
   app.use('/api/auth', authRoutes({ pool, cfg }));
   const guard = requireAuth(cfg);
   app.use('/api/products', guard, productRoutes({ pool, cfg, fetchImpl }));

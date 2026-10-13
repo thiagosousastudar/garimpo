@@ -83,6 +83,10 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     if (u.hostname === 'mercadolivre.com' && u.pathname === '/sec/abc') return page(301, '', 'https://www.mercadolivre.com.br/air-fryer/p/MLB9001');
     if (u.hostname === 'www.mercadolivre.com.br') return page(200, '<html></html>');
     if (u.hostname === 'evil.example.com') { ml.evilHit = true; return page(200, '<html></html>'); }
+    if (u.hostname.endsWith('mlstatic.com') && ml.imgs && ml.imgs[u.pathname]) {
+      const buf = ml.imgs[u.pathname];
+      return { ok: true, status: 200, url: String(url), headers: { get: () => 'image/jpeg' }, arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length) };
+    }
     if (u.hostname.endsWith('mlstatic.com')) {
       const isImg = u.pathname.endsWith('.jpg');
       return { ok: true, status: 200, url: String(url), headers: { get: (k) => (k.toLowerCase() === 'content-type' ? (isImg ? 'image/jpeg' : 'text/html; charset=utf-8') : null) },
@@ -1638,5 +1642,38 @@ test('planilha da Shopee completa produto já salvo (comissão, vendas, link) se
     assert.deepEqual([b.commission_pct, b.affiliate_url, b.sales_k], [5, 'https://s.shopee.com.br/meu', 0.066], 'comissão e link do usuário ficam');
     // de novo: nada a atualizar
     assert.equal((await api('POST', '/api/garimpo/from-shopee-csv', csv)).data.updated, 0);
+  } finally { t.close(); }
+});
+
+test('Instagram: foto fora da proporção (muito larga ou comprida) vai com bordas brancas por endereço assinado', async () => {
+  const sharp = require('sharp');
+  const img = (w, h) => sharp({ create: { width: w, height: h, channels: 3, background: '#336699' } }).jpeg().toBuffer();
+  const opts = { ml: { imgs: { '/larga.jpg': await img(500, 213), '/comprida.jpg': await img(390, 500), '/ok.jpg': await img(500, 500) } }, meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Teste proporção', media_type: 'carousel',
+      media_items: ['ok', 'larga', 'comprida'].map((n) => ({ type: 'image', url: `https://http2.mlstatic.com/${n}.jpg` })) });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    const sent = t.calls.filter((c) => c.body && c.body.is_carousel_item).map((c) => c.body.image_url);
+    assert.equal(sent[0], 'https://http2.mlstatic.com/ok.jpg', 'foto boa vai como está');
+    assert.match(sent[1], /^https:\/\/app\.exemplo\.com\/api\/img\/fit\?u=.*larga.*&s=[0-9a-f]{32}$/);
+    assert.match(sent[2], /comprida/);
+
+    // o endereço ajustado entrega JPEG dentro da proporção; sem assinatura válida, recusa
+    const path = sent[1].replace('https://app.exemplo.com', '');
+    const base = `http://127.0.0.1:${t.server.address().port}`;
+    const res = await fetch(base + path);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/jpeg');
+    const meta = await sharp(Buffer.from(await res.arrayBuffer())).metadata();
+    assert.ok(meta.width / meta.height <= 1.91 && meta.width / meta.height >= 1.85, `${meta.width}x${meta.height}`);
+    const tall = await sharp(Buffer.from(await (await fetch(base + sent[2].replace('https://app.exemplo.com', ''))).arrayBuffer())).metadata();
+    assert.ok(Math.abs(tall.width / tall.height - 0.8) < 0.01, `${tall.width}x${tall.height}`);
+    assert.equal((await fetch(base + path.replace(/s=[0-9a-f]+/, 's=' + '0'.repeat(32)))).status, 403);
+    assert.equal((await fetch(`${base}/api/img/fit?u=${encodeURIComponent('https://evil.example.com/x.jpg')}&s=abc`)).status, 403);
   } finally { t.close(); }
 });

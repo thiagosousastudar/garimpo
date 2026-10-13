@@ -78,4 +78,28 @@ function mediaRoutes({ cfg, storage, fetchImpl = fetch }) {
   return r;
 }
 
-module.exports = { mediaRoutes };
+/**
+ * Público (o Instagram baixa daqui): foto com bordas brancas para caber na proporção aceita.
+ * Só atende endereços assinados pelo próprio app e de hosts da lista.
+ */
+function imageRoutes({ cfg, fetchImpl = fetch }) {
+  const { verify, download, padImage } = require('../services/fitimage');
+  const r = express.Router();
+  r.get('/fit', async (req, res) => {
+    const url = String(req.query.u || '');
+    if (!verify(cfg, url, req.query.s)) throw new HttpError(403, 'Endereço inválido.');
+    let u;
+    try { u = new URL(url); } catch (_) { throw new HttpError(400, 'Endereço inválido.'); }
+    if (u.protocol !== 'https:' || !proxyAllowed(cfg, u.hostname)) throw new HttpError(400, 'Endereço não permitido.');
+    let out;
+    try {
+      out = await padImage(await download(u.toString(), fetchImpl, (h) => proxyAllowed(cfg, h)));
+    } catch (e) { throw new HttpError(502, `Não foi possível preparar a imagem: ${e.message}`); }
+    res.set('content-type', 'image/jpeg');
+    res.set('cache-control', 'public, max-age=86400');
+    res.send(out);
+  });
+  return r;
+}
+
+module.exports = { mediaRoutes, imageRoutes, proxyAllowed };

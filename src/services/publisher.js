@@ -1,5 +1,7 @@
 const { HttpError, decrypt, encrypt } = require('../util');
 const { createInstagramClient } = require('./instagram');
+const { fitForInstagram } = require('./fitimage');
+const { proxyAllowed } = require('../routes/media');
 
 const EDITABLE = ['draft', 'scheduled', 'failed'];
 const PROCESSING_TIMEOUT_MS = 30 * 60 * 1000;
@@ -201,8 +203,12 @@ async function publishItem({ pool, cfg, fetchImpl, userId, itemId }) {
   const item = rows[0];
 
   try {
-    const mediaUrl = validate(item, cfg);
+    let mediaUrl = validate(item, cfg);
     const { igUserId, token } = await credentialsFor(pool, cfg, userId);
+    // Fotos fora da proporção aceita pelo Instagram (4:5 a 1,91:1) vão com bordas brancas, sem cortar o produto.
+    const allowed = (h) => proxyAllowed(cfg, h);
+    if (item.media_type === 'carousel') mediaUrl = (await fitForInstagram({ cfg, fetchImpl, media: mediaUrl, allowed })).media;
+    else if (item.media_type === 'image') mediaUrl = (await fitForInstagram({ cfg, fetchImpl, media: [{ kind: 'image', url: mediaUrl }], allowed })).media[0].url;
     const client = createInstagramClient({ cfg, fetchImpl });
 
     // Evita post duplicado: se a tentativa anterior deixou um container (post simples ou carrossel montado)
