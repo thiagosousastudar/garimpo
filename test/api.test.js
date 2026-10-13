@@ -1837,3 +1837,16 @@ test('cupons: lê mensagem colada (sem pegar o link de outra pessoa), salva, men
     assert.equal((await api('POST', '/api/coupons/clean')).data.removed, 1);
   } finally { t.close(); }
 });
+
+test('link comum da página da Shopee: explica que precisa do link de afiliado (s.shopee.com.br)', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const r = await api('POST', '/api/garimpo/from-links', { links: ['https://shopee.com.br/Principia-Serum-Facial-i.1613313673.58266270841'] });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const [it] = r.data.items;
+    assert.equal(it.external_id, '1613313673.58266270841');
+    assert.match(it.error, /link comum.*s\.shopee\.com\.br/);
+  } finally { t.close(); }
+});

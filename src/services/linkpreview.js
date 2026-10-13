@@ -104,7 +104,16 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, externalId
 
   const ids = shopeeIds(finalUrl) || shopeeIds(link);
   const og = await openGraph(link, fetchImpl).catch(() => null);
-  if (!og || !og.title) return { link, external_id: ids, error: 'Não consegui ler a prévia deste link da Shopee.' };
+  if (!og || !og.title) {
+    // Link comum da página do produto (shopee.com.br/...-i.LOJA.ITEM): a Shopee bloqueia a leitura e ele não é de afiliado
+    const common = /(^|\.)shopee\.com\.br$/i.test(u.hostname) && !/^s\./i.test(u.hostname);
+    return {
+      link, external_id: ids,
+      error: common
+        ? 'Este é o link comum da página do produto: a Shopee não deixa ler e a venda não contaria para você. Na Shopee, toque em Compartilhar → Copiar link (logada como afiliada) ou use "Obter link" no portal de Afiliados, e cole o link s.shopee.com.br/… aqui.'
+        : 'Não consegui ler a prévia deste link da Shopee.',
+    };
+  }
   return {
     marketplace: 'SH', external_id: ids, title: og.title.slice(0, 300), image_url: og.image_url, price: og.price, original_price: null,
     product_url: ids ? `https://shopee.com.br/product/${ids.replace('.', '/')}` : finalUrl.split('?')[0],
