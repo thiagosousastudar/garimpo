@@ -1677,3 +1677,21 @@ test('Instagram: foto fora da proporção (muito larga ou comprida) vai com bord
     assert.equal((await fetch(`${base}/api/img/fit?u=${encodeURIComponent('https://evil.example.com/x.jpg')}&s=abc`)).status, 403);
   } finally { t.close(); }
 });
+
+test('fotos extras coladas no produto viram a galeria (foto principal primeiro), com validação', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', { ...PRODUTO, marketplace: 'SH', images: 'https://down-br.img.susercontent.com/file/b\nhttps://down-br.img.susercontent.com/file/c' })).data.product;
+    assert.deepEqual(p.images, [PRODUTO.image_url, 'https://down-br.img.susercontent.com/file/b', 'https://down-br.img.susercontent.com/file/c']);
+    const e = await api('PATCH', `/api/products/${p.id}`, { images: 'http://inseguro.com/x.jpg' });
+    assert.equal(e.status, 400);
+    const u = await api('PATCH', `/api/products/${p.id}`, { images: 'https://down-br.img.susercontent.com/file/d, https://down-br.img.susercontent.com/file/d' });
+    assert.equal(u.status, 200, JSON.stringify(u.data));
+    assert.deepEqual(u.data.product.images, [PRODUTO.image_url, 'https://down-br.img.susercontent.com/file/d']);
+    // salvar o produto sem mexer nas fotos mantém a galeria
+    const k = await api('PATCH', `/api/products/${p.id}`, { title: 'Novo nome' });
+    assert.equal(k.data.product.images.length, 2);
+  } finally { t.close(); }
+});

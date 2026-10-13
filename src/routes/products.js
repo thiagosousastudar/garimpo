@@ -91,6 +91,24 @@ async function refreshOne({ pool, cfg, fetchImpl, uid, cur }) {
   return rows[0];
 }
 
+/**
+ * Fotos extras (galeria) coladas pelo usuário: endereços https, uma por linha ou em lista, até 12.
+ * Devolve undefined se o campo não veio.
+ */
+function cleanImages(v) {
+  if (v === undefined) return undefined;
+  const list = (Array.isArray(v) ? v : String(v || '').split(/[\s,]+/)).map((x) => String(x).trim()).filter(Boolean);
+  const out = [];
+  for (const raw of list) {
+    let u;
+    try { u = new URL(raw); } catch (_) { throw new HttpError(400, `Foto extra: endereço inválido (${raw.slice(0, 60)}).`); }
+    if (u.protocol !== 'https:') throw new HttpError(400, 'Foto extra: use endereços https.');
+    if (!out.includes(u.toString())) out.push(u.toString());
+  }
+  if (out.length > 12) throw new HttpError(400, 'No máximo 12 fotos extras.');
+  return out;
+}
+
 function cleanUrl(v, field) {
   const s = String(v ?? '').trim();
   if (!s) return null;
@@ -234,7 +252,11 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     const d = parseBody(req.body || {});
     const max = req.body?.price_max === undefined || req.body.price_max === '' ? null : parseNum(req.body.price_max);
     if (max !== null && !(max > d.price)) throw new HttpError(400, 'O preço "até" (variações) precisa ser maior que o preço "a partir de". Deixe vazio se o produto tem preço único.');
-    const row = await insertProduct(pool, req.uid, d, null, max !== null ? serializeExtras({ price_max: max }) : null);
+    const imgs = cleanImages(req.body?.images);
+    const ex = {};
+    if (max !== null) ex.price_max = max;
+    if (imgs && imgs.length) ex.images = [d.image_url, ...imgs].filter((u, i, a) => u && a.indexOf(u) === i);
+    const row = await insertProduct(pool, req.uid, d, null, Object.keys(ex).length ? serializeExtras(ex) : null);
     res.status(201).json({ product: mapProduct(row) });
   });
 
@@ -243,7 +265,8 @@ function productRoutes({ pool, cfg, fetchImpl }) {
     const d = parseBody(req.body || {}, true);
     const cols = COLS.filter((c) => d[c] !== undefined);
     const hasMax = req.body && req.body.price_max !== undefined;
-    if (!cols.length && !hasMax) throw new HttpError(400, 'Nada para atualizar.');
+    const imgs = cleanImages(req.body?.images);
+    if (!cols.length && !hasMax && imgs === undefined) throw new HttpError(400, 'Nada para atualizar.');
     const cur = (await pool.query('select * from products where id = $1 and user_id = $2', [id, req.uid])).rows[0];
     if (!cur) throw new HttpError(404, 'Produto não encontrado.');
     // "Até R$" (variações): vazio remove; precisa ser maior que o preço "a partir de"
@@ -254,6 +277,13 @@ function productRoutes({ pool, cfg, fetchImpl }) {
       if (max !== null && !(max > base)) throw new HttpError(400, 'O preço "até" (variações) precisa ser maior que o preço "a partir de". Deixe vazio se o produto tem preço único.');
       const e = parseExtras(cur.extras);
       e.price_max = max;
+      maxExtras = serializeExtras(e);
+    }
+    // galeria: a foto principal primeiro, depois as extras
+    if (imgs !== undefined) {
+      const e = parseExtras(maxExtras !== undefined ? maxExtras : cur.extras);
+      const main = d.image_url !== undefined ? d.image_url : cur.image_url;
+      e.images = [main, ...imgs].filter((u, i, a) => u && a.indexOf(u) === i);
       maxExtras = serializeExtras(e);
     }
     const next = { ...cur, ...d };

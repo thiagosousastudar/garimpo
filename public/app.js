@@ -844,7 +844,11 @@
       '<div class="cols">' + field('price_max', 'Até (R$) — só se tiver opções/kits', p.price_max, 'inputmode="decimal" placeholder="vazio = preço único"') + field('commission_pct', 'Comissão (%)', p.commission_pct, 'inputmode="decimal"') + '</div>' +
       '<div class="cols">' + field('rating', 'Avaliação (0 a 5)', p.rating, 'inputmode="decimal"') + field('sales_k', 'Vendidos (em milhares)', p.sales_k, 'inputmode="decimal"') + '</div>' +
       field('product_url', 'Link do anúncio', p.product_url, 'inputmode="url"') + field('affiliate_url', 'Seu link de afiliado', p.affiliate_url, 'inputmode="url"') +
-      field('image_url', 'Foto (endereço)', p.image_url, 'inputmode="url"') + field('video_url', 'Vídeo (endereço)', p.video_url, 'inputmode="url"') +
+      field('image_url', 'Foto principal (endereço)', p.image_url, 'inputmode="url"') +
+      '<div class="field"><label for="images">Mais fotos do produto (endereços, um por linha)</label><textarea id="images" name="images" rows="3" placeholder="https://down-br.img.susercontent.com/file/...">' +
+      esc((p.images || []).filter(function (u) { return u !== p.image_url; }).join('\n')) + '</textarea>' +
+      '<p class="hint">Na página do produto (no computador), clique com o botão direito em cada foto → <b>Copiar endereço da imagem</b> e cole aqui. Elas aparecem para escolher no Postar agora (carrossel e capa). No celular, salve as fotos e use "+ foto" no Postar agora.</p></div>' +
+      field('video_url', 'Vídeo (endereço)', p.video_url, 'inputmode="url"') +
       '<div class="field"><label for="pfile">Ou envie foto/vídeo do seu aparelho</label><input id="pfile" class="file-input" type="file" accept="image/jpeg,image/png,video/mp4"></div>';
     openDialog(p.id ? 'Editar produto' : 'Novo produto', inner, 'Salvar', function (data) {
       var f = $('#pfile', dlg).files[0];
