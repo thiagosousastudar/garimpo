@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const { HttpError, isoOrNull } = require('../util');
-const { buildCaption, buildGroupCaption } = require('../services/copy');
+const { buildCaption, buildGroupCaption, followHandle } = require('../services/copy');
 const { activeCoupons } = require('../services/coupons');
 const { publishItem, finishItem, EDITABLE, validate, credentialsFor, MAX_CAROUSEL } = require('../services/publisher');
 
@@ -46,7 +46,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     const prod = await pool.query('select * from products where id = $1 and user_id = $2', [Number(body?.product_id), uid]);
     if (!prod.rows.length) throw new HttpError(404, 'Produto não encontrado.');
     const p = prod.rows[0];
-    const out = await buildCaption(p, channel, { ai: Boolean(body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, uid) });
+    const out = await buildCaption(p, channel, { ai: Boolean(body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, uid), follow: await followHandle(pool, uid) });
     let media_type = 'none';
     let media_url = null;
     if (channel === 'instagram') {
@@ -122,7 +122,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     const channel = String(req.body?.channel || '');
     if (!CHANNELS.includes(channel)) throw new HttpError(400, 'Canal deve ser instagram ou whatsapp.');
     const list = await productsFor(req.uid, req.body?.product_ids);
-    const out = await buildGroupCaption(list, channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl });
+    const out = await buildGroupCaption(list, channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl, follow: await followHandle(pool, req.uid) });
     const media_items = list.filter((p) => p.image_url).map((p) => ({ type: 'image', url: p.image_url }));
     res.json({ caption: out.caption, media_items, warning: out.warning });
   });
@@ -194,7 +194,7 @@ function queueRoutes({ pool, cfg, fetchImpl, storage }) {
     if (!EDITABLE.includes(cur.status)) throw new HttpError(409, 'Este item não pode mais ser editado.');
     const prod = await pool.query('select * from products where id = $1 and user_id = $2', [cur.product_id, req.uid]);
     if (!prod.rows.length) throw new HttpError(404, 'O produto deste item foi removido.');
-    const out = await buildCaption(prod.rows[0], cur.channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, req.uid) });
+    const out = await buildCaption(prod.rows[0], cur.channel, { ai: Boolean(req.body?.ai), cfg, fetchImpl, coupons: await activeCoupons(pool, req.uid), follow: await followHandle(pool, req.uid) });
     await pool.query('update queue_items set caption = $1 where id = $2', [out.caption, cur.id]);
     res.json({ item: await getItem(cur.id, req.uid), warning: out.warning });
   });

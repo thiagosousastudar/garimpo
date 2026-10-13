@@ -1850,3 +1850,18 @@ test('link comum da página da Shopee: explica que precisa do link de afiliado (
     assert.match(it.error, /link comum.*s\.shopee\.com\.br/);
   } finally { t.close(); }
 });
+
+test('convite para seguir o perfil: @ no Instagram (antes das hashtags) e link no WhatsApp, sem repetir', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    await api('PUT', '/api/auth/brand', { color: '#E8457A', handle: '@anninhaachadinhospraticos' });
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product;
+    const ig = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'instagram' })).data.caption;
+    assert.match(ig, /💖 Segue @anninhaachadinhospraticos pra não perder nenhum achadinho!\n\n#/);
+    const wa = (await api('POST', '/api/queue/preview', { product_id: p.id, channel: 'whatsapp' })).data.caption;
+    assert.match(wa, /📲 Segue a gente no Instagram: https:\/\/www\.instagram\.com\/anninhaachadinhospraticos\/$/);
+    assert.equal(wa.split('anninhaachadinhospraticos').length - 1, 1, 'só uma vez');
+  } finally { t.close(); }
+});

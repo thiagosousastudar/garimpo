@@ -187,7 +187,12 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
 }
 
 /** Gera o texto. Usa IA se pedida e configurada; se falhar, cai no modelo e avisa. */
-async function buildCaption(p0, channel, { ai, cfg, fetchImpl, coupons }) {
+async function buildCaption(p0, channel, opts) {
+  const out = await buildCaptionRaw(p0, channel, opts);
+  return { ...out, caption: withFollow(out.caption, opts.follow, channel) };
+}
+
+async function buildCaptionRaw(p0, channel, { ai, cfg, fetchImpl, coupons }) {
   // cupom cadastrado que combina com o produto (mesma loja, compra mínima atendida) entra no texto
   const coupon = coupons && coupons.length ? bestCouponFor(p0, coupons) : null;
   const p = coupon ? { ...p0, _coupon: coupon } : p0;
@@ -268,7 +273,12 @@ async function aiGroupCopy(list, channel, { cfg, fetchImpl }) {
 }
 
 /** Texto para vários produtos. Mesmas regras do buildCaption: IA se pedida e configurada, senão modelo. */
-async function buildGroupCaption(list, channel, { ai, cfg, fetchImpl }) {
+async function buildGroupCaption(list, channel, opts) {
+  const out = await buildGroupCaptionRaw(list, channel, opts);
+  return { ...out, caption: withFollow(out.caption, opts.follow, channel) };
+}
+
+async function buildGroupCaptionRaw(list, channel, { ai, cfg, fetchImpl }) {
   if (ai && cfg.anthropicKey) {
     try {
       return { caption: await aiGroupCopy(list, channel, { cfg, fetchImpl }), source: 'ia' };
@@ -280,4 +290,33 @@ async function buildGroupCaption(list, channel, { ai, cfg, fetchImpl }) {
   return { caption: templateGroupCopy(list, channel), source: 'modelo', warning };
 }
 
-module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, PLACEHOLDER };
+/* ---------- convite para seguir o perfil ---------- */
+
+/** @ do perfil para o convite: o da marca (capas), senão o do Instagram conectado. */
+async function followHandle(pool, uid) {
+  const { rows } = await pool.query(
+    'select u.brand_handle, c.ig_username from users u left join connections c on c.user_id = u.id where u.id = $1', [uid]);
+  const h = rows[0] && (rows[0].brand_handle || rows[0].ig_username);
+  return h ? String(h).replace(/^@+/, '') : null;
+}
+
+/** Linha do convite: no Instagram o @ (link na legenda não é clicável); no WhatsApp/Telegram o link do perfil. */
+function followLine(handle, channel) {
+  if (channel === 'instagram') return `💖 Segue @${handle} pra não perder nenhum achadinho!`;
+  return `📲 Segue a gente no Instagram: https://www.instagram.com/${handle}/`;
+}
+
+/** Põe o convite no fim do texto (no Instagram, antes das hashtags). Não repete se já houver. */
+function withFollow(text, handle, channel) {
+  if (!handle || !text || String(text).toLowerCase().includes(String(handle).toLowerCase())) return text;
+  const line = followLine(handle, channel);
+  const lines = String(text).replace(/\s+$/, '').split('\n');
+  if (channel === 'instagram' && /^#/.test(lines[lines.length - 1] || '')) {
+    const tags = lines.pop();
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    return [...lines, '', line, '', tags].join('\n');
+  }
+  return [...lines, '', line].join('\n');
+}
+
+module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, followHandle, withFollow, PLACEHOLDER };

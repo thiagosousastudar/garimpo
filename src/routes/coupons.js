@@ -2,6 +2,7 @@ const express = require('express');
 const { HttpError, decrypt } = require('../util');
 const { parseCoupons, cleanCoupon, roundupText, statusOf, todayLocal, MAX_COUPONS } = require('../services/coupons');
 const { createTelegramClient } = require('../services/telegram');
+const { followHandle, withFollow } = require('../services/copy');
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -104,12 +105,12 @@ function couponRoutes({ pool, cfg, fetchImpl }) {
   r.get('/message', async (req, res) => {
     const channel = ['whatsapp', 'instagram', 'telegram'].includes(req.query.channel) ? req.query.channel : 'whatsapp';
     const list = (await all(req.uid)).filter((c) => !req.query.marketplace || c.marketplace === req.query.marketplace);
-    const text = roundupText(list, channel);
+    const text = withFollow(roundupText(list, channel), await followHandle(pool, req.uid), channel);
     res.json({ text, count: list.filter((c) => ['valido', 'hoje'].includes(statusOf(c))).length, missing_link: list.some((c) => !c.link && ['valido', 'hoje'].includes(statusOf(c))) });
   });
 
   r.post('/send-telegram', async (req, res) => {
-    const text = roundupText(await all(req.uid), 'telegram');
+    const text = withFollow(roundupText(await all(req.uid), 'telegram'), await followHandle(pool, req.uid), 'telegram');
     if (!text) throw new HttpError(400, 'Nenhum cupom válido para enviar.');
     let ok;
     try { ok = await sendTelegram({ pool, cfg, fetchImpl, uid: req.uid, text }); } catch (e) { throw new HttpError(502, e.message); }
@@ -149,10 +150,11 @@ async function runCouponsDaily({ pool, cfg, fetchImpl, log = console, now = new 
     const list = (await pool.query('select * from coupons where user_id = $1', [u.id])).rows;
     const s = settingsOf({ coupons_channels: u.coupons_channels });
     try {
-      const tg = roundupText(list, 'telegram', today);
+      const handle = await followHandle(pool, u.id);
+      const tg = withFollow(roundupText(list, 'telegram', today), handle, 'telegram');
       if (!tg) continue; // nenhum cupom válido hoje: não posta nada
       if (s.channels.telegram) await sendTelegram({ pool, cfg, fetchImpl, uid: u.id, text: tg }).catch((e) => log.error?.(`[cupons] telegram ${u.id}: ${e.message}`));
-      if (s.channels.whatsapp) await queueWhatsapp(pool, u.id, roundupText(list, 'whatsapp', today));
+      if (s.channels.whatsapp) await queueWhatsapp(pool, u.id, withFollow(roundupText(list, 'whatsapp', today), handle, 'whatsapp'));
       sent++;
     } catch (e) {
       log.error?.(`[cupons] usuário ${u.id}: ${e.message}`);
