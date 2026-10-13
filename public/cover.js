@@ -328,6 +328,84 @@
    */
   var SERIF = '"Cormorant Garamond", Georgia, "Times New Roman", serif';
   var CREAM = '#F6F1EA', GOLDLINE = '#B08D57', DEEP = '#1F1B16';
+  /* ---------- foto da capa Premium: produto "solto" no fundo ou moldura em arco ---------- */
+
+  /** A foto tem fundo branco/claro liso (foto de loja)? Olha a borda da imagem em miniatura. */
+  function plainBackground(img) {
+    if (!img) return false;
+    try {
+      var c = document.createElement('canvas'); c.width = 40; c.height = 40;
+      var x = c.getContext('2d'); x.drawImage(img, 0, 0, 40, 40);
+      var px = x.getImageData(0, 0, 40, 40).data, n = 0, light = 0;
+      for (var i = 0; i < 40; i++) {
+        [[i, 0], [i, 39], [0, i], [39, i]].forEach(function (p) {
+          var k = (p[1] * 40 + p[0]) * 4, r = px[k], g = px[k + 1], b = px[k + 2];
+          n++; if (r > 225 && g > 225 && b > 225 && Math.max(r, g, b) - Math.min(r, g, b) < 18) light++;
+        });
+      }
+      return light / n > 0.8;
+    } catch (_) { return false; } // imagem de outro endereço sem permissão: trata como foto de ambiente
+  }
+
+  /** Onde o produto termina embaixo (fração da altura), ignorando a margem branca da foto. */
+  function productBottom(img) {
+    try {
+      var c = document.createElement('canvas'); c.width = 80; c.height = 80;
+      var x = c.getContext('2d'); x.drawImage(img, 0, 0, 80, 80);
+      var px = x.getImageData(0, 0, 80, 80).data;
+      for (var row = 79; row >= 0; row--) {
+        for (var col = 0; col < 80; col++) {
+          var k = (row * 80 + col) * 4;
+          if (px[k] < 215 || px[k + 1] < 215 || px[k + 2] < 215) return (row + 1) / 80;
+        }
+      }
+    } catch (_) { /* sem acesso aos pixels */ }
+    return 1;
+  }
+
+  /** Retângulo onde a imagem cabe inteira (sem cortar). */
+  function containRect(img, x, y, w, h) {
+    var k = Math.min(w / img.width, h / img.height), iw = img.width * k, ih = img.height * k;
+    return { x: x + (w - iw) / 2, y: y + (h - ih) / 2, w: iw, h: ih };
+  }
+
+  /** Arco (topo arredondado), como as molduras de lojas de decoração. */
+  function archPath(ctx, x, y, w, h) {
+    var r = w / 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y + h); ctx.lineTo(x, y + r);
+    ctx.arc(x + r, y + r, r, Math.PI, 0);
+    ctx.lineTo(x + w, y + h); ctx.closePath();
+  }
+
+  /**
+   * Foto do produto na área (x, y, w, h).
+   * Fundo branco: o branco vira a cor de fundo (multiplicar) e o produto ganha sombra suave embaixo.
+   * Foto de ambiente: preenche um arco com filete dourado.
+   */
+  function premiumPhoto(ctx, img, x, y, w, h, line) {
+    if (!img) return;
+    if (plainBackground(img)) {
+      var r = containRect(img, x + 30, y + 10, w - 60, h - 50);
+      var fy = r.y + r.h * productBottom(img) + 4; // "chão": logo abaixo do produto
+      // sombra elíptica no chão
+      var g = ctx.createRadialGradient(r.x + r.w / 2, fy, 4, r.x + r.w / 2, fy, r.w * 0.45);
+      g.addColorStop(0, 'rgba(60,45,25,0.28)'); g.addColorStop(1, 'rgba(60,45,25,0)');
+      ctx.save(); ctx.translate(r.x + r.w / 2, fy); ctx.scale(1, 0.14); ctx.translate(-(r.x + r.w / 2), -fy);
+      ctx.fillStyle = g; ctx.fillRect(r.x - 40, fy - r.w * 0.45, r.w + 80, r.w * 0.9); ctx.restore();
+      ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(img, r.x, r.y, r.w, r.h); ctx.restore();
+      return;
+    }
+    // arco centralizado, proporção elegante (mais alto que largo)
+    var aw = Math.min(w, h * 0.78), ax = x + (w - aw) / 2;
+    ctx.save(); archPath(ctx, ax, y, aw, h); ctx.clip();
+    var k = Math.max(aw / img.width, h / img.height), iw = img.width * k, ih = img.height * k;
+    ctx.drawImage(img, ax + (aw - iw) / 2, y + (h - ih) / 2, iw, ih);
+    ctx.restore();
+    ctx.strokeStyle = line; ctx.lineWidth = 2;
+    archPath(ctx, ax - 14, y - 14, aw + 28, h + 14); ctx.stroke();
+  }
+
   T.premium = function (ctx, d) {
     var p = d.products[0], off = offOf(p, d);
     var LABEL = '#8C6B3F', SOFT = '#5E5241'; // dourado e cinza-quente mais escuros: contraste para leitura
@@ -343,8 +421,7 @@
     spacing('0px');
     ctx.fillStyle = GOLDLINE; ctx.fillRect(W / 2 - 50, 128, 100, 3);
     // foto
-    ctx.fillStyle = '#FFFFFF'; shadow(ctx, true); roundRect(ctx, 110, 160, W - 220, 600, 8); ctx.fill(); shadow(ctx, false);
-    contain(ctx, d.images[0], 140, 186, W - 280, 548);
+    premiumPhoto(ctx, d.images[0], 110, 170, W - 220, 600, GOLDLINE);
     // nome em serifa, maior
     ctx.fillStyle = DEEP; ctx.font = font(600, 64, SERIF);
     var lines = wrap(ctx, p.title, 900, 2);
