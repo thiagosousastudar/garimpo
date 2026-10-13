@@ -74,7 +74,8 @@ async function fitForInstagram({ cfg, fetchImpl, media, allowed }) {
     try {
       const meta = await sharp()(await download(m.url, fetchImpl, allowed), { failOn: 'none' }).metadata();
       const rotated = meta.orientation >= 5;
-      if (!padFor(rotated ? meta.height : meta.width, rotated ? meta.width : meta.height)) return m;
+      // fora da proporção ou em outro formato (WEBP, PNG...): vai a versão ajustada, sempre em JPEG
+      if (meta.format === 'jpeg' && !padFor(rotated ? meta.height : meta.width, rotated ? meta.width : meta.height)) return m;
       fixed++;
       return { ...m, url: fitUrl(cfg, m.url) };
     } catch (_) {

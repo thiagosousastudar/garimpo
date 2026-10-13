@@ -1714,3 +1714,27 @@ test('foto que a Meta ainda está preparando ("Media ID is not available"): espe
     assert.doesNotMatch(prev.data.caption, /0 mil vendidos/);
   } finally { t.close(); }
 });
+
+test('foto WEBP (ex.: endereço copiado da Shopee) é convertida para JPEG; colar remove o "@resize...webp"', async () => {
+  const sharp = require('sharp');
+  const webp = await sharp({ create: { width: 600, height: 600, channels: 3, background: '#aa3366' } }).webp().toBuffer();
+  const opts = { ml: { imgs: { '/foto.webp': webp } }, meta: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', { ...PRODUTO, images: 'https://down-br.img.susercontent.com/file/br-abc@resize_w900_nl.webp' })).data.product;
+    assert.deepEqual(p.images, [PRODUTO.image_url, 'https://down-br.img.susercontent.com/file/br-abc']);
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const r = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'Webp', media_type: 'image', media_url: 'https://http2.mlstatic.com/foto.webp' });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    const sent = t.calls.find((c) => c.body && c.body.image_url).body.image_url;
+    assert.match(sent, /\/api\/img\/fit\?u=.*foto\.webp/);
+    const res = await fetch(`http://127.0.0.1:${t.server.address().port}` + sent.replace('https://app.exemplo.com', ''));
+    const meta = await sharp(Buffer.from(await res.arrayBuffer())).metadata();
+    assert.deepEqual([meta.format, meta.width, meta.height], ['jpeg', 600, 600]);
+    // endereço de fora das lojas com extensão errada continua recusado
+    const bad = await api('POST', '/api/queue/post-now', { product_id: p.id, channel: 'instagram', caption: 'x', media_type: 'image', media_url: 'https://img.exemplo.com/a.png' });
+    assert.equal(bad.status, 400);
+  } finally { t.close(); }
+});

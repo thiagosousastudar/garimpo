@@ -34,8 +34,9 @@ function checkMedia(cfg, rawUrl, kind) {
     throw new HttpError(400, 'A mídia está em um endereço local. O Instagram precisa de uma URL pública (configure APP_URL com o domínio do app).');
   }
   // Fotos das lojas (ex.: Shopee) costumam vir sem extensão; só recusa quando a extensão é claramente outra.
+  // Das lojas e do armazenamento (WEBP, PNG...) o Garimpo converte para JPEG antes de enviar (fitimage).
   const ext = (new URL(url).pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
-  if (kind === 'image' && ext && !/^jpe?g$/i.test(ext)) {
+  if (kind === 'image' && ext && !/^jpe?g$/i.test(ext) && !proxyAllowed(cfg, host)) {
     throw new HttpError(400, 'Para foto, o Instagram aceita apenas JPEG (.jpg).');
   }
   return url;

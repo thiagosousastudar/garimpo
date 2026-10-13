@@ -103,6 +103,8 @@ function cleanImages(v) {
     let u;
     try { u = new URL(raw); } catch (_) { throw new HttpError(400, `Foto extra: endereço inválido (${raw.slice(0, 60)}).`); }
     if (u.protocol !== 'https:') throw new HttpError(400, 'Foto extra: use endereços https.');
+    // Shopee: ".../file/ID@resize_w900_nl.webp" é uma miniatura em WEBP; sem o sufixo vem a foto original em JPEG
+    if (/(^|\.)susercontent\.com$/i.test(u.hostname)) u.pathname = u.pathname.replace(/@[^/]*$/, '');
     if (!out.includes(u.toString())) out.push(u.toString());
   }
   if (out.length > 12) throw new HttpError(400, 'No máximo 12 fotos extras.');
