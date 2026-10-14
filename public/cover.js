@@ -149,6 +149,33 @@
     ctx.textBaseline = 'alphabetic';
   }
 
+  /* ---------- tons de fundo (Premium, Clean e Gancho) ---------- */
+  var PALETTES = {
+    creme: { bg: '#F6F1EA', line: '#B08D57', ink: '#1F1B16', soft: '#5E5241', label: '#8C6B3F', g: ['#5A4636', '#8C7259', '#C9B49A'], veil: '28,18,10' },
+    branco: { bg: '#FFFFFF', line: '#9A9A9A', ink: '#151515', soft: '#555555', label: '#6E6E6E', g: ['#2B2B2B', '#6E6E6E', '#DADADA'], veil: '10,10,10' },
+    rosa: { bg: '#F8ECEE', line: '#B76E79', ink: '#2A1A1D', soft: '#6B4A50', label: '#9C5560', g: ['#5E3540', '#A8707B', '#EBC9CF'], veil: '45,15,25' },
+    salvia: { bg: '#EEF2EC', line: '#7A9A7E', ink: '#1C2A1F', soft: '#4D5F50', label: '#5D7D62', g: ['#2C4232', '#6B8A70', '#C9D8C8'], veil: '15,30,20' },
+    azul: { bg: '#EDF2F8', line: '#6B8CAE', ink: '#17222E', soft: '#4A5B6E', label: '#4E7096', g: ['#1F334A', '#5A7CA1', '#C9D8EA'], veil: '10,20,35' },
+    lavanda: { bg: '#F2EEF8', line: '#8B76B0', ink: '#221B2E', soft: '#5A506E', label: '#6F5A99', g: ['#36294D', '#7A67A0', '#D8CFEA'], veil: '25,15,40' },
+    preto: { bg: '#141414', line: '#C9A96E', ink: '#FFFFFF', soft: 'rgba(255,255,255,0.78)', label: '#C9A96E', g: ['#0C0C0C', '#222222', '#383838'], veil: '0,0,0', dark: true },
+  };
+  /** Paleta a partir de uma cor livre (#rrggbb): tons calculados para combinar e manter a leitura. */
+  function paletteFrom(hexColor) {
+    var c = rgb(hexColor), lum = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255, dark = lum < 0.5;
+    var v = rgb(shade(hexColor, -0.75));
+    return {
+      bg: hexColor, dark: dark,
+      line: dark ? shade(hexColor, 0.45) : shade(hexColor, -0.4),
+      ink: dark ? '#FFFFFF' : '#1B1B1B', soft: dark ? 'rgba(255,255,255,0.78)' : shade(hexColor, -0.6),
+      label: dark ? shade(hexColor, 0.55) : shade(hexColor, -0.5),
+      g: [shade(hexColor, -0.6), shade(hexColor, -0.3), dark ? shade(hexColor, 0.15) : hexColor], veil: v.join(','),
+    };
+  }
+  var PAL = PALETTES.creme;
+  function usePalette(key, fallback) {
+    PAL = /^#[0-9a-f]{6}$/i.test(String(key || '')) ? paletteFrom(key) : PALETTES[key] || PALETTES[fallback] || PALETTES.creme;
+  }
+
   /* ---------- modelos ---------- */
   var T = {};
 
@@ -340,7 +367,8 @@
   T.minimal = function (ctx, d) {
     var p = d.products[0], c = d.color, off = offOf(p, d);
     var X = 60, MAXW = W - 120, BOTTOM = H - 86 - 34; // acima do rodapé, com respiro
-    ctx.fillStyle = '#F7F5F0'; ctx.fillRect(0, 0, W, H);
+    var INK = PAL.ink, MUTED = PAL.soft;
+    ctx.fillStyle = PAL.bg; ctx.fillRect(0, 0, W, H);
     var range = Number(p.price_max) > Number(p.price);
     var s = seals(p, d).map(function (x) { return x.charAt(0) + x.slice(1).toLowerCase(); }).map(function (x) { return x.replace(/full/i, 'Full'); })
       .concat(rankOf(p, d) ? [p.best_seller_rank + 'º mais vendido'] : []).slice(0, 3);
@@ -364,7 +392,13 @@
     var GAP = 20;
     var top = BOTTOM - H_SEALS - (s.length ? 14 : 0) - H_PRICE - H_FROM - GAP - H_TITLE - GAP - H_LABEL;
     // foto no espaço de cima
-    roundedContain(ctx, d.images[0], 90, 70, W - 180, Math.max(360, top - 100), rad(d, 0));
+    // foto de loja (fundo branco) em fundo claro: o branco some e o produto "flutua" no tom escolhido
+    if (d.images[0] && !PAL.dark && plainBackground(d.images[0])) {
+      var ph = Math.max(360, top - 100), r0 = containRect(d.images[0], 90, 70, W - 180, ph);
+      ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(d.images[0], r0.x, r0.y, r0.w, r0.h); ctx.restore();
+    } else {
+      roundedContain(ctx, d.images[0], 90, 70, W - 180, Math.max(360, top - 100), rad(d, 0));
+    }
     var y = top;
     // rótulo
     ctx.fillStyle = c; ctx.fillRect(X, y + 14, 90, 10);
@@ -381,7 +415,7 @@
     ctx.fillStyle = shade(c, -0.2); ctx.font = font(700, priceSize, DISPLAY); ctx.fillText(priceTxt, X - 4, base);
     var pw = ctx.measureText(priceTxt).width;
     if (oldTxt) { ctx.fillStyle = MUTED; ctx.font = font(500, 36, BODY); strike(ctx, oldTxt, X + pw + 20, base - 6); }
-    if (pill) pill2(ctx, pill, W - X, base - priceSize * 0.42 - 29);
+    if (pill) discountPill(ctx, pill, W - X, base - priceSize * 0.42 - 29, PAL.dark ? PAL.line : PAL.ink, PAL.dark ? '#141414' : '#FFFFFF');
     y += H_PRICE;
     // selos, em uma linha abaixo do preço
     if (s.length) {
@@ -389,10 +423,10 @@
       ctx.fillStyle = MUTED; ctx.font = font(600, fit(ctx, sealTxt, MAXW, 28, 20, 600, BODY), BODY);
       ctx.fillText(sealTxt, X, y + 14 + 30);
     }
-    footer(ctx, d, INK);
+    footer(ctx, d, PAL.dark ? shade(PAL.bg, 0.12) : '#1B1B1B');
   };
   /** Selo de desconto (pílula escura) alinhado à direita. */
-  function pill2(ctx, text, right, y) { pill(ctx, text, right, y, { bg: INK, fg: '#FFFFFF', size: 34, align: 'right' }); }
+  function discountPill(ctx, text, right, y, bg, fg) { pill(ctx, text, right, y, { bg: bg, fg: fg, size: 34, align: 'right' }); };
 
   /**
    * Premium: curadoria elegante. Fundo off-white, filete dourado, foto grande sem moldura chamativa,
@@ -478,6 +512,7 @@
       g.addColorStop(0, 'rgba(60,45,25,0.28)'); g.addColorStop(1, 'rgba(60,45,25,0)');
       ctx.save(); ctx.translate(r.x + r.w / 2, fy); ctx.scale(1, 0.14); ctx.translate(-(r.x + r.w / 2), -fy);
       ctx.fillStyle = g; ctx.fillRect(r.x - 40, fy - r.w * 0.45, r.w + 80, r.w * 0.9); ctx.restore();
+      if (PAL.dark) { clipped(ctx, r.x, r.y, r.w, r.h, 18, function () { ctx.drawImage(img, r.x, r.y, r.w, r.h); }); return; } // fundo escuro: foto em cartão
       ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(img, r.x, r.y, r.w, r.h); ctx.restore();
       return;
     }
@@ -493,7 +528,8 @@
 
   T.premium = function (ctx, d) {
     var p = d.products[0], off = offOf(p, d);
-    var LABEL = '#8C6B3F', SOFT = '#5E5241'; // dourado e cinza-quente mais escuros: contraste para leitura
+    var CREAM = PAL.bg, GOLDLINE = PAL.line, DEEP = PAL.ink;
+    var LABEL = PAL.label, SOFT = PAL.soft; // tons da paleta escolhida (com contraste para leitura)
     var spacing = function (v) { if (ctx.letterSpacing !== undefined) ctx.letterSpacing = v; };
     ctx.fillStyle = CREAM; ctx.fillRect(0, 0, W, H);
     // moldura fina dourada
@@ -555,7 +591,7 @@
       ctx.drawImage(img, (W - iw) / 2, (H - ih) / 2, iw, ih);
     } else {
       var bg = ctx.createLinearGradient(0, 0, 0, H);
-      bg.addColorStop(0, '#5A4636'); bg.addColorStop(0.55, '#8C7259'); bg.addColorStop(1, '#C9B49A');
+      bg.addColorStop(0, PAL.g[0]); bg.addColorStop(0.55, PAL.g[1]); bg.addColorStop(1, PAL.g[2]);
       ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
       if (img) {
         var r = containRect(img, 170, 700, W - 340, 520);
@@ -563,16 +599,17 @@
         var g0 = ctx.createRadialGradient(W / 2, fy, 4, W / 2, fy, r.w * 0.5);
         g0.addColorStop(0, 'rgba(40,25,10,0.45)'); g0.addColorStop(1, 'rgba(40,25,10,0)');
         ctx.save(); ctx.translate(W / 2, fy); ctx.scale(1, 0.14); ctx.translate(-W / 2, -fy); ctx.fillStyle = g0; ctx.fillRect(0, fy - r.w * 0.5, W, r.w); ctx.restore();
-        ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(img, r.x, r.y, r.w, r.h); ctx.restore();
+        if (PAL.dark) clipped(ctx, r.x, r.y, r.w, r.h, 18, function () { ctx.drawImage(img, r.x, r.y, r.w, r.h); });
+        else { ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(img, r.x, r.y, r.w, r.h); ctx.restore(); }
       }
     }
     // véu quente: escurece o centro (onde vai o texto) e as bordas
-    ctx.fillStyle = 'rgba(28,18,10,0.30)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(' + PAL.veil + ',0.30)'; ctx.fillRect(0, 0, W, H);
     var v = ctx.createRadialGradient(W / 2, H * 0.36, 60, W / 2, H * 0.36, W * 0.85);
-    v.addColorStop(0, 'rgba(20,12,6,0.40)'); v.addColorStop(1, 'rgba(20,12,6,0.05)');
+    v.addColorStop(0, 'rgba(' + PAL.veil + ',0.40)'); v.addColorStop(1, 'rgba(' + PAL.veil + ',0.05)');
     ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
     var shade2 = ctx.createLinearGradient(0, H * 0.75, 0, H);
-    shade2.addColorStop(0, 'rgba(15,10,5,0)'); shade2.addColorStop(1, 'rgba(15,10,5,0.45)');
+    shade2.addColorStop(0, 'rgba(' + PAL.veil + ',0)'); shade2.addColorStop(1, 'rgba(' + PAL.veil + ',0.45)');
     ctx.fillStyle = shade2; ctx.fillRect(0, H * 0.75, W, H * 0.25);
 
     var line1 = String(d.title || 'PARECE QUE FOI CARÍSSIMO').toUpperCase();
@@ -632,6 +669,7 @@
    * O desenho é feito em 1080x1350 (feed); "story" e "square" encaixam esse desenho e completam o espaço.
    */
   function render(canvas, d) {
+    usePalette(d.bg, d.template === 'editorial' ? 'creme' : 'creme');
     var size = FORMATS[d.format] || FORMATS.feed;
     canvas.width = size[0]; canvas.height = size[1];
     var ctx = canvas.getContext('2d');

@@ -1667,6 +1667,8 @@
   var COVER_FORMATS = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16'], ['square', 'Quadrado 1:1']];
   var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
+  var COVER_BGS = [['creme', '#F6F1EA', 'Creme'], ['branco', '#FFFFFF', 'Branco'], ['rosa', '#F8ECEE', 'Rosa'], ['salvia', '#EEF2EC', 'Sálvia'],
+    ['azul', '#EDF2F8', 'Azul'], ['lavanda', '#F2EEF8', 'Lavanda'], ['preto', '#141414', 'Preto']];
   var COVER_RADIUS = { oferta: 44, achadinho: 60, lista: 36, relampago: 48, foto: 0, minimal: 0, premium: 48 };
   var COVER_SHAPES = [['auto', 'Automática'], ['free', 'Solta'], ['arch', 'Arco'], ['round', 'Arredondada']];
   function coverRadius(cv) { return cv.radius != null && cv.radius !== '' ? Number(cv.radius) : COVER_RADIUS[cv.tpl] || 0; }
@@ -1703,6 +1705,12 @@
       '<button type="button" class="btn small" data-act="cover-download"' + (cv.busy ? ' disabled' : '') + '>⬇ Baixar imagem</button></div><div class="coverctl">' +
       seg('Modelo', tpls, 'ctpl', cv.tpl) + seg('Formato', COVER_FORMATS, 'cfmt', fmt) +
       (cv.tpl === 'premium' ? seg('Moldura da foto', COVER_SHAPES, 'cshape', cv.shape || 'auto') : '') +
+      (['premium', 'minimal', 'editorial'].indexOf(cv.tpl) > -1 ? '<div class="field"><label>Tom de fundo' + (cv.tpl === 'editorial' ? ' <span class="hint">(fundo e véu sobre a foto)</span>' : '') + '</label><div class="swatches">' +
+        COVER_BGS.map(function (b) {
+          var on = (cv.bg || 'creme') === b[0];
+          return '<button type="button" class="sw' + (on ? ' on' : '') + '" data-cbg="' + b[0] + '" style="background:' + b[1] + '" title="' + b[2] + '" aria-label="Fundo ' + b[2] + '" aria-pressed="' + on + '"></button>';
+        }).join('') +
+        '<input id="cover-bg" type="color" value="' + esc(/^#/.test(cv.bg || '') ? cv.bg : '#F6F1EA') + '" title="Outra cor" aria-label="Outra cor de fundo"></div></div>' : '') +
       (cv.tpl !== 'premium' || cv.shape === 'round' ? '<div class="field"><label for="cover-radius">Arredondar cantos <span class="hint" id="cover-radius-v">' + coverRadius(cv) + '</span></label>' +
         '<div class="row"><input id="cover-radius" type="range" min="0" max="200" step="2" value="' + coverRadius(cv) + '" style="flex:1">' +
         '<button type="button" class="btn small ghost" data-act="cover-radius-reset">Padrão</button></div></div>' : '') +
@@ -1740,7 +1748,7 @@
     return Promise.all([window.GarimpoCover.fontsReady(), Promise.all(urls.map(coverImage))]).then(function (r) {
       var canvas = $('#cover-canvas');
       if (!canvas || !post || !post.cover || post.cover.seq !== seq) return;
-      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, shape: cv.shape, radius: cv.radius, script: cv.script, word: cv.word, products: post.products, images: r[1] });
+      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, shape: cv.shape, radius: cv.radius, script: cv.script, word: cv.word, bg: cv.bg, products: post.products, images: r[1] });
     });
   }
   var coverRaf = 0;
@@ -1795,7 +1803,7 @@
       if (!post.cover) {
         var tpl = post.group ? 'lista' : post.tone === 'premium' ? 'premium' : 'oferta';
         post.cover = {
-          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''),
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''), bg: prefGet('coverBg', 'creme'),
           color: state.brand.color || DEFAULT_COLOR,
           handle: state.brand.handle || (state.conn && state.conn.username) || '',
         };
@@ -2016,6 +2024,7 @@
       return renderPost();
     }
     if (d.chook !== undefined && post && post.cover) { var hf = hookFill(HOOKS[Number(d.chook)]); post.cover.title = hf[0]; post.cover.script = hf[1]; post.cover.word = hf[2]; return renderPost(); }
+    if (d.cbg && post && post.cover) { post.cover.bg = d.cbg; prefSet('coverBg', d.cbg); return renderPost(); }
     if (d.cshape && post && post.cover) { post.cover.shape = d.cshape; prefSet('coverShape', d.cshape); return renderPost(); }
     if (d.cfmt && post && post.cover) { post.cover.format = d.cfmt; prefSet('coverFormat', d.cfmt); return renderPost(); }
     if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
@@ -2183,6 +2192,7 @@
       drawCover();
       return;
     }
+    if (post && post.cover && t.id === 'cover-bg') { post.cover.bg = t.value; prefSet('coverBg', t.value); drawCover(); return; }
     if (post && post.cover && (t.id === 'cover-script' || t.id === 'cover-word')) { post.cover[t.id === 'cover-script' ? 'script' : 'word'] = t.value; drawCover(); return; }
     if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {
       if (t.id === 'cover-title') post.cover.title = t.value;
