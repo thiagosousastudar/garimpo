@@ -105,7 +105,7 @@ const shopeeIds = (u) => {
  * mlClient (opcional): cliente do Mercado Livre já autenticado, para os dados completos.
  * externalIdFrom: função do garimpo que tira o código MLB do link.
  */
-async function previewLink(raw, { fetchImpl = fetch, mlClient = null, externalIdFrom }) {
+async function previewLink(raw, { fetchImpl = fetch, mlClient = null, shClient = null, externalIdFrom }) {
   let u;
   try { u = new URL(String(raw).trim()); } catch (_) { return { link: raw, error: 'Link inválido.' }; }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return { link: raw, error: 'Link inválido.' };
@@ -138,6 +138,18 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, externalId
   }
 
   const ids = shopeeIds(finalUrl) || shopeeIds(link);
+  // Com a API de afiliados da Shopee: dados completos (preço, comissão, vendas) e o link de afiliado da própria conta
+  if (shClient && ids) {
+    try {
+      const full = await shClient.getItem(ids);
+      if (full && full.price) {
+        const isShort = /^s\.shopee\.com\.br$/i.test(u.hostname);
+        let aff = isShort ? link : full.affiliate_url;
+        if (!isShort) { try { aff = await shClient.shortLink({ url: full.product_url || finalUrl, subIds: ['garimpo'] }); } catch (_) { /* usa o da busca */ } }
+        return { ...full, affiliate_url: aff, link, source: 'api' };
+      }
+    } catch (_) { /* cai na prévia */ }
+  }
   const og = await openGraph(link, fetchImpl).catch(() => null);
   if (!og || !og.title) {
     // Link comum da página do produto (shopee.com.br/...-i.LOJA.ITEM): a Shopee bloqueia a leitura e ele não é de afiliado

@@ -470,6 +470,12 @@ async function processDue({ pool, cfg, fetchImpl, log = console }) {
   } catch (e) {
     log.error(`[direct] ${e.message}`);
   }
+  // Vendas da Shopee na aba Ganhos (a cada 6 horas)
+  try {
+    result.shopee_sales = await require('./shopeeSales').runShopeeSalesTick({ pool, cfg, fetchImpl, log });
+  } catch (e) {
+    log.error(`[vendas shopee] ${e.message}`);
+  }
   // Cupons do dia (postagem automática diária, para quem ligou)
   try {
     result.coupons = await require('../routes/coupons').runCouponsDaily({ pool, cfg, fetchImpl, log });

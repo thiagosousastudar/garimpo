@@ -113,6 +113,11 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       log[log.length - 1].headers = opts.headers;
       log[log.length - 1].gql = JSON.parse(opts.body).query;
       if (shopee.reject) return json(200, { errors: [{ message: 'Invalid Credential', extensions: { code: 10020 } }] });
+      const gq = log[log.length - 1].gql;
+      if (/shopOfferV2/.test(gq)) return json(200, { data: { shopOfferV2: { nodes: [{ shopId: 9001, shopName: 'Loja Oficial X', commissionRate: '0.43', ratingStar: '4.9', offerLink: 'https://s.shopee.com.br/lojaX', imageUrl: 'https://cf.shopee.com.br/file/x', shopType: [1] }], pageInfo: { hasNextPage: false } } } });
+      if (/shopeeOfferV2/.test(gq)) return json(200, { data: { shopeeOfferV2: { nodes: [{ offerName: '- - Health', commissionRate: '0.03', offerLink: 'https://s.shopee.com.br/health', imageUrl: 'https://cf.shopee.com.br/file/h', periodStartTime: 1787713200, periodEndTime: 32503651199 }], pageInfo: { hasNextPage: false } } } });
+      if (/generateShortLink/.test(gq)) { shopee.shortLinks = (shopee.shortLinks || 0) + 1; return json(200, { data: { generateShortLink: { shortLink: 'https://s.shopee.com.br/GERADO' } } }); }
+      if (/conversionReport/.test(gq)) return json(200, { data: { conversionReport: { nodes: shopee.conversions || [], pageInfo: { hasNextPage: false, scrollId: '' } } } });
       const node = (id, price) => ({
         itemId: id, shopId: 77, productName: `Fone Bluetooth ${id}`, price: String(price), priceMin: String(price),
         priceMax: String(price), priceDiscountRate: 40, commissionRate: '0.12', sales: 15300, ratingStar: '4.83',
@@ -2019,5 +2024,58 @@ test('Direct: comentário "QUERO" recebe o link do produto do post no Direct (ma
     const other = t.client();
     await signup(other, 'b@exemplo.com');
     assert.equal((await other('GET', '/api/direct/comments')).data.items.length, 0);
+  } finally { t.close(); }
+});
+
+test('Shopee completa: filtros do portal, lojas, ofertas, link de afiliado de link comum e vendas na aba Ganhos', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    assert.equal((await api('GET', '/api/garimpo/shopee/shops')).status, 400, 'sem conexão: pede para conectar');
+    assert.equal((await api('PUT', '/api/connections/shopee', { app_id: '18123456789', secret: 'segredo-da-shopee-123' })).status, 200);
+    const gqls = () => t.calls.filter((c) => c.gql).map((c) => c.gql);
+
+    // busca sem palavra: comissão extra da loja e vendedores-chave
+    const s = await api('POST', '/api/garimpo/search', { marketplace: 'SH', ams: true, key_seller: true, sort: 'comissao' });
+    assert.equal(s.status, 200, JSON.stringify(s.data));
+    assert.match(gqls().pop(), /isAMSOffer: true, isKeySeller: true/);
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'SH' })).status, 400, 'sem nada para buscar');
+    // produtos de uma loja
+    assert.equal((await api('POST', '/api/garimpo/search', { marketplace: 'SH', shop_id: '9001' })).status, 200);
+    assert.match(gqls().pop(), /shopId: 9001/);
+
+    const shops = (await api('GET', '/api/garimpo/shopee/shops?type=oficial')).data.items;
+    assert.deepEqual([shops[0].name, shops[0].commission_pct, shops[0].labels], ['Loja Oficial X', 43, ['Loja oficial']]);
+    assert.match(gqls().pop(), /shopType: \[1\]/);
+    const camp = (await api('GET', '/api/garimpo/shopee/campaigns')).data.items;
+    assert.deepEqual([camp[0].name, camp[0].commission_pct, camp[0].ends_at], ['Health', 3, null]);
+
+    // link de afiliado de qualquer link da Shopee
+    const l = await api('POST', '/api/garimpo/shopee/link', { url: 'https://shopee.com.br/Serum-i.77.1001', sub_ids: 'instagram' });
+    assert.equal(l.data.link, 'https://s.shopee.com.br/GERADO');
+    assert.match(gqls().pop(), /subIds: \["instagram"\]/);
+    assert.equal((await api('POST', '/api/garimpo/shopee/link', { url: 'https://evil.example.com/x' })).status, 400);
+
+    // cadastrar por link comum: dados completos pela API e link de afiliado gerado
+    const [it] = (await api('POST', '/api/garimpo/from-links', { links: ['https://shopee.com.br/Fone-Bluetooth-i.77.1001'] })).data.items;
+    assert.equal(it.source, 'api', JSON.stringify(it));
+    assert.equal(it.affiliate_url, 'https://s.shopee.com.br/GERADO');
+    assert.equal(it.price, 59.9);
+    const saved = (await api('POST', '/api/garimpo/save', { items: [it] })).data.products[0];
+
+    // vendas: concluída entra como confirmada, cancelada não entra; produto ligado pelo código da loja
+    const now = Math.floor(Date.now() / 1000);
+    opts.shopee.conversions = [{ purchaseTime: now - 3600, conversionId: 1, utmContent: 'garimpo-instagram', orders: [
+      { orderId: 'A', orderStatus: 'COMPLETED', items: [{ shopId: 77, itemId: 1001, itemName: 'Fone', itemPrice: '59.9', qty: 1, itemTotalCommission: '7.19', displayItemStatus: 'Completed' }] },
+      { orderId: 'B', orderStatus: 'CANCELLED', items: [{ shopId: 77, itemId: 1002, itemName: 'Outro', itemPrice: '10', qty: 1, itemTotalCommission: '1', displayItemStatus: 'Cancelled' }] },
+    ] }];
+    const sync = await api('POST', '/api/garimpo/shopee/sync-sales');
+    assert.deepEqual(sync.data, { created: 1, updated: 0, removed: 0 });
+    const earn = (await api('GET', '/api/earnings')).data.earnings;
+    assert.deepEqual([earn.length, Number(earn[0].commission), earn[0].status, earn[0].channel, earn[0].product_id], [1, 7.19, 'confirmada', 'instagram', saved.id]);
+    // de novo: não duplica
+    assert.deepEqual((await api('POST', '/api/garimpo/shopee/sync-sales')).data, { created: 0, updated: 0, removed: 0 });
   } finally { t.close(); }
 });

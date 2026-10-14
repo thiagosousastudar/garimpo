@@ -130,12 +130,12 @@ const SORTERS = {
  * Busca na loja, na hora. Calcula a nota de prioridade, aplica os filtros mínimos e marca o que já está salvo.
  * Filtros e ordenação que a loja não suporta são aplicados aqui, sobre a página recebida.
  */
-async function search({ pool, cfg, fetchImpl, uid, marketplace, q, category, page, sort, minDiscount, minCommission, minRating, freeShipping }) {
+async function search({ pool, cfg, fetchImpl, uid, marketplace, q, category, page, sort, sh = {}, minDiscount, minCommission, minRating, freeShipping }) {
   const client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace });
   if (category && !client.bestSellersOf) throw new HttpError(400, 'Explorar por categoria só está disponível no Mercado Livre.');
   let out;
   try {
-    out = category ? await client.bestSellersOf(category) : await client.search({ q, page, sort });
+    out = category ? await client.bestSellersOf(category) : await client.search({ q, page, sort, ...sh });
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw new HttpError(502, e.message);

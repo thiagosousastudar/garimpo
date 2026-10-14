@@ -53,7 +53,8 @@
     products: [], queue: [], summary: null, earnings: [], conn: null, mkts: null,
     mkt: 'todos', cat: 'todas', comMin: 0, ordem: prefGet('ordem', 'recentes'), days: 14, authMode: 'login',
     // garimpo sob demanda: filtros, resultados da última busca e itens marcados
-    g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', onlyCom: false, sheetBusy: false, minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
+    g: { mkt: 'ML', q: '', category: '', ship: '', sort: 'relevancia', onlyCom: false, sheetBusy: false,
+      shview: 'produtos', ams: false, keySeller: false, top: false, shopId: null, shopName: null, shops: null, shopsQ: '', shopsType: 'todas', shopsSort: 'comissao', camps: null, linkOut: null, minDesc: 0, minCom: 0, minRat: 0, results: [], page: 1, more: false, busy: false, done: false, sel: {}, trends: null, cats: null },
     shipFilter: '', // filtro de frete na aba Produtos ('', 'free', 'cheap')
     shipZip: null, // CEP de referência do frete
     psel: {}, // produtos marcados para postar juntos (carrossel)
@@ -190,6 +191,8 @@
     if (p.full) b.push('<span class="tag full">⚡ Full</span>');
     if (p.official_store) b.push('<span class="tag off">Loja oficial</span>');
     if (p.sellers > 1) b.push('<span class="tag plain">' + p.sellers + ' vendedores</span>');
+    if (p.seller_commission_pct) b.push('<span class="tag hl" title="Parte da comissão paga pela própria loja">💰 +' + String(p.seller_commission_pct).replace('.', ',') + '% da loja</span>');
+    if (p.shop_labels && p.shop_labels.length && !p.official_store) p.shop_labels.forEach(function (l) { b.push('<span class="tag plain">' + esc(l) + '</span>'); });
     if (p.has_video) b.push('<span class="tag plain" title="O anúncio tem vídeo no Mercado Livre; a API não libera o arquivo">🎬 anúncio com vídeo</span>');
     return b.length ? '<div class="badges">' + b.join('') + '</div>' : '';
   }
@@ -386,6 +389,60 @@
     });
   }
 
+  /* ---------- Shopee pela API de afiliados: lojas, ofertas e gerador de link ---------- */
+  function shSeg() {
+    var v = state.g.shview || 'produtos';
+    return '<div class="seg wrapseg" role="group" aria-label="Shopee" style="margin:10px 0">' + [['produtos', '🔎 Produtos'], ['lojas', '🏬 Lojas'], ['ofertas', '🎁 Ofertas Shopee'], ['link', '🔗 Gerar link']].map(function (o) {
+      return '<button type="button" data-shview="' + o[0] + '" aria-pressed="' + (v === o[0]) + '">' + o[1] + '</button>';
+    }).join('') + '</div>';
+  }
+  function loadShShops() {
+    var g = state.g;
+    return api('GET', '/api/garimpo/shopee/shops?type=' + g.shopsType + '&sort=' + g.shopsSort + '&q=' + encodeURIComponent(g.shopsQ || '')).then(function (r) { g.shops = r.items; });
+  }
+  function shShops() {
+    var g = state.g;
+    if (!g.shops) { loadShShops().then(render).catch(function (e) { g.shops = []; toast(e.message); render(); }); return '<p class="hint">Carregando lojas…</p>'; }
+    var types = [['todas', 'Todas'], ['oficial', 'Lojas oficiais'], ['indicada', 'Indicadas']].map(function (o) {
+      return '<button type="button" data-shtype="' + o[0] + '" aria-pressed="' + (g.shopsType === o[0]) + '">' + o[1] + '</button>';
+    }).join('');
+    var cards = g.shops.map(function (s) {
+      return '<article class="prow shop">' + (safeUrl(s.image_url) ? '<div class="thumb sm"><img src="' + esc(safeUrl(s.image_url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></div>' : '<div class="thumb sm"></div>') +
+        '<div class="pinfo"><h3>' + esc(s.name) + '</h3><div class="meta">' + s.labels.map(function (l) { return '<span class="tag off">' + esc(l) + '</span>'; }).join('') +
+        (s.rating ? '<span>★ ' + String(s.rating).replace('.', ',') + '</span>' : '') + '</div>' +
+        '<div class="pline"><span class="earn num">' + String(s.commission_pct).replace('.', ',') + '% de comissão</span></div></div>' +
+        '<div class="pact"><button class="btn small primary" data-shopprod="' + esc(s.shop_id) + '" data-shopname="' + esc(s.name) + '">Ver produtos</button>' +
+        (s.link ? '<button class="btn small ghost" data-copylink="' + esc(s.link) + '">Copiar link da loja</button>' : '') + '</div></article>';
+    }).join('');
+    return '<form id="sh-shops-form" class="row"><input id="sh-shops-q" type="search" class="grow" placeholder="Buscar loja (ex.: boticário, decoração)" value="' + esc(g.shopsQ || '') + '"><button class="btn" type="submit">Buscar</button></form>' +
+      '<div class="filters" style="padding:8px 0"><div class="seg" role="group">' + types + '</div>' +
+      selectEl('sh-sort', 'sort', 'Ordenar lojas', [['comissao', 'Maior comissão'], ['populares', 'Mais populares'], ['recentes', 'Mais recentes']], g.shopsSort) + '</div>' +
+      '<p class="hint">Comissão da loja = vale para os produtos dela no período da campanha. Lojas oficiais costumam ser as mais confiáveis para a Linha Premium.</p>' +
+      (cards ? '<div class="prodlist">' + cards + '</div>' : '<div class="empty centered-empty">Nenhuma loja encontrada.</div>');
+  }
+  function shCamps() {
+    var g = state.g;
+    if (!g.camps) { api('GET', '/api/garimpo/shopee/campaigns').then(function (r) { g.camps = r.items; render(); }).catch(function (e) { g.camps = []; toast(e.message); render(); }); return '<p class="hint">Carregando ofertas…</p>'; }
+    var cards = g.camps.map(function (c) {
+      return '<article class="prow shop">' + (safeUrl(c.image_url) ? '<div class="thumb sm"><img src="' + esc(safeUrl(c.image_url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></div>' : '<div class="thumb sm"></div>') +
+        '<div class="pinfo"><h3>' + esc(c.name) + '</h3><div class="pline"><span class="earn num">' + String(c.commission_pct).replace('.', ',') + '% de comissão</span>' +
+        (c.ends_at ? '<span class="hint">até ' + esc(new Date(c.ends_at).toLocaleDateString('pt-BR')) + '</span>' : '') + '</div></div>' +
+        '<div class="pact">' + (c.link ? '<button class="btn small primary" data-copylink="' + esc(c.link) + '">Copiar link</button><button class="btn small ghost" data-walink="' + esc(c.link) + '" data-waname="' + esc(c.name) + '">WhatsApp</button>' : '') + '</div></article>';
+    }).join('');
+    return '<p class="hint">Campanhas da própria Shopee por categoria ou evento. O link já é o seu (de afiliado) e leva para a página da campanha: bom para posts do tipo "Ofertas de Beleza de hoje".</p>' +
+      (cards ? '<div class="prodlist">' + cards + '</div>' : '<div class="empty centered-empty">Nenhuma oferta disponível agora.</div>');
+  }
+  function shLink() {
+    var g = state.g;
+    return '<form id="sh-link-form" class="card stack"><h3>🔗 Gerar o seu link de afiliado</h3>' +
+      '<p class="hint">Cole qualquer link da Shopee (produto, loja, categoria, campanha). O Garimpo gera o seu link s.shopee.com.br, que conta a venda para você.</p>' +
+      '<input id="sh-link-url" type="url" placeholder="https://shopee.com.br/..." required>' +
+      '<div class="field"><label for="sh-link-sub">Canal (Sub_id, para ver no relatório da Shopee de onde veio a venda)</label><select id="sh-link-sub">' +
+      [['instagram', 'Instagram'], ['whatsapp', 'WhatsApp'], ['telegram', 'Telegram'], ['garimpo', 'Outro']].map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '<div class="row end"><button class="btn primary" type="submit">Gerar link</button></div>' +
+      (g.linkOut ? '<div class="linkout"><input type="text" readonly value="' + esc(g.linkOut) + '"><button type="button" class="btn small primary" data-copylink="' + esc(g.linkOut) + '">Copiar</button></div>' : '') + '</form>';
+  }
+
   function viewGarimpar() {
     var g = state.g;
     var ready = mktReady(g.mkt);
@@ -398,18 +455,27 @@
       return '<button type="button" class="chip" data-gmkt="' + m[0] + '" aria-pressed="' + (g.mkt === m[0]) + '">' + m[1] + (m[0] === 'ML' && !mktReady('ML') ? ' · desconectado' : '') + '</button>';
     }).join('');
     var form = '<form class="card" id="g-form"><div class="filters" style="padding:0">' + chips + '</div>' +
-      (ready ? '<div class="row"><input id="g-q" name="q" type="search" class="grow gq" placeholder="O que você quer garimpar? Ex.: air fryer, fone bluetooth" value="' + esc(g.q) + '" required minlength="2" aria-label="Busca">' +
+      (g.mkt === 'SH' && ready ? shSeg() : '') +
+      (ready && !(g.mkt === 'SH' && g.shview !== 'produtos') ? '<div class="row"><input id="g-q" name="q" type="search" class="grow gq" placeholder="O que você quer garimpar? Ex.: air fryer, fone bluetooth" value="' + esc(g.q) + '"' + (g.mkt === 'SH' ? '' : ' required minlength="2"') + ' aria-label="Busca">' +
         '<button class="btn primary" type="submit"' + (!g.busy ? '' : ' disabled') + '>' + (g.busy ? 'Garimpando…' : 'Garimpar agora') + '</button></div>' +
         '<div class="filters" style="padding:0">' +
         selectEl('g-desc', 'minDesc', 'Desconto mínimo', [[0, 'Qualquer desconto'], [10, 'Desconto de 10%+'], [20, 'Desconto de 20%+'], [30, 'Desconto de 30%+'], [50, 'Desconto de 50%+']], g.minDesc) +
         (g.mkt === 'SH' ? selectEl('g-com', 'minCom', 'Comissão mínima', [[0, 'Qualquer comissão'], [5, 'Comissão de 5%+'], [8, 'Comissão de 8%+'], [10, 'Comissão de 10%+'], [15, 'Comissão de 15%+']], g.minCom) +
           selectEl('g-rat', 'minRat', 'Avaliação mínima', [[0, 'Qualquer avaliação'], [4, '★ 4,0+'], [4.5, '★ 4,5+'], [4.8, '★ 4,8+']], g.minRat) :
-          selectEl('g-ship', 'ship', 'Frete', SHIP_OPTS, g.ship)) + '</div>' : '') +
+          selectEl('g-ship', 'ship', 'Frete', SHIP_OPTS, g.ship)) + '</div>' +
+        (g.mkt === 'SH' ? '<div class="filters" style="padding:0"><label class="check"><input type="checkbox" id="g-ams"' + (g.ams ? ' checked' : '') + '> 💰 Só com comissão extra da loja</label>' +
+          '<label class="check"><input type="checkbox" id="g-key"' + (g.keySeller ? ' checked' : '') + '> ⭐ Vendedores-chave</label>' +
+          '<button type="button" class="btn small" data-act="sh-top">🔥 Melhor desempenho agora</button>' +
+          (g.shopId ? '<span class="chip small" aria-pressed="true">Loja: ' + esc(g.shopName || g.shopId) + ' <button type="button" class="link" data-act="sh-shop-clear" aria-label="Tirar filtro de loja">✕</button></span>' : '') + '</div>' +
+          '<p class="hint">Dá para garimpar sem digitar: marque um filtro e toque em Garimpar, ou use "Melhor desempenho".</p>' : '') : '') +
       (g.mkt === 'ML' && ready ? mlExplore(g) : '') + '</form>';
 
     var head = '<div class="pagehead"><h2>Garimpar</h2><p>Encontre os produtos que mais vendem e que mais pagam comissão, compare e salve os melhores.</p></div>';
     var pre = '';
-    if (g.mkt === 'SH') pre = shopeeSheetCard(ready);
+    if (g.mkt === 'SH' && ready && g.shview && g.shview !== 'produtos') {
+      return head + switcher + form + (g.shview === 'lojas' ? shShops() : g.shview === 'ofertas' ? shCamps() : shLink());
+    }
+    if (g.mkt === 'SH') { if (!ready) pre = shopeeSheetCard(false); }
     else if (!ready) {
       return head + switcher + form + '<div class="empty centered-empty" style="margin-top:12px">Para garimpar no Mercado Livre, conecte a sua conta primeiro.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
     } else if (mlComMissing()) {
@@ -474,6 +540,7 @@
       marketplace: g.mkt, q: g.q, category: g.mkt === 'ML' && g.category ? g.category : undefined, page: page, sort: g.sort,
       min_discount: g.minDesc, min_commission: g.mkt === 'SH' ? g.minCom : 0, min_rating: g.mkt === 'SH' ? g.minRat : 0,
       shipping: g.mkt === 'ML' ? g.ship : '',
+      ams: g.mkt === 'SH' && g.ams, key_seller: g.mkt === 'SH' && g.keySeller, top: g.mkt === 'SH' && g.top, shop_id: g.mkt === 'SH' ? g.shopId : null,
     }).then(function (r) {
       if (page === 1) { g.results = r.items; g.sel = {}; } else g.results = g.results.concat(r.items);
       g.page = r.page; g.more = r.has_more; g.done = true;
@@ -939,6 +1006,7 @@
     }).join('');
     return '<div class="pagehead"><h2>Ganhos</h2><p>Comissão dos últimos ' + s.range.days + ' dias: <b class="num">' + brl(k.total) + '</b></p></div>' +
       '<div class="toolbar"><button class="btn primary" data-act="new-earning">Novo lançamento</button><button class="btn" data-act="import-earnings">Importar CSV</button>' +
+      (mktReady('SH') ? '<button class="btn" data-act="sh-sales" title="As vendas da Shopee também entram sozinhas a cada 6 horas">🔄 Importar vendas da Shopee</button>' : '') +
       '<select id="f-days" aria-label="Período">' + [7, 14, 30, 90].map(function (d) { return '<option value="' + d + '"' + (d === state.days ? ' selected' : '') + '>Últimos ' + d + ' dias</option>'; }).join('') + '</select></div>' +
       '<div class="kpis">' + kp.map(function (x) { return '<div class="kpi"><span>' + x[0] + '</span><b class="num">' + x[1] + '</b><small>' + x[2] + '</small></div>'; }).join('') + '</div>' +
       '<div class="panels"><section class="card panel"><h3>Comissão por dia</h3>' + svg + '</section><section class="card panel"><h3>Por canal</h3><div class="bars">' + bars + '</div></section></div>' +
@@ -1231,6 +1299,15 @@
       var f = $('#dm-form'); if (!f) return;
       f.keywords.value = (d.keywords || []).join(', '); f.template.value = d.template || '';
       toast('Padrão restaurado: toque em Salvar para manter');
+    },
+    'sh-top': function () { var g = state.g; g.top = true; g.q = ''; g.shopId = null; g.shopName = null; return garimpar(1); },
+    'sh-shop-clear': function () { var g = state.g; g.shopId = null; g.shopName = null; render(); },
+    'sh-sales': function (t) {
+      t.disabled = true; t.textContent = 'Importando…';
+      return api('POST', '/api/garimpo/shopee/sync-sales').then(function (r) {
+        toast(r.created || r.updated ? r.created + ' venda(s) nova(s), ' + r.updated + ' atualizada(s)' + (r.removed ? ', ' + r.removed + ' cancelada(s)' : '') : 'Nenhuma venda nova da Shopee');
+        return reload();
+      }).catch(function (err) { return reload().then(function () { throw err; }); });
     },
     'auto-new': function () { autoDialog(null); },
     'auto-new-premium': function () { autoDialog(null, 'premium'); },
@@ -1870,6 +1947,11 @@
         .catch(function (err) { return loadDirect().then(render).then(function () { throw err; }); });
     }
     if (d.dmignore) { return api('POST', '/api/direct/comments/' + d.dmignore + '/ignore').then(function () { return loadDirect().then(render); }); }
+    if (d.shview) { var gg = state.g; gg.shview = d.shview; if (d.shview === 'lojas') gg.shops = null; if (d.shview === 'ofertas') gg.camps = null; return render(); }
+    if (d.shtype) { state.g.shopsType = d.shtype; state.g.shops = null; return render(); }
+    if (d.shopprod) { var g3 = state.g; g3.shview = 'produtos'; g3.shopId = d.shopprod; g3.shopName = d.shopname; g3.q = ''; g3.top = false; return garimpar(1); }
+    if (d.copylink) { copyText(d.copylink); toast('Link copiado'); return null; }
+    if (d.walink) { var wt = '🛍️ *' + d.waname + '* na Shopee\n👉 ' + d.walink; copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return null; }
     if (d.gview) { state.gview = d.gview; prefSet('gview', d.gview); return render(); }
     if (d.cpch) { state.cp.msgChannel = d.cpch; return loadCouponMsg().then(render); }
     if (d.cpedit) { return cpEditDialog(state.cp.items.filter(function (c) { return c.id === Number(d.cpedit); })[0]); }
@@ -2013,6 +2095,9 @@
     if (t.id === 'cp-mk') { state.cp.mk = t.value; return null; }
     if (t.dataset.cpf && t.tagName === 'SELECT' && state.cp.parsed) { state.cp.parsed[Number(t.dataset.cpi)][t.dataset.cpf] = t.value; return null; }
     if (t.id === 'dm-q') { state.dm.q = t.value; return loadDmPeople().then(render); }
+    if (t.id === 'g-ams') { state.g.ams = t.checked; return null; }
+    if (t.id === 'g-key') { state.g.keySeller = t.checked; return null; }
+    if (t.id === 'sh-sort') { state.g.shopsSort = t.value; state.g.shops = null; return render(); }
     if (t.id === 'g-sort') { state.g.sort = t.value; return render(); } // ordena na hora, sem buscar de novo
     if (t.id === 'g-onlycom') { state.g.onlyCom = t.checked; return render(); }
     if (t.id === 'g-official') { state.g.official = t.checked; return render(); }
@@ -2105,6 +2190,15 @@
           return reload();
         })
         .catch(function (err) { tb.disabled = false; if (errEl) errEl.textContent = err.message; });
+    } else if (e.target.id === 'sh-shops-form') {
+      e.preventDefault();
+      state.g.shopsQ = $('#sh-shops-q').value.trim(); state.g.shops = null; render();
+    } else if (e.target.id === 'sh-link-form') {
+      e.preventDefault();
+      var lb = e.target.querySelector('button[type="submit"]'); lb.disabled = true;
+      api('POST', '/api/garimpo/shopee/link', { url: $('#sh-link-url').value.trim(), sub_ids: [$('#sh-link-sub').value] })
+        .then(function (r) { state.g.linkOut = r.link; copyText(r.link); toast('Link gerado e copiado'); render(); })
+        .catch(function (err) { lb.disabled = false; toast(err.message); });
     } else if (e.target.id === 'dm-form') {
       e.preventDefault();
       var df = e.target;
@@ -2121,6 +2215,7 @@
       e.preventDefault();
       state.g.q = $('#g-q').value.trim();
       state.g.category = '';
+      state.g.top = false;
       guard(function () { return garimpar(1); })();
     } else if (e.target.id === 'sh-form') {
       e.preventDefault();

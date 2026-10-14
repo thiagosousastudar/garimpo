@@ -21,17 +21,60 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     const q = String(b.q || '').trim().slice(0, 120);
     const category = b.category ? String(b.category) : null;
     if (category && !/^MLB\d+$/.test(category)) throw new HttpError(400, 'Categoria inválida.');
-    if (!category && q.length < 2) throw new HttpError(400, 'Digite o que você quer garimpar (pelo menos 2 letras).');
+    const sh = marketplace === 'SH' ? {
+      ams: b.ams === true, keySeller: b.key_seller === true, top: b.top === true,
+      shopId: /^\d{1,15}$/.test(String(b.shop_id || '')) ? String(b.shop_id) : null,
+    } : {};
+    const browsing = sh.shopId || sh.top || sh.ams || sh.keySeller; // Shopee: dá para listar sem digitar nada
+    if (!category && !browsing && q.length < 2) throw new HttpError(400, 'Digite o que você quer garimpar (pelo menos 2 letras).');
     const page = Math.min(Math.max(1, Number(b.page) || 1), 20);
     const sort = SORTS.includes(b.sort) ? b.sort : 'relevancia';
     const out = await search({
-      pool, cfg, fetchImpl, uid: req.uid, marketplace, q, category, page, sort,
+      pool, cfg, fetchImpl, uid: req.uid, marketplace, q, category, page, sort, sh,
       minDiscount: parseNum(b.min_discount) || 0,
       minCommission: parseNum(b.min_commission) || 0,
       minRating: parseNum(b.min_rating) || 0,
       freeShipping: b.shipping === 'free' || b.shipping === 'cheap' ? b.shipping : b.free_shipping === true,
     });
     res.json(out);
+  });
+
+  /* ---------- Shopee: lojas com comissão, ofertas da Shopee e link de afiliado ---------- */
+  const shopee = async (uid) => {
+    try { return await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'SH' }); } catch (e) { throw new HttpError(400, 'Conecte a Shopee (API de afiliados) na aba Conexões.'); }
+  };
+  const shopeeCall = async (fn) => { try { return await fn(); } catch (e) { if (e instanceof HttpError) throw e; throw new HttpError(502, e.message); } };
+
+  r.get('/shopee/shops', async (req, res) => {
+    const sh = await shopee(req.uid);
+    const q = String(req.query.q || '').trim().slice(0, 80);
+    const type = ['oficial', 'indicada', 'todas'].includes(req.query.type) ? req.query.type : 'todas';
+    const sort = ['comissao', 'populares', 'recentes'].includes(req.query.sort) ? req.query.sort : 'comissao';
+    const page = Math.min(Math.max(1, Number(req.query.page) || 1), 20);
+    res.json(await shopeeCall(() => sh.shops({ q, type, sort, page })));
+  });
+
+  r.get('/shopee/campaigns', async (req, res) => {
+    const sh = await shopee(req.uid);
+    const page = Math.min(Math.max(1, Number(req.query.page) || 1), 20);
+    res.json(await shopeeCall(() => sh.campaigns({ q: String(req.query.q || '').trim().slice(0, 80), page })));
+  });
+
+  /** Importa agora as vendas da Shopee para a aba Ganhos. */
+  r.post('/shopee/sync-sales', async (req, res) => {
+    await shopee(req.uid);
+    const { syncShopeeSales } = require('../services/shopeeSales');
+    res.json(await shopeeCall(() => syncShopeeSales({ pool, cfg, fetchImpl, uid: req.uid })));
+  });
+
+  /** Gera o link de afiliado de qualquer link da Shopee (produto, loja, categoria, campanha). */
+  r.post('/shopee/link', async (req, res) => {
+    let u;
+    try { u = new URL(String(req.body?.url || '').trim()); } catch (_) { throw new HttpError(400, 'Cole um link da Shopee.'); }
+    if (u.protocol !== 'https:' || !/(^|\.)shopee\.com\.br$/i.test(u.hostname)) throw new HttpError(400, 'Use um link da Shopee (shopee.com.br).');
+    const sh = await shopee(req.uid);
+    const subIds = Array.isArray(req.body?.sub_ids) ? req.body.sub_ids : String(req.body?.sub_ids || '').split(/[,\s]+/);
+    res.json({ link: await shopeeCall(() => sh.shortLink({ url: u.toString(), subIds })) });
   });
 
   /** O que está em alta nas buscas do Mercado Livre (geral ou de uma categoria). */
@@ -52,12 +95,14 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     if (links.length > 20) throw new HttpError(400, 'Cole no máximo 20 links por vez.');
     let mlClient = null;
     try { mlClient = await clientFor({ pool, cfg, fetchImpl, uid: req.uid, marketplace: 'ML' }); } catch (_) { /* sem ML: usa a prévia */ }
+    let shClient = null;
+    try { shClient = await clientFor({ pool, cfg, fetchImpl, uid: req.uid, marketplace: 'SH' }); } catch (_) { /* sem API da Shopee: usa a prévia */ }
     const out = new Array(links.length);
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, links.length) }, async () => {
       while (next < links.length) {
         const i = next++;
-        try { out[i] = await previewLink(links[i], { fetchImpl, mlClient, externalIdFrom }); } catch (e) { out[i] = { link: links[i], error: e.message }; }
+        try { out[i] = await previewLink(links[i], { fetchImpl, mlClient, shClient, externalIdFrom }); } catch (e) { out[i] = { link: links[i], error: e.message }; }
       }
     }));
     // marca os que já estão salvos (mesmo código da loja)
