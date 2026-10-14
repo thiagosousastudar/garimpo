@@ -46,8 +46,8 @@
       document.fonts.load('700 100px "Bricolage Grotesque"'),
       document.fonts.load('600 40px Figtree'),
       document.fonts.load('400 40px Figtree'),
-      document.fonts.load('600 54px "Cormorant Garamond"'),
-      document.fonts.load('500 80px "Cormorant Garamond"'),
+      document.fonts.load('600 54px "Playfair Display"'),
+      document.fonts.load('500 80px "Playfair Display"'),
     ]).catch(function () {});
   }
 
@@ -206,8 +206,8 @@
     ctx.fillStyle = INK; ctx.textAlign = 'left';
     if (off > 0) { ctx.font = font(500, 34, BODY); var t = 'de ' + brl(p.original_price); var tw = ctx.measureText(t).width; strike(ctx, t, -tw / 2, -50); }
     ctx.font = font(700, fit(ctx, brl(p.price), 420, 104, 56, 700, DISPLAY), DISPLAY);
-    var pw = ctx.measureText(brl(p.price)).width; ctx.fillText(brl(p.price), -pw / 2, off > 0 ? 50 : 30);
-    if (off > 0) pill(ctx, '-' + off + '% OFF', 0, 66, { bg: INK, fg: GOLD, size: 28, align: 'center' });
+    var pw = ctx.measureText(brl(p.price)).width; ctx.fillText(brl(p.price), -pw / 2, off > 0 ? 40 : 30);
+    if (off > 0) pill(ctx, '-' + off + '% OFF', 0, 78, { bg: INK, fg: GOLD, size: 28, align: 'center' });
     ctx.restore();
     // selos à esquerda, só os que cabem antes da etiqueta de preço (que começa em x ~560)
     var sx = 60;
@@ -262,17 +262,38 @@
     // faixa de baixo
     ctx.fillStyle = c; roundRect(ctx, 0, 900, W, H - 900, 0); ctx.fill();
     ctx.fillStyle = shade(c, -0.15); ctx.fillRect(0, 900, W, 10);
-    ctx.fillStyle = fg; ctx.font = font(600, 42, BODY);
+    var BOTTOM = H - 86 - 26;
+    ctx.font = font(600, 42, BODY);
     var lines = wrap(ctx, p.title, 960, 2);
-    lines.forEach(function (l, i) { ctx.fillText(l, 60, 975 + i * 52); });
-    var y = 975 + lines.length * 52 + 10;
+    var s = seals(p, d).map(function (x) { return (x.charAt(0) + x.slice(1).toLowerCase()).replace(/full/i, 'Full'); })
+      .concat(rankOf(p, d) ? [p.best_seller_rank + 'º mais vendido'] : []).slice(0, 3);
+    // centraliza o bloco (nome, selos, preço) na faixa
+    var rangeA = Number(p.price_max) > Number(p.price);
+    var est = fit(ctx, (rangeA ? 'a partir de ' : '') + brl(p.price), off > 0 ? 680 : 960, 104, 52, 700, DISPLAY);
+    var total = 44 + (lines.length - 1) * 52 + 18 + (s.length ? 46 : 0) + est * 0.95;
+    var top0 = 916 + Math.max(0, (BOTTOM - 916 - total) / 2);
+    ctx.fillStyle = fg; ctx.font = font(600, 42, BODY);
+    lines.forEach(function (l, i) { ctx.fillText(l, 60, top0 + 44 + i * 52); });
+    var y = top0 + 44 + (lines.length - 1) * 52 + 18;
+    if (s.length) {
+      var st = s.join('  ·  ');
+      ctx.globalAlpha = 0.85; ctx.font = font(600, fit(ctx, st, 960, 28, 20, 600, BODY), BODY); ctx.fillText(st, 60, y + 32); ctx.globalAlpha = 1;
+      y += 46;
+    }
     var range = Number(p.price_max) > Number(p.price);
-    if (off > 0) { ctx.font = font(500, 36, BODY); ctx.globalAlpha = 0.8; strike(ctx, 'de ' + brl(p.original_price), 60, y + 30); ctx.globalAlpha = 1; y += 44; }
-    ctx.font = font(700, fit(ctx, (range ? 'a partir de ' : '') + brl(p.price), 640, 112, 60, 700, DISPLAY), DISPLAY);
-    ctx.fillText((range ? 'a partir de ' : '') + brl(p.price), 58, Math.min(y + 100, H - 110));
-    seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []).slice(0, 2).forEach(function (s, i) {
-      pill(ctx, s, 1020, 1050 + i * 66, { bg: '#FFFFFF', fg: shade(c, -0.3), size: 26, align: 'right' });
-    });
+    var priceTxt = (range ? 'a partir de ' : '') + brl(p.price);
+    var oldTxt = off > 0 ? 'de ' + brl(p.original_price) : '';
+    // preço: o maior que cabe na largura e no espaço que sobrou
+    var room = BOTTOM - y;
+    var size = Math.min(fit(ctx, priceTxt, oldTxt ? 680 : 960, 104, 52, 700, DISPLAY), Math.max(52, room - 8));
+    ctx.font = font(700, size, DISPLAY);
+    var base = Math.min(y + size * 0.95, BOTTOM);
+    ctx.fillText(priceTxt, 58, base);
+    if (oldTxt) {
+      var pw = ctx.measureText(priceTxt).width;
+      ctx.font = font(500, 34, BODY); ctx.globalAlpha = 0.85;
+      strike(ctx, oldTxt, Math.min(58 + pw + 24, W - 60 - ctx.measureText(oldTxt).width), base - 6); ctx.globalAlpha = 1;
+    }
     footer(ctx, d, shade(c, -0.25));
   };
 
@@ -310,38 +331,73 @@
     footer(ctx, d, GOLD);
   };
 
-  /** Clean: fundo claro, foto solta, tipografia simples e um detalhe na cor da marca. */
+  /**
+   * Clean: fundo claro, foto solta, tipografia simples e um detalhe na cor da marca.
+   * Layout que se ajusta: os blocos de texto são medidos e empilhados de baixo para cima (nada se sobrepõe);
+   * a foto ocupa o espaço que sobra em cima.
+   */
   T.minimal = function (ctx, d) {
     var p = d.products[0], c = d.color, off = offOf(p, d);
+    var X = 60, MAXW = W - 120, BOTTOM = H - 86 - 34; // acima do rodapé, com respiro
     ctx.fillStyle = '#F7F5F0'; ctx.fillRect(0, 0, W, H);
-    roundedContain(ctx, d.images[0], 90, 90, 900, 780, rad(d, 0));
-    ctx.fillStyle = c; ctx.fillRect(60, 910, 90, 10);
-    if (d.title) { ctx.fillStyle = shade(c, -0.25); ctx.font = font(700, 30, BODY); ctx.fillText(d.title.toUpperCase(), 170, 925); }
-    ctx.fillStyle = INK; ctx.font = font(700, 50, DISPLAY);
-    var lines = wrap(ctx, p.title, 960, 2);
-    lines.forEach(function (l, i) { ctx.fillText(l, 60, 1000 + i * 60); });
-    var y = 1000 + lines.length * 60 + 20;
     var range = Number(p.price_max) > Number(p.price);
-    ctx.fillStyle = shade(c, -0.2);
-    ctx.font = font(700, fit(ctx, brl(p.price), 520, 100, 60, 700, DISPLAY), DISPLAY);
-    var label = (range ? 'a partir de ' : '');
-    if (label) { ctx.font = font(600, 34, BODY); ctx.fillText(label, 60, y + 10); y += 30; ctx.font = font(700, fit(ctx, brl(p.price), 520, 100, 60, 700, DISPLAY), DISPLAY); }
-    ctx.fillText(brl(p.price), 56, y + 80);
-    var pw = ctx.measureText(brl(p.price)).width;
-    if (off > 0) {
-      ctx.fillStyle = MUTED; ctx.font = font(500, 36, BODY); strike(ctx, brl(p.original_price), 80 + pw, y + 78);
-      pill(ctx, '-' + off + '%', 1020, y + 30, { bg: INK, fg: '#FFFFFF', size: 34, align: 'right' });
+    var s = seals(p, d).map(function (x) { return x.charAt(0) + x.slice(1).toLowerCase(); }).map(function (x) { return x.replace(/full/i, 'Full'); })
+      .concat(rankOf(p, d) ? [p.best_seller_rank + 'º mais vendido'] : []).slice(0, 3);
+    // medidas (de baixo para cima)
+    ctx.font = font(700, 50, DISPLAY);
+    var lines = wrap(ctx, p.title, MAXW, 2);
+    var priceTxt = brl(p.price);
+    var pill = off > 0 ? '-' + off + '%' : '';
+    ctx.font = font(700, 34, BODY);
+    var pillW = pill ? ctx.measureText(pill).width + 52 : 0;
+    var oldTxt = off > 0 ? brl(p.original_price) : '';
+    ctx.font = font(500, 36, BODY);
+    var oldW = oldTxt ? ctx.measureText(oldTxt).width + 24 : 0;
+    // preço: o maior tamanho que cabe ao lado do "de" e do selo de desconto
+    var priceSize = fit(ctx, priceTxt, MAXW - oldW - pillW - 20, 100, 56, 700, DISPLAY);
+    var H_SEALS = s.length ? 42 : 0;
+    var H_PRICE = priceSize + 8;
+    var H_FROM = range ? 40 : 0;
+    var H_TITLE = lines.length * 60;
+    var H_LABEL = 50;
+    var GAP = 20;
+    var top = BOTTOM - H_SEALS - (s.length ? 14 : 0) - H_PRICE - H_FROM - GAP - H_TITLE - GAP - H_LABEL;
+    // foto no espaço de cima
+    roundedContain(ctx, d.images[0], 90, 70, W - 180, Math.max(360, top - 100), rad(d, 0));
+    var y = top;
+    // rótulo
+    ctx.fillStyle = c; ctx.fillRect(X, y + 14, 90, 10);
+    if (d.title) { ctx.fillStyle = shade(c, -0.25); ctx.font = font(700, 30, BODY); ctx.fillText(d.title.toUpperCase(), X + 110, y + 30); }
+    y += H_LABEL + GAP;
+    // nome
+    ctx.fillStyle = INK; ctx.font = font(700, 50, DISPLAY);
+    lines.forEach(function (l, i) { ctx.fillText(l, X, y + 44 + i * 60); });
+    y += H_TITLE + GAP;
+    // "a partir de"
+    if (range) { ctx.fillStyle = MUTED; ctx.font = font(600, 32, BODY); ctx.fillText('a partir de', X, y + 30); y += H_FROM; }
+    // preço, "de" riscado ao lado e selo de desconto à direita, na mesma linha
+    var base = y + priceSize * 0.82;
+    ctx.fillStyle = shade(c, -0.2); ctx.font = font(700, priceSize, DISPLAY); ctx.fillText(priceTxt, X - 4, base);
+    var pw = ctx.measureText(priceTxt).width;
+    if (oldTxt) { ctx.fillStyle = MUTED; ctx.font = font(500, 36, BODY); strike(ctx, oldTxt, X + pw + 20, base - 6); }
+    if (pill) pill2(ctx, pill, W - X, base - priceSize * 0.42 - 29);
+    y += H_PRICE;
+    // selos, em uma linha abaixo do preço
+    if (s.length) {
+      var sealTxt = s.join('  ·  ');
+      ctx.fillStyle = MUTED; ctx.font = font(600, fit(ctx, sealTxt, MAXW, 28, 20, 600, BODY), BODY);
+      ctx.fillText(sealTxt, X, y + 14 + 30);
     }
-    var s = seals(p, d).concat(rankOf(p, d) ? [p.best_seller_rank + 'º MAIS VENDIDO'] : []);
-    if (s.length) { ctx.fillStyle = MUTED; ctx.font = font(600, 26, BODY); ctx.fillText(s.slice(0, 3).join('  ·  '), 60, Math.min(y + 135, H - 110)); }
     footer(ctx, d, INK);
   };
+  /** Selo de desconto (pílula escura) alinhado à direita. */
+  function pill2(ctx, text, right, y) { pill(ctx, text, right, y, { bg: INK, fg: '#FFFFFF', size: 34, align: 'right' }); }
 
   /**
    * Premium: curadoria elegante. Fundo off-white, filete dourado, foto grande sem moldura chamativa,
    * nome em serifa, preço sóbrio, desconto discreto ("antes R$ X") e selos em texto pequeno.
    */
-  var SERIF = '"Cormorant Garamond", Georgia, "Times New Roman", serif';
+  var SERIF = '"Playfair Display", Georgia, "Times New Roman", serif';
   var CREAM = '#F6F1EA', GOLDLINE = '#B08D57', DEEP = '#1F1B16';
   /* ---------- foto da capa Premium: produto "solto" no fundo ou moldura em arco ---------- */
 
