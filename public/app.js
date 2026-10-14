@@ -1654,7 +1654,7 @@
   /* ---------- capa (1ª imagem do post), desenhada por cover.js ---------- */
   var DEFAULT_COLOR = '#E8457A';
   function coverDefaultTitle(tpl) {
-    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : tpl === 'relampago' ? 'Baixou o preço!' : tpl === 'minimal' ? 'Achado do dia' : tpl === 'premium' ? 'Seleção premium' : 'Achadinho do dia';
+    return tpl === 'lista' ? post.products.length + ' achadinhos' : tpl === 'achadinho' ? 'Achadinho' : tpl === 'relampago' ? 'Baixou o preço!' : tpl === 'minimal' ? 'Achado do dia' : tpl === 'premium' ? 'Seleção premium' : tpl === 'editorial' ? 'PARECE QUE FOI CARÍSSIMO' : 'Achadinho do dia';
   }
   /** Foto usada nos modelos de 1 produto: a escolhida, senão a 1ª marcada no post (que não seja a capa), senão a do produto. */
   function coverPhoto() {
@@ -1663,13 +1663,30 @@
     var first = post.media.filter(function (m) { return m.type === 'image' && m.url !== cv.url; })[0];
     return first ? first.url : post.product.image_url;
   }
-  var COVER_TPLS = [['premium', '💎 Premium'], ['oferta', 'Oferta'], ['achadinho', 'Achadinho'], ['foto', 'Foto em destaque'], ['relampago', 'Baixou o preço'], ['minimal', 'Clean']];
+  var COVER_TPLS = [['editorial', '✨ Gancho'], ['premium', '💎 Premium'], ['oferta', 'Oferta'], ['achadinho', 'Achadinho'], ['foto', 'Foto em destaque'], ['relampago', 'Baixou o preço'], ['minimal', 'Clean']];
   var COVER_FORMATS = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16'], ['square', 'Quadrado 1:1']];
   var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
   var COVER_RADIUS = { oferta: 44, achadinho: 60, lista: 36, relampago: 48, foto: 0, minimal: 0, premium: 48 };
   var COVER_SHAPES = [['auto', 'Automática'], ['free', 'Solta'], ['arch', 'Arco'], ['round', 'Arredondada']];
   function coverRadius(cv) { return cv.radius != null && cv.radius !== '' ? Number(cv.radius) : COVER_RADIUS[cv.tpl] || 0; }
+  var HOOKS = [
+    // {na}: "na" (Shopee) ou "no" (Mercado Livre); {pela}: "pela"/"pelo"; {a}: "a"/"o"
+    ['PARECE QUE FOI CARÍSSIMO', 'mas eu garimpei {na}', '{loja}'],
+    ['PARECE MÓVEL PLANEJADO', 'mas eu comprei', '{na} {loja}'],
+    ['VOCÊ SABIA QUE DÁ PRA', 'achar tudo', '{na} {loja}?'],
+    ['DECORANDO SUA CASA', 'gastando pouco com', '{a} {loja}'],
+    ['ACHADOS COM CARA', 'de loja de luxo', '{na} {loja}'],
+    ['PARECE IMPORTADO', 'mas chegou rapidinho', '{pela} {loja}'],
+    ['SUA CASA MAIS BONITA', 'por menos de', '{preco}'],
+    ['O QUE EU COMPREI', 'e amei de verdade', '{na} {loja}'],
+  ];
+  function hookFill(h) {
+    var p = post.product, loja = p.marketplace === 'ML' ? 'Mercado Livre' : 'Shopee';
+    var preco = brl(Math.ceil(Number(p.price_max || p.price) / 10) * 10).replace(',00', '');
+    var ml = p.marketplace === 'ML';
+    return h.map(function (x) { return x.split('{loja}').join(loja).split('{preco}').join(preco).split('{na}').join(ml ? 'no' : 'na').split('{pela}').join(ml ? 'pelo' : 'pela').split('{a}').join(ml ? 'o' : 'a'); });
+  }
   function coverPanel() {
     var cv = post.cover;
     var tpls = post.group ? [['lista', 'Top ' + post.products.length]].concat(COVER_TPLS) : COVER_TPLS;
@@ -1689,7 +1706,14 @@
       (cv.tpl !== 'premium' || cv.shape === 'round' ? '<div class="field"><label for="cover-radius">Arredondar cantos <span class="hint" id="cover-radius-v">' + coverRadius(cv) + '</span></label>' +
         '<div class="row"><input id="cover-radius" type="range" min="0" max="200" step="2" value="' + coverRadius(cv) + '" style="flex:1">' +
         '<button type="button" class="btn small ghost" data-act="cover-radius-reset">Padrão</button></div></div>' : '') +
-      '<div class="field"><label for="cover-title">Título</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '" placeholder="(sem título)"></div>' +
+      (cv.tpl === 'editorial' ? '<div class="field"><label>Frases prontas</label><div class="hooks">' + HOOKS.map(function (h, i) {
+          var t = hookFill(h); return '<button type="button" class="chip small" data-chook="' + i + '">' + esc(t[0].charAt(0) + t[0].slice(1).toLowerCase() + ' ' + t[1] + ' ' + t[2]) + '</button>';
+        }).join('') + '</div></div>' : '') +
+      '<div class="field"><label for="cover-title">' + (cv.tpl === 'editorial' ? 'Frase de impacto (maiúsculas)' : 'Título') + '</label><input id="cover-title" type="text" maxlength="40" value="' + esc(cv.title) + '" placeholder="(sem título)"></div>' +
+      (cv.tpl === 'editorial' ? '<div class="cols"><div class="field"><label for="cover-script">Linha em letra cursiva</label><input id="cover-script" type="text" maxlength="40" value="' + esc(cv.script == null ? (post.product.marketplace === 'ML' ? 'mas eu garimpei no' : 'mas eu garimpei na') : cv.script) + '"></div>' +
+        '<div class="field"><label for="cover-word">Destaque final</label><input id="cover-word" type="text" maxlength="24" value="' + esc(cv.word == null ? (post.product.marketplace === 'ML' ? 'Mercado Livre' : 'Shopee') : cv.word) + '"></div></div>' +
+        '<label class="check"><input type="checkbox" id="cover-opt-price"' + (cv.opts && cv.opts.price ? ' checked' : '') + '> Mostrar o preço, discreto, embaixo do coração</label>' +
+        '<p class="hint">Fica mais bonito com uma <b>foto de ambiente</b> (o produto em uso, numa casa decorada). Escolha em "Foto do produto" ou envie uma pelo "+ foto".</p>' : '') +
       (photos.length > 1 ? '<div class="field"><label>Foto do produto</label><div class="gallery">' + photos.map(function (m) {
         return '<button type="button" class="gpic' + (cur === m.url ? ' on' : '') + '" data-cphoto="' + esc(m.url) + '"><img src="' + esc(safeUrl(m.url)) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></button>';
       }).join('') + '</div></div>' : '') +
@@ -1716,7 +1740,7 @@
     return Promise.all([window.GarimpoCover.fontsReady(), Promise.all(urls.map(coverImage))]).then(function (r) {
       var canvas = $('#cover-canvas');
       if (!canvas || !post || !post.cover || post.cover.seq !== seq) return;
-      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, shape: cv.shape, radius: cv.radius, products: post.products, images: r[1] });
+      window.GarimpoCover.render(canvas, { template: cv.tpl, format: cv.format || 'feed', title: cv.title, color: cv.color, handle: cv.handle, cta: cv.cta, opts: cv.opts, shape: cv.shape, radius: cv.radius, script: cv.script, word: cv.word, products: post.products, images: r[1] });
     });
   }
   var coverRaf = 0;
@@ -1991,6 +2015,7 @@
       cv.tpl = d.ctpl;
       return renderPost();
     }
+    if (d.chook !== undefined && post && post.cover) { var hf = hookFill(HOOKS[Number(d.chook)]); post.cover.title = hf[0]; post.cover.script = hf[1]; post.cover.word = hf[2]; return renderPost(); }
     if (d.cshape && post && post.cover) { post.cover.shape = d.cshape; prefSet('coverShape', d.cshape); return renderPost(); }
     if (d.cfmt && post && post.cover) { post.cover.format = d.cfmt; prefSet('coverFormat', d.cfmt); return renderPost(); }
     if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
@@ -2078,6 +2103,7 @@
       }, Promise.resolve()).finally(function () { if (post) { post.busy = false; renderPost(); } });
     }
     if (t.id === 'cover-cta' && post && post.cover) { post.cover.cta = t.value; prefSet('coverCta', t.value); drawCoverSoon(); return null; }
+    if (t.id === 'cover-opt-price' && post && post.cover) { post.cover.opts = Object.assign({}, post.cover.opts, { price: t.checked }); drawCover(); return null; }
     if ((t.id === 'cover-opt-off' || t.id === 'cover-opt-seals') && post && post.cover) {
       post.cover.opts = Object.assign({}, post.cover.opts); post.cover.opts[t.id === 'cover-opt-off' ? 'off' : 'seals'] = t.checked; drawCoverSoon(); return null;
     }
@@ -2157,6 +2183,7 @@
       drawCover();
       return;
     }
+    if (post && post.cover && (t.id === 'cover-script' || t.id === 'cover-word')) { post.cover[t.id === 'cover-script' ? 'script' : 'word'] = t.value; drawCover(); return; }
     if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {
       if (t.id === 'cover-title') post.cover.title = t.value;
       if (t.id === 'cover-color') post.cover.color = t.value;

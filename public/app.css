@@ -223,3 +223,4 @@ textarea{font:inherit;color:var(--ink)}
 .prow.shop .thumb.sm{width:64px;height:64px}
 .linkout{display:flex;gap:8px;align-items:center}
 .linkout input{flex:1}
+.hooks{display:flex;flex-wrap:wrap;gap:6px}

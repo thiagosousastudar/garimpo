@@ -47,6 +47,7 @@
       document.fonts.load('600 40px Figtree'),
       document.fonts.load('400 40px Figtree'),
       document.fonts.load('600 54px "Playfair Display"'),
+      document.fonts.load('400 90px "Great Vibes"'),
       document.fonts.load('500 80px "Playfair Display"'),
     ]).catch(function () {});
   }
@@ -536,6 +537,90 @@
     while (fs2 > 20 && ctx.measureText(foot).width > 900) { fs2 -= 1; ctx.font = font(600, fs2, BODY); } // cabe dentro da moldura
     ctx.fillStyle = DEEP; ctx.fillText(foot, W / 2, H - 60);
     spacing('0px');
+    ctx.textAlign = 'left';
+  };
+
+  /**
+   * Gancho (editorial): foto de ambiente na capa inteira com véu quente, frase de impacto em serifa maiúscula,
+   * linha em letra cursiva e o nome da loja em destaque, ornamento com coração e o @ discreto.
+   * Foto de loja (fundo branco): fundo bege quente com o produto embaixo, para não ficar "recortado".
+   */
+  var SCRIPT = '"Great Vibes", "Segoe Script", cursive';
+  T.editorial = function (ctx, d) {
+    var p = d.products[0], img = d.images[0];
+    var plain = img && plainBackground(img);
+    // fundo
+    if (img && !plain) {
+      var k = Math.max(W / img.width, H / img.height), iw = img.width * k, ih = img.height * k;
+      ctx.drawImage(img, (W - iw) / 2, (H - ih) / 2, iw, ih);
+    } else {
+      var bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#5A4636'); bg.addColorStop(0.55, '#8C7259'); bg.addColorStop(1, '#C9B49A');
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      if (img) {
+        var r = containRect(img, 170, 700, W - 340, 520);
+        var fy = r.y + r.h * productBottom(img) + 4;
+        var g0 = ctx.createRadialGradient(W / 2, fy, 4, W / 2, fy, r.w * 0.5);
+        g0.addColorStop(0, 'rgba(40,25,10,0.45)'); g0.addColorStop(1, 'rgba(40,25,10,0)');
+        ctx.save(); ctx.translate(W / 2, fy); ctx.scale(1, 0.14); ctx.translate(-W / 2, -fy); ctx.fillStyle = g0; ctx.fillRect(0, fy - r.w * 0.5, W, r.w); ctx.restore();
+        ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(img, r.x, r.y, r.w, r.h); ctx.restore();
+      }
+    }
+    // véu quente: escurece o centro (onde vai o texto) e as bordas
+    ctx.fillStyle = 'rgba(28,18,10,0.30)'; ctx.fillRect(0, 0, W, H);
+    var v = ctx.createRadialGradient(W / 2, H * 0.36, 60, W / 2, H * 0.36, W * 0.85);
+    v.addColorStop(0, 'rgba(20,12,6,0.40)'); v.addColorStop(1, 'rgba(20,12,6,0.05)');
+    ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    var shade2 = ctx.createLinearGradient(0, H * 0.75, 0, H);
+    shade2.addColorStop(0, 'rgba(15,10,5,0)'); shade2.addColorStop(1, 'rgba(15,10,5,0.45)');
+    ctx.fillStyle = shade2; ctx.fillRect(0, H * 0.75, W, H * 0.25);
+
+    var line1 = String(d.title || 'PARECE QUE FOI CARÍSSIMO').toUpperCase();
+    var line2 = d.script == null ? (p.marketplace === 'ML' ? 'mas eu garimpei no' : 'mas eu garimpei na') : String(d.script);
+    var line3 = d.word == null ? (p.marketplace === 'ML' ? 'Mercado Livre' : 'Shopee') : String(d.word);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#FFFFFF';
+    ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 2;
+    // frase em serifa maiúscula: até 2 linhas, o maior tamanho que couber
+    var size = 104, lines;
+    do { ctx.font = font(500, size, SERIF); lines = wrap(ctx, line1, 920, 2); size -= 4; }
+    while (size > 54 && lines.some(function (l) { return ctx.measureText(l).width > 920; }) );
+    size += 4;
+    var y = (img && plain) ? 220 : 330;
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '2px';
+    lines.forEach(function (l, i) { ctx.fillText(l, W / 2, y + i * size * 1.08); });
+    if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
+    y += (lines.length - 1) * size * 1.08;
+    // linha cursiva
+    if (line2) {
+      ctx.font = font(400, fit(ctx, line2, 960, 110, 60, 400, SCRIPT), SCRIPT);
+      ctx.fillText(line2, W / 2, y + 120);
+      y += 120;
+    }
+    // destaque final (nome da loja ou preço)
+    if (line3) {
+      ctx.font = font(500, fit(ctx, line3, 900, 116, 60, 500, SERIF), SERIF);
+      ctx.fillText(line3, W / 2, y + 128);
+      y += 128;
+    }
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    // ornamento: linhas finas com coração
+    var oy = y + 54;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(W / 2 - 170, oy, 140, 2); ctx.fillRect(W / 2 + 30, oy, 140, 2);
+    ctx.save(); ctx.translate(W / 2, oy + 1); ctx.scale(0.9, 0.9);
+    ctx.beginPath(); ctx.moveTo(0, 12); ctx.bezierCurveTo(-26, -8, -12, -24, 0, -10); ctx.bezierCurveTo(12, -24, 26, -8, 0, 12); ctx.fill(); ctx.restore();
+    // preço discreto (opcional)
+    if (d.opts && d.opts.price) {
+      var range = Number(p.price_max) > Number(p.price);
+      ctx.font = font(600, 34, BODY); ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '3px';
+      ctx.fillText(((range ? 'a partir de ' : 'por ') + brl(p.price)).toUpperCase(), W / 2, oy + 74);
+      if (ctx.letterSpacing !== undefined) ctx.letterSpacing = '0px';
+    }
+    // @ e chamada, bem discretos, embaixo
+    ctx.font = font(500, 28, BODY); ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    var foot = (d.cta && d.cta !== 'LINK NA BIO' ? d.cta.charAt(0) + d.cta.slice(1).toLowerCase() + '   ·   ' : '') + (d.handle ? '@' + d.handle : '');
+    if (foot) ctx.fillText(foot, W / 2, H - 70);
     ctx.textAlign = 'left';
   };
 
