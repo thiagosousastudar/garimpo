@@ -23,6 +23,16 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
     if (u.hostname === 'graph.instagram.com' && u.pathname === '/refresh_access_token') {
       return json(200, { access_token: 'IGAA-renovado-' + u.searchParams.get('access_token').slice(-4), token_type: 'bearer', expires_in: 5184000 });
     }
+    if (u.hostname === 'api.instagram.com' && u.pathname === '/oauth/access_token') {
+      if (body.code !== 'CODE-OK') return json(400, { error_type: 'OAuthException', code: 400, error_message: 'Invalid authorization code' });
+      return json(200, { data: [{ access_token: 'IGAA-curto-123456789012345', user_id: '999', permissions: 'instagram_business_basic' }] });
+    }
+    if (u.hostname === 'graph.instagram.com' && u.pathname === '/access_token') {
+      return json(200, { access_token: 'IGAA-longo-123456789012345', token_type: 'bearer', expires_in: 5184000 });
+    }
+    if (u.hostname === 'graph.instagram.com' && /\/me$/.test(u.pathname)) {
+      return json(200, { user_id: '17841400000000777', username: 'loja_teste', id: '999' });
+    }
     if ((u.hostname === 'graph.facebook.com' || u.hostname === 'graph.instagram.com') && meta.rateLimit) {
       return json(400, { error: { message: 'Application request limit reached', type: 'OAuthException', code: 4 } });
     }
@@ -2077,5 +2087,47 @@ test('Shopee completa: filtros do portal, lojas, ofertas, link de afiliado de li
     assert.deepEqual([earn.length, Number(earn[0].commission), earn[0].status, earn[0].channel, earn[0].product_id], [1, 7.19, 'confirmada', 'instagram', saved.id]);
     // de novo: não duplica
     assert.deepEqual((await api('POST', '/api/garimpo/shopee/sync-sales')).data, { created: 0, updated: 0, removed: 0 });
+  } finally { t.close(); }
+});
+
+test('Entrar com Instagram: autorização oficial, state conferido e token de 60 dias salvo', async () => {
+  const t = await boot({ igAppId: '1234567890', igAppSecret: 'segredo-do-app-ig' });
+  try {
+    const api = t.client();
+    await signup(api);
+    assert.equal((await api('GET', '/api/connections/instagram')).data.oauth, true);
+    const auth = await api('GET', '/api/connections/instagram/authorize');
+    assert.equal(auth.status, 302);
+    const to = new URL(auth.location);
+    assert.equal(to.hostname, 'www.instagram.com');
+    assert.equal(to.searchParams.get('client_id'), '1234567890');
+    assert.equal(to.searchParams.get('redirect_uri'), 'https://app.exemplo.com/api/connections/instagram/callback');
+    assert.match(to.searchParams.get('scope'), /instagram_business_manage_messages/);
+    const forged = await api('GET', '/api/connections/instagram/callback?code=CODE-OK&state=outro');
+    assert.match(forged.location, /ig=erro/);
+    const auth2 = await api('GET', '/api/connections/instagram/authorize');
+    const state = new URL(auth2.location).searchParams.get('state');
+    const cb = await api('GET', `/api/connections/instagram/callback?code=CODE-OK%23_&state=${state}`);
+    assert.equal(cb.location, '/?ig=ok#conexoes');
+    const ex = t.calls.find((c) => c.path === '/oauth/access_token');
+    assert.equal(ex.body.code, 'CODE-OK');
+    assert.equal(ex.body.client_secret, 'segredo-do-app-ig');
+    const st = await api('GET', '/api/connections/instagram');
+    assert.deepEqual([st.data.connected, st.data.ig_user_id, st.data.username], [true, '17841400000000777', 'loja_teste']);
+    assert.ok(!JSON.stringify(st.data).includes('IGAA'));
+    // código inválido volta com a mensagem
+    const auth3 = await api('GET', '/api/connections/instagram/authorize');
+    const bad = await api('GET', `/api/connections/instagram/callback?code=ERRADO&state=${new URL(auth3.location).searchParams.get('state')}`);
+    assert.match(bad.location, /ig=erro&msg=Invalid/);
+  } finally { t.close(); }
+});
+
+test('Entrar com Instagram: sem IG_APP_ID o botão não aparece e a rota avisa', async () => {
+  const t = await boot();
+  try {
+    const api = t.client();
+    await signup(api);
+    assert.equal((await api('GET', '/api/connections/instagram')).data.oauth, false);
+    assert.equal((await api('GET', '/api/connections/instagram/authorize')).status, 400);
   } finally { t.close(); }
 });

@@ -1095,14 +1095,15 @@
       (ml.authorized ? shipZipCard() + commissionTableCard(ml) : '') + '</section>';
     return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar, Instagram e Telegram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard + telegramCard() +
       '<section class="card"><h3>Instagram</h3>' +
-      (c.connected ? '<p class="ok">Conectado (conta ' + esc(c.ig_user_id) + ').</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
+      (c.connected ? '<p class="ok">Conectado' + (c.username ? ' como <b>@' + esc(c.username) + '</b>' : ' (conta ' + esc(c.ig_user_id) + ')') + '.</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
       (c.public_media === false ? '<p class="err">Este servidor está em endereço local. O Instagram só consegue ler fotos e vídeos de uma URL pública, então a publicação vai falhar até você configurar APP_URL com o seu domínio.</p>' : '') +
+      (c.oauth ? '<p><a class="btn primary" href="/api/connections/instagram/authorize">' + (c.connected ? 'Entrar com outra conta do Instagram' : 'Entrar com Instagram') + '</a></p><p class="hint">Você será levado ao Instagram para autorizar o Garimpo a publicar, ler comentários e responder no Direct.</p>' : '') +
       // Conectado: formulário recolhido. autocomplete desligado para o navegador não preencher e-mail/senha salvos.
-      (c.connected ? '<details class="sched"><summary>Trocar de conta ou atualizar o token</summary>' : '') +
+      (c.connected || c.oauth ? '<details class="sched"><summary>' + (c.oauth ? 'Avançado: conectar colando o token' : 'Trocar de conta ou atualizar o token') + '</summary>' : '') +
       '<form class="stack" id="ig-form" autocomplete="off"><div class="field"><label for="ig-id">ID da conta do Instagram (só números)</label><input id="ig-id" name="ig_user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-lpignore="true" placeholder="17841400000000000" required></div>' +
       '<div class="field"><label for="ig-token">Token de acesso (começa com IG)</label><input id="ig-token" name="access_token" type="password" autocomplete="new-password" data-lpignore="true" required></div>' +
       '<p class="err" id="ig-err" role="alert"></p><button class="btn primary" type="submit">' + (c.connected ? 'Atualizar credenciais' : 'Conectar') + '</button></form>' +
-      (c.connected ? '</details>' : '') + '</section>' +
+      (c.connected || c.oauth ? '</details>' : '') + '</section>' +
       '<section class="card"><h3>Como conseguir as credenciais</h3><ol class="steps">' +
       '<li>No app do Instagram, deixe a conta como <b>profissional</b> (Comercial ou Criador de conteúdo).</li>' +
       '<li>Em developers.facebook.com, crie um app com o caso de uso <b>Gerenciar mensagens e conteúdo no Instagram</b> (API do Instagram).</li>' +
@@ -2295,9 +2296,9 @@
   /* ---------- início ---------- */
   // Volta da autorização do Mercado Livre: /?ml=ok#conexoes ou /?ml=erro&msg=...#conexoes
   var qs = new URLSearchParams(location.search);
-  var mlBack = qs.get('ml'), mlMsg = qs.get('msg');
+  var mlBack = qs.get('ml'), mlMsg = qs.get('msg'), igBack = qs.get('ig');
   if (location.hash === '#conexoes') state.tab = 'conexoes';
-  if (mlBack || location.hash) history.replaceState(null, '', location.pathname);
+  if (mlBack || igBack || location.hash) history.replaceState(null, '', location.pathname);
 
   api('GET', '/api/auth/me').then(function (m) {
     state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null;
@@ -2312,5 +2313,7 @@
     render();
     if (mlBack === 'ok') toast('Mercado Livre autorizado. Já pode garimpar!');
     else if (mlBack) toast('Mercado Livre: ' + (mlMsg || 'não foi possível autorizar.'));
+    if (igBack === 'ok') toast('Instagram conectado!');
+    else if (igBack) toast('Instagram: ' + (mlMsg || 'não foi possível conectar.'));
   });
 })();

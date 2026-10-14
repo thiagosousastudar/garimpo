@@ -28,7 +28,55 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
       ig_user_id: c?.ig_user_id || null,
       username,
       public_media: !/^https?:\/\/(localhost|127\.0\.0\.1)/.test(cfg.appUrl),
+      oauth: Boolean(cfg.igAppId && cfg.igAppSecret),
     });
+  });
+
+  /* ---------- "Entrar com Instagram" (login oficial da Meta) ---------- */
+  const IG_SCOPES = ['instagram_business_basic', 'instagram_business_content_publish', 'instagram_business_manage_comments', 'instagram_business_manage_messages'];
+  const IG_COOKIE = 'ig_oauth';
+  const igCookieOpts = { httpOnly: true, secure: cfg.cookieSecure, sameSite: 'lax', path: '/api/connections/instagram' };
+  const igRedirect = () => `${cfg.appUrl}/api/connections/instagram/callback`;
+
+  r.get('/instagram/authorize', (req, res) => {
+    if (!cfg.igAppId || !cfg.igAppSecret) throw new HttpError(400, 'O login do Instagram não está configurado neste servidor (IG_APP_ID e IG_APP_SECRET).');
+    const state = crypto.randomBytes(16).toString('hex');
+    res.cookie(IG_COOKIE, state, { ...igCookieOpts, maxAge: 10 * 60 * 1000 });
+    const url = new URL('https://www.instagram.com/oauth/authorize');
+    url.searchParams.set('enable_fb_login', '0');
+    url.searchParams.set('force_reauth', 'true');
+    url.searchParams.set('client_id', cfg.igAppId);
+    url.searchParams.set('redirect_uri', igRedirect());
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', IG_SCOPES.join(','));
+    url.searchParams.set('state', state);
+    res.redirect(url.toString());
+  });
+
+  r.get('/instagram/callback', async (req, res) => {
+    const back = (status, msg) => res.redirect(`/?ig=${status}${msg ? `&msg=${encodeURIComponent(msg)}` : ''}#conexoes`);
+    const state = String(req.cookies?.[IG_COOKIE] || '');
+    res.clearCookie(IG_COOKIE, igCookieOpts);
+    if (req.query.error) return back('erro', String(req.query.error_description || req.query.error_reason || req.query.error).slice(0, 200));
+    if (!state || req.query.state !== state) return back('erro', 'A autorização expirou ou não confere. Tente de novo.');
+    try {
+      // o Instagram acrescenta "#_" ao code em alguns navegadores
+      const code = String(req.query.code || '').replace(/#_$/, '');
+      const ig = createInstagramClient({ cfg, fetchImpl });
+      const t = await ig.exchangeCode({ code, redirectUri: igRedirect() });
+      const who = await ig.me(t.token);
+      const igUserId = String(who.user_id || who.id || '');
+      if (!/^\d{5,25}$/.test(igUserId)) throw new Error('A Meta não devolveu o ID da conta.');
+      await pool.query(
+        `insert into connections (user_id, ig_user_id, ig_token_enc, ig_username, updated_at) values ($1,$2,$3,$4, now())
+           on conflict (user_id) do update set ig_user_id = excluded.ig_user_id, ig_token_enc = excluded.ig_token_enc,
+             ig_username = excluded.ig_username, updated_at = now()`,
+        [req.uid, igUserId, encrypt(t.token, cfg.encryptionKey), who.username || null]
+      );
+    } catch (e) {
+      return back('erro', e.message.slice(0, 200));
+    }
+    back('ok');
   });
 
   r.put('/instagram', async (req, res) => {

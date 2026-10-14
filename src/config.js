@@ -13,6 +13,9 @@ function loadConfig(env = process.env) {
     allowSignup: env.ALLOW_SIGNUP !== 'false',
     graphBase: (env.GRAPH_BASE || 'https://graph.facebook.com').replace(/\/$/, ''),
     graphVersion: env.GRAPH_VERSION || 'v21.0',
+    // App da Meta (API do Instagram com login do Instagram): habilita o botão "Entrar com Instagram".
+    igAppId: env.IG_APP_ID || '',
+    igAppSecret: env.IG_APP_SECRET || '',
     anthropicKey: env.ANTHROPIC_API_KEY || '',
     anthropicModel: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
     schedulerMs: Number(env.SCHEDULER_MS) || 60000,

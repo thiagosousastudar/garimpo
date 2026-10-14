@@ -70,6 +70,31 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
       return { token: data.access_token, expiresIn: Number(data.expires_in) || null };
     },
 
+    /**
+     * Login do Instagram (OAuth): troca o "code" por um token curto e, em seguida, por um de 60 dias.
+     * Devolve { token, expiresIn }.
+     */
+    async exchangeCode({ code, redirectUri }) {
+      const body = new URLSearchParams({ client_id: cfg.igAppId, client_secret: cfg.igAppSecret, grant_type: 'authorization_code', redirect_uri: redirectUri, code });
+      const res = await fetchImpl(cfg.igOauthBase || 'https://api.instagram.com/oauth/access_token', { method: 'POST', body });
+      const raw = await res.json().catch(() => ({}));
+      const data = Array.isArray(raw.data) ? raw.data[0] || {} : raw;
+      if (!res.ok || !data.access_token) throw new Error(clean(raw.error_message || raw.error?.message || `Erro HTTP ${res.status}`, cfg.igAppSecret));
+      const url = new URL(`${cfg.igLoginBase || IG_LOGIN_BASE}/access_token`);
+      url.searchParams.set('grant_type', 'ig_exchange_token');
+      url.searchParams.set('client_secret', cfg.igAppSecret);
+      url.searchParams.set('access_token', data.access_token);
+      const res2 = await fetchImpl(url.toString(), { method: 'GET' });
+      const long = await res2.json().catch(() => ({}));
+      if (!res2.ok || !long.access_token) throw new Error(clean(clean(long.error?.message || `Erro HTTP ${res2.status}`, cfg.igAppSecret), data.access_token));
+      return { token: long.access_token, expiresIn: Number(long.expires_in) || null };
+    },
+
+    /** Conta dona do token (login do Instagram): { user_id, username }. */
+    async me(token) {
+      return call('GET', '/me', { fields: 'user_id,username' }, token);
+    },
+
     /** Confere o token e devolve o @usuário. */
     async whoami({ igUserId, token }) {
       return call('GET', `/${igUserId}`, { fields: 'username' }, token);
