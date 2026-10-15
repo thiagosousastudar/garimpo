@@ -554,6 +554,7 @@
     if (!n) return '';
     return '<div class="gbar"><span class="hint">' + n + ' selecionado' + (n > 1 ? 's' : '') + (n === 1 ? ' · marque mais um para juntar' : '') + '</span><span class="grow"></span>' +
       '<button class="btn small" data-act="psel-clear">Limpar</button>' +
+      '<button class="btn small" data-act="ml-open">💌 Mensagem com links</button>' +
       '<button class="btn small primary" data-act="psel-post"' + (n < 2 ? ' disabled' : '') + '>Postar ' + n + ' juntos</button></div>';
   }
 
@@ -654,7 +655,7 @@
     var noLink = state.products.filter(function (p) { return !p.affiliate_url; }).length;
     var views = '<div class="seg" role="group" aria-label="Modo de exibição"><button type="button" data-pview="lista" aria-pressed="' + (state.pview === 'lista') + '">☰ Lista</button><button type="button" data-pview="cards" aria-pressed="' + (state.pview !== 'lista') + '">▦ Cards</button></div>';
     return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos. Os novos aparecem no topo; mude a ordem quando quiser.</p></div>' +
-      '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button>' +
+      '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button><button class="btn" data-act="ml-lists">💌 Listas de links</button>' +
       (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
       '<div class="psearch"><input id="f-q" type="search" placeholder="Buscar nos seus produtos…" value="' + esc(state.pq) + '" aria-label="Buscar produtos" autocomplete="off">' + views + '</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
@@ -1437,8 +1438,144 @@
         toast(r.saved + ' cadastrado' + (r.saved === 1 ? '' : 's') + (dupMsg ? '. ' + dupMsg : r.skipped ? ', ' + r.skipped + ' já existiam' : '') + (r.errors.length ? ', ' + r.errors.length + ' com erro: ' + r.errors[0].error : ''));
         links = null; dlg.close();
         state.tab = 'descobrir';
+        // já deixa os recém-cadastrados marcados: dá para gerar a mensagem com os links na hora
+        if ((r.products || []).length) { state.psel = {}; r.products.forEach(function (p) { state.psel[p.id] = true; }); }
         return reload();
       }).finally(function () { if (links) { links.saving = false; renderLinks(); } });
+    },
+  });
+
+  /* ---------- Mensagem com links: produtos marcados (ou lista salva) -> texto pronto para o Direct/WhatsApp ---------- */
+  var ML_OPEN = 'Oie! Cheguei com os links que você pediu!';
+  var ML_CLOSE = 'Se o link não abrir por aqui, copia e cola no seu bloco de notas ou em uma conversa do WhatsApp para dar para clicar! Beijo 💋';
+  var mlist = null;   // mensagem aberta: { id, name, greeting, closing, items: [{ product_id, name, link, has_affiliate }] }
+  var mlLists = null; // listas salvas (tela "Listas de links")
+
+  /** Nome curto do produto: até a primeira vírgula/traço/parêntese, no máximo 6 palavras, sem CAIXA ALTA. */
+  function shortName(t) {
+    var full = String(t || '').trim();
+    // vírgula só separa seguida de espaço ("1,5L" fica inteiro)
+    var s = full.split(/\s*[|(\[–—]\s*|,\s+|\s+-\s+/)[0].replace(/,$/, '').trim() || full;
+    var w = s.split(/\s+/);
+    if (w.length > 6) w = w.slice(0, 6);
+    while (w.length > 2 && /^(para|de|da|do|das|dos|com|sem|e|em|a|o|p\/)$/i.test(w[w.length - 1])) w.pop(); // não termina em "para", "com"...
+    s = w.join(' ');
+    var letters = s.replace(/[^A-Za-zÀ-ÿ]/g, '');
+    if (letters.length > 3 && letters === letters.toUpperCase()) s = s.toLowerCase().replace(/(\d)l\b/g, '$1L');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  function linksMessage(m) {
+    var items = m.items.filter(function (x) { return x.link; });
+    return [m.greeting || '', items.map(function (x) { return '- ' + String(x.name || '').trim() + '\n' + x.link; }).join('\n\n'), m.closing || '']
+      .filter(function (s) { return String(s).trim(); }).join('\n\n');
+  }
+  function linksMsgFromProducts(list) {
+    return { id: null, name: '', greeting: prefGet('mlOpen', ML_OPEN), closing: prefGet('mlClose', ML_CLOSE),
+      items: list.map(function (p) { return { product_id: p.id, name: shortName(p.title), link: p.affiliate_url || p.product_url || null, has_affiliate: Boolean(p.affiliate_url) }; }) };
+  }
+  function openLinksMsg(m) { mlLists = null; mlist = m; renderLinksMsg(); if (!dlg.open) dlg.showModal(); }
+
+  function renderLinksMsg() {
+    var m = mlist;
+    var noLink = m.items.filter(function (x) { return !x.link; }).length;
+    var noAff = m.items.filter(function (x) { return x.link && !x.has_affiliate; }).length;
+    var rows = m.items.map(function (x, i) {
+      return '<div class="mlitem"><span class="mlnum num">' + (i + 1) + '</span><div class="grow"><input type="text" data-mli="' + i + '" value="' + esc(x.name) + '" aria-label="Nome do produto ' + (i + 1) + '">' +
+        '<p class="hint mllink">' + (x.link ? esc(x.link) + (x.has_affiliate ? '' : ' <span class="err">(não é link de afiliado)</span>') : '<span class="err">sem link: não entra na mensagem</span>') + '</p></div>' +
+        '<div class="mlbtns"><button type="button" class="btn small ghost" data-mlmove="' + i + '" data-dir="-1" aria-label="Subir"' + (i ? '' : ' disabled') + '>↑</button>' +
+        '<button type="button" class="btn small ghost" data-mlmove="' + i + '" data-dir="1" aria-label="Descer"' + (i < m.items.length - 1 ? '' : ' disabled') + '>↓</button>' +
+        '<button type="button" class="btn small ghost" data-mldel="' + i + '" aria-label="Tirar da mensagem">✕</button></div></div>';
+    }).join('');
+    var msg = linksMessage(m);
+    dlg.innerHTML = '<h2>💌 Mensagem com links</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' +
+      '<p class="hint">Ajuste os nomes, copie e cole no Direct ou no WhatsApp de quem pediu. Salve a lista do post para usar de novo quando outra pessoa pedir.</p>' +
+      '<div class="field"><label for="ml-name">Nome da lista (para salvar)</label><input id="ml-name" type="text" maxlength="80" placeholder="Ex.: Carrossel cozinha organizada" value="' + esc(m.name || '') + '"></div>' +
+      '<div class="field"><label for="ml-open">Abertura</label><textarea id="ml-open" class="mlshort">' + esc(m.greeting || '') + '</textarea></div>' +
+      '<div class="mllist">' + (rows || '<p class="hint">Nenhum produto. Feche e marque produtos com "Juntar".</p>') + '</div>' +
+      '<div class="field"><label for="ml-close">Despedida</label><textarea id="ml-close" class="mlshort">' + esc(m.closing || '') + '</textarea></div>' +
+      (noLink ? '<p class="err small">' + noLink + ' produto' + (noLink > 1 ? 's' : '') + ' sem link ficou de fora. Use Editar no produto para colar o link de afiliado.</p>' : '') +
+      (noAff ? '<p class="err small">' + noAff + ' produto' + (noAff > 1 ? 's estão' : ' está') + ' com o link comum da loja: sem o link de afiliado você não ganha a comissão.</p>' : '') +
+      '<div class="field"><label for="ml-out">Mensagem pronta</label><textarea id="ml-out" readonly>' + esc(msg) + '</textarea></div>' +
+      '<div class="row end"><button type="button" class="btn" data-act="ml-close">Fechar</button>' +
+      '<button type="button" class="btn" data-act="ml-save">' + (m.id ? 'Salvar alterações' : 'Salvar lista') + '</button>' +
+      '<a class="btn" id="ml-wa" href="' + esc(waLink(msg)) + '" target="_blank" rel="noopener noreferrer">WhatsApp</a>' +
+      '<button type="button" class="btn primary" data-act="ml-copy">Copiar mensagem</button></div></div>';
+  }
+
+  function renderLinkLists() {
+    var body = !mlLists ? '<p class="hint">Carregando…</p>' : !mlLists.length
+      ? '<p class="hint">Nenhuma lista salva ainda. Em Produtos, marque os itens do post com <b>Juntar</b>, toque em <b>💌 Mensagem com links</b> e depois em <b>Salvar lista</b>.</p>'
+      : mlLists.map(function (l) {
+        return '<div class="linkitem"><div class="row"><div class="grow"><b>' + esc(l.name) + '</b><p class="hint" style="margin:2px 0 0">' + l.items.length + ' produto' + (l.items.length === 1 ? '' : 's') + ' · salva ' + ago(l.updated_at) + '</p></div>' +
+          '<button type="button" class="btn small primary" data-mlopen="' + l.id + '">Abrir</button><button type="button" class="btn small ghost" data-mldrop="' + l.id + '">Excluir</button></div></div>';
+      }).join('');
+    dlg.innerHTML = '<h2>💌 Listas de links</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' + body +
+      '<div class="row end"><button type="button" class="btn" data-act="ml-close">Fechar</button></div></div>';
+  }
+  function loadLinkLists() {
+    return api('GET', '/api/link-lists').then(function (r) { if (!mlist) { mlLists = r.lists; renderLinkLists(); } });
+  }
+
+  dlg.addEventListener('input', function (e) {
+    if (!mlist) return;
+    var t = e.target;
+    if (t.id === 'ml-name') mlist.name = t.value;
+    else if (t.id === 'ml-open') mlist.greeting = t.value;
+    else if (t.id === 'ml-close') mlist.closing = t.value;
+    else if (t.dataset && t.dataset.mli != null) mlist.items[Number(t.dataset.mli)].name = t.value;
+    else return;
+    var msg = linksMessage(mlist);
+    var out = $('#ml-out', dlg); if (out) out.value = msg;
+    var wa = $('#ml-wa', dlg); if (wa) wa.href = waLink(msg);
+  });
+  dlg.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button');
+    if (!b) return;
+    if (mlist && b.dataset.mlmove != null) {
+      var i = Number(b.dataset.mlmove), j = i + Number(b.dataset.dir);
+      if (j < 0 || j >= mlist.items.length) return;
+      var it = mlist.items.splice(i, 1)[0]; mlist.items.splice(j, 0, it); renderLinksMsg();
+    } else if (mlist && b.dataset.mldel != null) {
+      mlist.items.splice(Number(b.dataset.mldel), 1); renderLinksMsg();
+    } else if (mlLists && b.dataset.mlopen) {
+      var l = mlLists.filter(function (x) { return x.id === Number(b.dataset.mlopen); })[0];
+      if (l) openLinksMsg({ id: l.id, name: l.name, greeting: l.greeting == null ? prefGet('mlOpen', ML_OPEN) : l.greeting, closing: l.closing == null ? prefGet('mlClose', ML_CLOSE) : l.closing, items: l.items.slice() });
+    } else if (mlLists && b.dataset.mldrop) {
+      var d = mlLists.filter(function (x) { return x.id === Number(b.dataset.mldrop); })[0];
+      if (d && confirm('Excluir a lista "' + d.name + '"? Os produtos continuam salvos.')) {
+        api('DELETE', '/api/link-lists/' + d.id).then(function () { toast('Lista excluída'); return loadLinkLists(); }).catch(function (err) { toast(err.message); });
+      }
+    }
+  });
+  dlg.addEventListener('close', function () { mlist = null; mlLists = null; });
+
+  Object.assign(actions, {
+    'ml-open': function () {
+      var sel = groupSelected();
+      if (!sel.length) throw new Error('Marque os produtos com "Juntar" primeiro.');
+      openLinksMsg(linksMsgFromProducts(sel));
+    },
+    'ml-lists': function () { mlist = null; mlLists = null; renderLinkLists(); if (!dlg.open) dlg.showModal(); mlLists = null; return loadLinkLists(); },
+    'ml-close': function () { dlg.close(); },
+    'ml-copy': function () {
+      var txt = linksMessage(mlist);
+      if (!txt.trim() || !mlist.items.some(function (x) { return x.link; })) throw new Error('Nenhum produto com link na mensagem.');
+      prefSet('mlOpen', mlist.greeting || ''); prefSet('mlClose', mlist.closing || '');
+      return copyText(txt).then(function (ok) {
+        if (ok) return toast('Mensagem copiada! Agora é só colar no Direct.');
+        var out = $('#ml-out', dlg); if (out) { out.focus(); out.select(); }
+        toast('Selecionei a mensagem: use Copiar do seu aparelho.');
+      });
+    },
+    'ml-save': function () {
+      var m = mlist;
+      if (!String(m.name || '').trim()) { var n = $('#ml-name', dlg); if (n) n.focus(); throw new Error('Dê um nome para a lista, por exemplo "Carrossel cozinha organizada".'); }
+      prefSet('mlOpen', m.greeting || ''); prefSet('mlClose', m.closing || '');
+      var body = { name: m.name, greeting: m.greeting, closing: m.closing, items: m.items.map(function (x) { return { product_id: x.product_id, name: x.name }; }) };
+      return api(m.id ? 'PUT' : 'POST', '/api/link-lists' + (m.id ? '/' + m.id : ''), body).then(function (r) {
+        if (mlist !== m) return;
+        m.id = r.list.id; toast('Lista salva. Ela fica em Produtos → 💌 Listas de links.'); renderLinksMsg();
+      });
     },
   });
 

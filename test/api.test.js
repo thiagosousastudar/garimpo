@@ -2131,3 +2131,40 @@ test('Entrar com Instagram: sem IG_APP_ID o botão não aparece e a rota avisa',
     assert.equal((await api('GET', '/api/connections/instagram/authorize')).status, 400);
   } finally { t.close(); }
 });
+
+test('listas de links: salva os produtos de um post com nome curto, devolve o link atual e só do próprio usuário', async () => {
+  const t = await boot();
+  try {
+    const a = t.client();
+    await signup(a);
+    const p1 = (await a('POST', '/api/products', { ...PRODUTO, title: 'Pote hermético', marketplace: 'SH', affiliate_url: 'https://s.shopee.com.br/113gkSWbcx', product_url: 'https://shopee.com.br/product/1/1' })).data.product;
+    const p2 = (await a('POST', '/api/products', { ...PRODUTO, title: 'Porta-frios', marketplace: 'SH', affiliate_url: 'https://s.shopee.com.br/2qVKvsOcZZ', product_url: 'https://shopee.com.br/product/1/2' })).data.product;
+    assert.equal((await a('POST', '/api/link-lists', { name: '', items: [{ product_id: p1.id }] })).status, 400);
+    assert.equal((await a('POST', '/api/link-lists', { name: 'Vazia', items: [] })).status, 400);
+    const c = await a('POST', '/api/link-lists', { name: 'Carrossel cozinha', greeting: 'Oie!', items: [{ product_id: p2.id, name: 'Porta-frios' }, { product_id: p1.id, name: 'Pote com colher' }] });
+    assert.equal(c.status, 200, JSON.stringify(c.data));
+    assert.deepEqual(c.data.list.items.map((x) => [x.name, x.link]), [['Porta-frios', 'https://s.shopee.com.br/2qVKvsOcZZ'], ['Pote com colher', 'https://s.shopee.com.br/113gkSWbcx']]);
+    // link de afiliado trocado no produto: a lista já usa o novo
+    await a('PATCH', `/api/products/${p1.id}`, { affiliate_url: 'https://s.shopee.com.br/NOVO123' });
+    let ls = (await a('GET', '/api/link-lists')).data.lists;
+    assert.equal(ls.length, 1);
+    assert.equal(ls[0].items[1].link, 'https://s.shopee.com.br/NOVO123');
+    assert.equal(ls[0].greeting, 'Oie!');
+    const up = await a('PUT', `/api/link-lists/${ls[0].id}`, { name: 'Cozinha', items: [{ product_id: p1.id, name: 'Pote' }] });
+    assert.equal(up.data.list.items.length, 1);
+    // outro usuário não vê, não altera e não usa produto alheio
+    const b = t.client();
+    await signup(b, 'b@exemplo.com');
+    assert.equal((await b('GET', '/api/link-lists')).data.lists.length, 0);
+    assert.equal((await b('PUT', `/api/link-lists/${ls[0].id}`, { name: 'x', items: [] })).status, 400);
+    assert.equal((await b('POST', '/api/link-lists', { name: 'x', items: [{ product_id: p1.id }] })).status, 400);
+    await b('DELETE', `/api/link-lists/${ls[0].id}`);
+    assert.equal((await a('GET', '/api/link-lists')).data.lists.length, 1);
+    // produto excluído some da lista sem quebrar
+    await a('DELETE', `/api/products/${p1.id}`);
+    ls = (await a('GET', '/api/link-lists')).data.lists;
+    assert.equal(ls[0].items.length, 0);
+    await a('DELETE', `/api/link-lists/${ls[0].id}`);
+    assert.equal((await a('GET', '/api/link-lists')).data.lists.length, 0);
+  } finally { t.close(); }
+});
