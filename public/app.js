@@ -1395,7 +1395,9 @@
             // abre a página do produto (não o link de afiliado, para não gerar clique na própria conta)
             (safeUrl(x.product_url || x.link) ? '<a class="seeprod" href="' + esc(safeUrl(x.product_url || x.link)) + '" target="_blank" rel="noopener noreferrer">Ver na ' + (x.marketplace === 'ML' ? 'loja' : 'Shopee') + ' ↗</a>' : '') +
             (x.saved_id ? '<span class="pill posted">Já cadastrado</span>' : '') + '</div>' +
-            (x.error ? '<p class="err small">' + esc(x.error) + '</p><p class="hint">' + esc(x.link) + '</p>' : '<input type="text" data-li="' + i + '" data-lf="title" value="' + esc(x.title || '') + '" aria-label="Nome do produto">') + '</div></div>';
+            (x.error ? '<p class="err small">' + esc(x.error) + '</p><p class="hint">' + esc(x.link) + '</p>' : '<input type="text" data-li="' + i + '" data-lf="title" value="' + esc(x.title || '') + '" aria-label="Nome do produto">' +
+              (x.warning ? '<p class="hint small" style="color:var(--warn,#b26a00)">⚠️ ' + esc(x.warning) + '</p>' : '') +
+              (!x.image_url && !x.saved_id ? '<input type="url" data-li="' + i + '" data-lf="image_url" value="" placeholder="Link da foto (opcional): clique com o botão direito na foto do anúncio → Copiar endereço da imagem" aria-label="Link da foto">' : '')) + '</div></div>';
           if (x.error || x.saved_id) return '<div class="linkitem off">' + head + '</div>';
           var num = function (f, label, ph) {
             return '<label class="field"><span class="hint">' + label + '</span><input type="text" inputmode="decimal" data-li="' + i + '" data-lf="' + f + '" value="' + esc(x[f] == null ? '' : String(x[f]).replace('.', ',')) + '" placeholder="' + ph + '"></label>';
@@ -2868,7 +2870,7 @@
     // cadastro por links: guarda o que o usuário digita sem redesenhar (não perde o foco)
     if (links && links.items && t.dataset && t.dataset.li !== undefined) {
       var li = links.items[Number(t.dataset.li)];
-      if (li) li[t.dataset.lf] = t.dataset.lf === 'title' ? t.value : linkNum(t.value);
+      if (li) li[t.dataset.lf] = t.dataset.lf === 'title' ? t.value : t.dataset.lf === 'image_url' ? (/^https:\/\//i.test(t.value.trim()) ? t.value.trim() : null) : linkNum(t.value);
     }
     if (t.id === 'post-cap' && post) { post.caption = t.value; var pc = $('#post-cnt'); if (pc) pc.textContent = t.value.length; }
     // editor de capa: atualiza a prévia sem redesenhar a janela (não perde o foco do campo)

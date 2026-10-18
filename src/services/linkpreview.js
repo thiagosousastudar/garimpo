@@ -105,6 +105,16 @@ const shopeeIds = (u) => {
  * mlClient (opcional): cliente do Mercado Livre já autenticado, para os dados completos.
  * externalIdFrom: função do garimpo que tira o código MLB do link.
  */
+/** Nome do produto a partir do endereço: /kit-camisetas-tommy-azul/up/MLBU... -> "Kit camisetas tommy azul". */
+function titleFromSlug(url) {
+  let p = '';
+  try { p = new URL(url).pathname; } catch (_) { return null; }
+  const seg = p.split('/').filter(Boolean).find((x) => /^[a-z0-9-]{8,}$/i.test(x) && /-/.test(x) && !/^MLB/i.test(x));
+  if (!seg) return null;
+  const t = seg.replace(/-+/g, ' ').trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 async function previewLink(raw, { fetchImpl = fetch, mlClient = null, shClient = null, externalIdFrom }) {
   let u;
   try { u = new URL(String(raw).trim()); } catch (_) { return { link: raw, error: 'Link inválido.' }; }
@@ -115,6 +125,8 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, shClient =
   const link = u.toString();
   let finalUrl = link;
   try { finalUrl = await resolve(link, fetchImpl); } catch (_) { /* segue com o link original */ }
+  // tela de verificação/login do Mercado Livre não é o produto: fica o link colado
+  if (/account-verification|\/gz\/|\/login\b|\/jms\//i.test(finalUrl)) finalUrl = link;
 
   if (mk === 'ML' || marketplaceOf(new URL(finalUrl).hostname) === 'ML') {
     const id = externalIdFrom('ML', finalUrl) || externalIdFrom('ML', link);
@@ -125,7 +137,15 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, shClient =
       } catch (_) { /* cai na prévia */ }
     }
     const og = await openGraph(finalUrl, fetchImpl).catch(() => null);
-    if (!og || !og.title) return { link, error: 'Não consegui ler este produto do Mercado Livre. Use o link da página do produto.' };
+    if (!og || !og.title) {
+      // O Mercado Livre não libera esta página nem o anúncio pela API (anúncio fora do catálogo, link /up/MLBU...).
+      // Em vez de travar: nome tirado do próprio link; preço e foto a pessoa completa.
+      const name = titleFromSlug(link) || titleFromSlug(finalUrl);
+      if (!name) return { link, error: 'Não consegui ler este produto do Mercado Livre. Use o link da página do produto.' };
+      return { marketplace: 'ML', external_id: id, title: name, image_url: null, price: null, original_price: null,
+        product_url: finalUrl.split('?')[0].split('#')[0], affiliate_url: link, link, source: 'manual',
+        warning: 'O Mercado Livre não libera os dados deste anúncio. Confira o nome e preencha o preço (e a foto, se quiser).' };
+    }
     // Vitrine de afiliado (/social/...): o produto vem cifrado no link; acha entre os códigos da página o que tem o mesmo nome
     const social = /\/social\//i.test(new URL(finalUrl).pathname);
     if (!id && mlClient && og.ml_ids && og.ml_ids.length) {

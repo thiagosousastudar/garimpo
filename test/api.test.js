@@ -2482,3 +2482,21 @@ test('automação por post: palavra do post, texto + produtos com botão numa me
     assert.equal((await api('GET', '/api/direct/automations/M2')).data.automation, null);
   } finally { t.close(); }
 });
+
+test('link do Mercado Livre /up/MLBU... que cai na verificação de conta: usa o link colado e, sem dados, o nome do próprio link', async () => {
+  const { previewLink } = require('../src/services/linkpreview');
+  const { externalIdFrom } = require('../src/services/garimpo');
+  const link = 'https://www.mercadolivre.com.br/kit-camisetas-tommy-azul-marinho/up/MLBU5429960680?pdp_filters=item_id%3AMLB5348241139&wid=MLB5348241139';
+  const fake = async (url, opts = {}) => {
+    const u = String(url);
+    const res = (status, html, location) => ({ ok: status < 400, status, url: u, headers: { get: (k) => (k.toLowerCase() === 'location' ? location || null : 'text/html') }, text: async () => html });
+    if (opts.redirect === 'manual' && /\/up\//.test(u)) return res(302, '', 'https://www.mercadolivre.com.br/gz/account-verification?go=x');
+    if (/account-verification/.test(u)) return res(200, '<html><meta property="og:title" content="Account verification"></html>');
+    return res(403, ''); // a página do produto também não abre
+  };
+  const r = await previewLink(link, { fetchImpl: fake, externalIdFrom });
+  assert.equal(r.error, undefined);
+  assert.deepEqual([r.marketplace, r.external_id, r.title, r.source, r.affiliate_url], ['ML', 'MLB5348241139', 'Kit camisetas tommy azul marinho', 'manual', link]);
+  assert.match(r.warning, /preencha o preço/);
+  assert.doesNotMatch(r.product_url, /account-verification/);
+});
