@@ -61,12 +61,29 @@ function avatar(s, size = '') {
   return `<div class="av ${size}">${img ? `<img src="${esc(img)}" alt="" referrerpolicy="no-referrer">` : `<span>${initials(s.title)}</span>`}</div>`;
 }
 
-function head({ title, description, image, theme, url }) {
+/** Mistura duas cores #rrggbb (k = quanto da segunda). */
+function mix(a, b, k) {
+  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const x = p(a), y = p(b);
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * k).toString(16).padStart(2, '0')).join('');
+}
+
+/** Favicon com as iniciais (ex.: "AA") no círculo com a cor da vitrine. */
+function favicon(name, theme) {
+  const t = THEMES[theme] || THEMES.rosa;
+  const w = String(name || '?').trim().split(/\s+/).filter(Boolean);
+  const ini = ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase().replace(/[^A-ZÀ-Ý0-9?]/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.accent}"/><stop offset="1" stop-color="${mix(t.accent, t.dark ? '#000000' : '#ffffff', 0.3)}"/></linearGradient></defs><circle cx="32" cy="32" r="31" fill="url(#g)"/><text x="32" y="43" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="700" font-size="${ini.length > 1 ? 30 : 36}" fill="${t.accentInk}">${ini}</text></svg>`;
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
+function head({ title, description, image, theme, url, icon }) {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title><meta name="description" content="${esc(description)}">
 <meta property="og:type" content="website"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(description)}">
 ${image ? `<meta property="og:image" content="${esc(image)}">` : ''}<meta property="og:url" content="${esc(url)}">
 <meta name="theme-color" content="${esc((THEMES[theme] || THEMES.rosa).bg1)}">
+<link rel="icon" href="${favicon(icon || title, theme)}">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,500&family=Figtree:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/vitrine.css?v=4"><style>${themeCss(theme)}</style></head>`;
@@ -139,7 +156,7 @@ ${footer(s, base)}</main><script src="/vitrine.js?v=3" defer></script></body></h
 /** Página de um post (lista salva na Mensagem com links). */
 function renderPost({ store: s, list, products, base, url, preview }) {
   const firstImg = products.find((p) => p.image);
-  return `${head({ title: `${list.name} · ${s.title}`, description: `Os ${products.length} achadinhos do post, com link direto para a loja.`, image: firstImg && firstImg.image, theme: s.theme, url })}
+  return `${head({ title: `${list.name} · ${s.title}`, description: `Os ${products.length} achadinhos do post, com link direto para a loja.`, image: firstImg && firstImg.image, theme: s.theme, url, icon: s.title })}
 <body>${preview ? '<div class="pv">Prévia: só você vê. Publique a vitrine no Garimpo para liberar esta página.</div>' : ''}<main>
 <header class="hero small"><a class="back" href="${esc(base || '/')}">${avatar(s, 'sm')}<span>${esc(s.title)}</span></a>
 <h1>${esc(list.name)}</h1><p class="bio">Os ${products.length} ${products.length === 1 ? 'achadinho' : 'achadinhos'} do post, com link direto para a loja 💖</p></header>
