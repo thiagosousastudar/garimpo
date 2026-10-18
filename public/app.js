@@ -69,7 +69,7 @@
     pv: prefGet('pv', 'produtos'), // Produtos: 'produtos' ou 'vitrine'
     vit: null, // vitrine (mini site da bio), carregada ao abrir
     cp: { items: [], settings: null, loaded: false, parsed: null, text: '', mk: 'ML', link: '', msgChannel: 'whatsapp', msg: null },
-    dm: { items: [], loaded: false, filter: 'pedidos', settings: null, defaults: null, syncedAt: null }, // Direct
+    dm: { items: [], loaded: false, filter: 'pedidos', settings: null, defaults: null, syncedAt: null, view: 'posts', posts: null }, // Direct
     qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
   };
 
@@ -875,7 +875,7 @@
   /* ---------- Direct: Pessoas (mini-CRM) e Relatório ---------- */
   function dmSwitch() {
     var v = state.dm.view || 'comentarios';
-    return '<div class="seg gview" role="group" aria-label="Seção do Direct">' + [['comentarios', '💬 Comentários'], ['pessoas', '👥 Pessoas'], ['relatorio', '📊 Relatório']].map(function (o) {
+    return '<div class="seg gview" role="group" aria-label="Seção do Direct">' + [['posts', '📸 Posts e automações'], ['comentarios', '💬 Comentários'], ['pessoas', '👥 Pessoas'], ['relatorio', '📊 Relatório']].map(function (o) {
       return '<button type="button" data-dmview="' + o[0] + '" aria-pressed="' + (v === o[0]) + '">' + o[1] + '</button>';
     }).join('') + '</div>';
   }
@@ -935,6 +935,7 @@
     var head0 = '<div class="pagehead"><h2>Direct</h2><p>Quem pede o link nos comentários, quem clicou e o que mais vende.</p></div>';
     if (dm.view === 'pessoas') return head0 + dmSwitch() + viewDmPeople();
     if (dm.view === 'relatorio') return head0 + dmSwitch() + viewDmReport();
+    if (dm.view === 'posts') return head0 + dmSwitch() + viewDmPosts();
     if (!dm.loaded) { loadDirect().then(render).catch(function (e) { toast(e.message); }); return '<p class="hint">Carregando comentários…</p>'; }
     if (!(state.conn && state.conn.connected)) {
       return '<div class="pagehead"><h2>Direct</h2></div><div class="empty centered-empty">Conecte o Instagram na aba Conexões para receber os comentários.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-tab="conexoes">Ir para Conexões</button></div></div>';
@@ -954,8 +955,9 @@
         '<p class="dmtext">💬 ' + esc(c.text || '') + '</p>' +
         (c.status === 'enviado' ? '<details><summary class="hint">Mensagem enviada ' + esc(c.sent_at ? ago(c.sent_at) : '') + '</summary><pre class="dmsent">' + esc(c.reply_text || '') + '</pre></details>' : '') +
         (c.error && c.status !== 'enviado' ? '<p class="err small">' + esc(c.error) + '</p>' : '') +
-        (canSend ? '<textarea id="dm-' + c.id + '" rows="5" aria-label="Mensagem do Direct" placeholder="Escreva a mensagem com o link">' + esc(c.preview || '') + '</textarea>' +
-          '<div class="actions"><button class="btn small primary" data-dmsend="' + c.id + '">💌 Enviar no Direct</button>' + (c.status !== 'ignorado' ? '<button class="btn small ghost" data-dmignore="' + c.id + '">Ignorar</button>' : '') + '</div>' : '') +
+        (canSend ? (c.automation ? '<pre class="dmsent">' + esc(c.preview || '') + '</pre><p class="hint small">⚡ Mensagem da automação do post (vai com o botão Ver na Shopee / Ver no Mercado Livre).</p>'
+            : '<textarea id="dm-' + c.id + '" rows="5" aria-label="Mensagem do Direct" placeholder="Escreva a mensagem com o link">' + esc(c.preview || '') + '</textarea>') +
+          '<div class="actions"><button class="btn small primary" data-dmsend="' + c.id + '"' + (c.automation ? ' data-dmauto="1"' : '') + '>💌 Enviar no Direct</button>' + (c.status !== 'ignorado' ? '<button class="btn small ghost" data-dmignore="' + c.id + '">Ignorar</button>' : '') + '</div>' : '') +
         '</article>';
     }).join('');
     var settings = '<details class="card dmset"' + (dm.items.length ? '' : ' open') + '><summary><b>⚙️ Respostas automáticas</b> <span class="hint">' + (s.auto ? '· ligado' : '· desligado (você revisa e envia)') + '</span></summary>' +
@@ -1055,7 +1057,7 @@
     var head = '<section class="card"><h3>Telegram (piloto automático)</h3>';
     if (tg.ready) {
       return head + '<p class="ok">Postando em <b>' + esc(tg.chat_title || tg.chat_id) + '</b>.</p>' +
-        '<div class="actions row"><button class="btn small" data-act="tg-change">Trocar grupo/canal</button><button class="btn small danger" data-act="disconnect-tg">Desconectar</button></div></section>';
+        '<div class="actions row"><button class="btn small" data-act="tg-change">Trocar grupo/canal</button><button class="btn small danger" data-act="disconnect-tg">Desconectar</button></div>' + tgAlertsBlock(tg) + '</section>';
     }
     if (tg.connected) {
       var found = state.tgChats;
@@ -1933,6 +1935,196 @@
     },
   });
 
+  /* ---------- Direct: posts do Instagram e automação de cada post ---------- */
+  var pa = null; // automação aberta: { mediaId, permalink, thumb, caption, keywords, replies, dm_text, button_text, active, items, exists, preview, pick, q, lists }
+
+  function loadDmPosts() {
+    if (state.dm.postsBusy) return;
+    state.dm.postsBusy = true;
+    api('GET', '/api/direct/posts').then(function (r) { state.dm.posts = r.posts; state.dm.postsErr = null; }, function (e) { state.dm.posts = []; state.dm.postsErr = e.message; })
+      .then(function () { state.dm.postsBusy = false; render(); });
+  }
+
+  function viewDmPosts() {
+    var dm = state.dm;
+    if (!(state.conn && state.conn.connected)) return '<div class="empty centered-empty">Conecte o Instagram na aba Conexões para ver os posts.</div>';
+    if (!dm.posts) { loadDmPosts(); return '<p class="hint">Carregando os posts do Instagram…</p>'; }
+    var tgOn = state.tg && state.tg.alert_chat_id;
+    var info = '<section class="card dminfo"><p>Crie uma <b>automação</b> em cada post: quem comentar a palavra-gatilho recebe no Direct o seu texto e os produtos, com o botão <b>Ver na Shopee</b> / <b>Ver no Mercado Livre</b>. Post com automação responde sozinho em até 3 minutos.</p>' +
+      (tgOn ? '' : '<p class="hint">🔔 Quer ser avisado no Telegram quando pedirem o link num post sem automação? Ative em <button class="link" data-tab="conexoes">Conexões → Telegram</button>.</p>') + '</section>';
+    if (dm.postsErr) return info + '<p class="err">' + esc(dm.postsErr) + '</p>';
+    var cards = dm.posts.map(function (p) {
+      var a = p.automation;
+      var thumb = safeUrl(p.thumb);
+      var badge = a ? (a.active ? '<span class="pa-badge on">⚡ Automação ativa · ' + a.items + ' produto' + (a.items === 1 ? '' : 's') + '</span>' : '<span class="pa-badge off">⏸ Automação pausada</span>')
+        : (p.garimpo_products ? '<span class="pa-badge soft">Produto do Garimpo · resposta geral</span>' : '');
+      return '<article class="pa-card' + (p.pending && !a ? ' warn' : '') + '"><div class="pa-ph">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span class="noimg"></span>') +
+        (p.media_type === 'VIDEO' ? '<span class="pa-type">▶ Reel</span>' : p.media_type === 'CAROUSEL_ALBUM' ? '<span class="pa-type">▦ Carrossel</span>' : '') +
+        (p.pending ? '<span class="pa-pend">' + p.pending + ' pedido' + (p.pending === 1 ? '' : 's') + '</span>' : '') +
+        '<span class="pa-stats">❤ ' + p.likes + ' · 💬 ' + p.comments + '</span></div>' +
+        '<div class="pa-body">' + badge + (p.caption ? '<p class="pa-cap">' + esc(p.caption) + '</p>' : '') +
+        (a ? '<p class="hint small">Palavra: <b>' + esc(a.keywords.join(', ')) + '</b></p>' : '') +
+        (p.permalink ? '<a class="btn small ghost pa-ig" href="' + esc(safeUrl(p.permalink)) + '" target="_blank" rel="noopener noreferrer">📷 Ver no Instagram</a>' : '') +
+        '<button class="btn small ' + (a ? 'primary' : 'pa-new') + '" data-act="pa-open" data-id="' + esc(p.id) + '">' + (a ? '✏️ Editar automação' : '➕ Nova automação') + '</button></div></article>';
+    }).join('');
+    return info + '<div class="row end" style="margin:0 0 10px"><button class="btn small" data-act="pa-reload">↻ Atualizar posts</button></div>' +
+      (cards ? '<div class="pa-grid">' + cards + '</div>' : '<div class="empty centered-empty">Nenhum post encontrado nesta conta do Instagram.</div>');
+  }
+
+  function postById(id) { return (state.dm.posts || []).filter(function (p) { return p.id === id; })[0]; }
+
+  function openAutomation(mediaId) {
+    var p = postById(mediaId) || { id: mediaId };
+    return api('GET', '/api/direct/automations/' + encodeURIComponent(mediaId)).then(function (r) {
+      var a = r.automation || r.suggestion;
+      pa = { mediaId: mediaId, permalink: p.permalink, thumb: p.thumb, caption: p.caption, exists: Boolean(r.automation), voice: r.voice,
+        keywords: (a.keywords || []).join(', '), replies: a.replies || 'AUTO', dm_text: a.dm_text || '', button_text: a.button_text || '', active: a.active !== false,
+        items: (a.items || []).map(function (x) { return { product_id: x.product_id || null, name: x.name || '', link: x.link || '' }; }), preview: null, pick: false, q: '' };
+      renderAutomation();
+      if (!dlg.open) dlg.showModal();
+    });
+  }
+
+  function automationBody() {
+    return { keywords: pa.keywords, replies: pa.replies, dm_text: pa.dm_text, button_text: pa.button_text, active: pa.active,
+      permalink: pa.permalink, thumb_url: pa.thumb, caption: pa.caption,
+      items: pa.items.map(function (x) { return x.product_id ? { product_id: x.product_id, name: x.name } : { name: x.name, link: x.link }; }) };
+  }
+
+  function renderAutomation() {
+    if (!pa) return;
+    var thumb = safeUrl(pa.thumb);
+    var rows = pa.items.map(function (x, i) {
+      return '<div class="pa-item"><span class="mlnum num">' + (i + 1) + '</span><div class="grow">' +
+        '<input type="text" data-paname="' + i + '" value="' + esc(x.name) + '" placeholder="Nome do produto" aria-label="Nome do produto ' + (i + 1) + '">' +
+        (x.product_id ? '<p class="hint mllink">🛍️ Produto do Garimpo · ' + esc(x.link || 'sem link') + '</p>'
+          : '<input type="url" data-palink="' + i + '" value="' + esc(x.link) + '" placeholder="https://s.shopee.com.br/…" aria-label="Link de afiliado ' + (i + 1) + '">') +
+        '</div><div class="mlbtns"><button type="button" class="btn small ghost" data-pamove="' + i + '" data-dir="-1" aria-label="Subir"' + (i ? '' : ' disabled') + '>↑</button>' +
+        '<button type="button" class="btn small ghost" data-pamove="' + i + '" data-dir="1" aria-label="Descer"' + (i < pa.items.length - 1 ? '' : ' disabled') + '>↓</button>' +
+        '<button type="button" class="btn small ghost" data-padel="' + i + '" aria-label="Tirar">✕</button></div></div>';
+    }).join('');
+    var picker = '';
+    if (pa.pick) {
+      var q = normTxt(pa.q);
+      var inSet = {}; pa.items.forEach(function (x) { if (x.product_id) inSet[x.product_id] = true; });
+      var list = state.products.filter(function (p) { return !inSet[p.id] && (!q || normTxt(p.title).indexOf(q) > -1); }).slice(0, 30);
+      picker = '<div class="pa-picker"><input id="pa-q" type="search" placeholder="Buscar nos seus produtos…" value="' + esc(pa.q) + '" autocomplete="off" aria-label="Buscar produtos">' +
+        '<div class="mllist" id="pa-plist">' + paPickRows(list) + '</div></div>';
+    }
+    var lists = pa.lists ? '<div class="pa-picker">' + (pa.lists.length ? pa.lists.map(function (l) { return '<button type="button" class="btn small" data-palist="' + l.id + '">💌 ' + esc(l.name) + ' (' + l.items.length + ')</button>'; }).join('') : '<p class="hint">Nenhuma lista salva ainda.</p>') + '</div>' : '';
+    var pv = pa.preview ? '<div class="pa-preview"><p class="lblsm">Assim chega no Direct</p><div class="pa-bubble"><pre>' + esc(pa.preview.text) + '</pre>' +
+      (pa.preview.buttons.length ? '<div class="pa-btns">' + pa.preview.buttons.map(function (b) { return '<span>' + esc(b) + '</span>'; }).join('') + '</div>' : '<p class="hint small">Com mais de 3 produtos, vai em texto com os links (clicáveis).</p>') +
+      '</div><p class="hint small">Resposta no comentário: "' + esc(pa.preview.public_reply) + '"</p></div>' : '';
+    dlg.innerHTML = '<h2>' + (pa.exists ? 'Editar automação' : 'Nova automação') + '</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' +
+      '<div class="pa-head">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" referrerpolicy="no-referrer">' : '') + '<div class="grow"><p class="hint small" style="margin:0">' + esc(pa.caption || 'Post ' + pa.mediaId) + '</p>' +
+      (pa.permalink ? '<a class="small" href="' + esc(safeUrl(pa.permalink)) + '" target="_blank" rel="noopener noreferrer">Ver no Instagram ↗</a>' : '') + '</div></div>' +
+      '<div class="field"><label for="pa-kw">Palavra-chave gatilho</label><input id="pa-kw" type="text" value="' + esc(pa.keywords) + '" placeholder="Ex.: EU QUERO, LINDOS"><p class="hint">Separe por vírgula. Vale se o comentário tiver a palavra (sem diferenciar maiúscula e acento).</p></div>' +
+      '<div class="field"><label for="pa-rep">Resposta ao comentário</label><input id="pa-rep" type="text" value="' + esc(pa.replies) + '" placeholder="AUTO"><p class="hint">Escreva <b>AUTO</b> para o Garimpo variar as frases, ou várias frases separadas por <b>;</b> (ex.: Te mandei no Direct! 💌; Olha seu Direct ✨).</p></div>' +
+      '<div class="field"><label for="pa-dm">Texto do Direct</label><textarea id="pa-dm" class="mlshort" maxlength="500" placeholder="' + esc(pa.voice === 'masculino' ? 'Fala, {nome}! 👊 Segue o que você pediu:' : 'Oie, {nome}! 💖 Segue o que você pediu:') + '">' + esc(pa.dm_text) + '</textarea><p class="hint"><span id="pa-dm-n">' + pa.dm_text.length + '</span>/500 · {nome} vira o @ da pessoa. Os produtos vão logo abaixo.</p></div>' +
+      '<div class="field"><label for="pa-btn">Texto do botão</label><input id="pa-btn" type="text" maxlength="20" value="' + esc(pa.button_text) + '" placeholder="Automático: Ver na Shopee / Ver no Mercado Livre"></div>' +
+      '<p class="lblsm">Produtos (' + pa.items.length + '/10)</p><div class="mllist">' + (rows || '<p class="hint">Adicione os produtos do post.</p>') + '</div>' +
+      '<div class="row"><button type="button" class="btn small" data-act="pa-pick">🛍️ Produto do Garimpo</button><button type="button" class="btn small" data-act="pa-add">🔗 Colar link</button><button type="button" class="btn small" data-act="pa-lists">💌 Usar Lista de links</button></div>' +
+      picker + lists +
+      '<label class="check"><input type="checkbox" id="pa-active"' + (pa.active ? ' checked' : '') + '> Automação ativa (responde sozinha)</label>' +
+      '<p class="err" id="pa-err" role="alert"></p>' + pv +
+      '<div class="row end">' + (pa.exists ? '<button type="button" class="btn small danger" data-act="pa-delete">Excluir automação</button><span class="grow"></span>' : '') +
+      '<button type="button" class="btn" data-act="close-dlg">Cancelar</button><button type="button" class="btn" data-act="pa-preview">👁 Ver como chega</button><button type="button" class="btn primary" data-act="pa-save">Salvar</button></div></div>';
+  }
+  function paPickRows(list) {
+    return list.map(function (p) {
+      return '<div class="mlitem vpitem">' + thumb(p, true) + '<div class="grow"><b class="vpt">' + esc(p.title) + '</b><p class="hint" style="margin:2px 0 0">' + brl(p.price) + (p.affiliate_url ? '' : ' · <span class="err">sem link de afiliado</span>') + '</p></div><button type="button" class="btn small" data-papick="' + p.id + '">+ Adicionar</button></div>';
+    }).join('') || '<p class="hint">Nenhum produto encontrado.</p>';
+  }
+  function paSync() {
+    var v = function (id) { var el = $('#' + id, dlg); return el ? el.value : null; };
+    if (!pa) return;
+    if (v('pa-kw') != null) pa.keywords = v('pa-kw');
+    if (v('pa-rep') != null) pa.replies = v('pa-rep');
+    if (v('pa-dm') != null) pa.dm_text = v('pa-dm');
+    if (v('pa-btn') != null) pa.button_text = v('pa-btn');
+    var act = $('#pa-active', dlg); if (act) pa.active = act.checked;
+  }
+  dlg.addEventListener('input', function (e) {
+    if (!pa) return;
+    var t = e.target;
+    if (t.dataset && t.dataset.paname != null) pa.items[Number(t.dataset.paname)].name = t.value;
+    else if (t.dataset && t.dataset.palink != null) pa.items[Number(t.dataset.palink)].link = t.value.trim();
+    else if (t.id === 'pa-q') { pa.q = t.value; var box = $('#pa-plist', dlg); if (box) { var q = normTxt(pa.q); var inSet = {}; pa.items.forEach(function (x) { if (x.product_id) inSet[x.product_id] = true; }); box.innerHTML = paPickRows(state.products.filter(function (p) { return !inSet[p.id] && (!q || normTxt(p.title).indexOf(q) > -1); }).slice(0, 30)); } }
+    else if (t.id === 'pa-dm') { var n = $('#pa-dm-n', dlg); if (n) n.textContent = t.value.length; }
+  });
+  dlg.addEventListener('click', function (e) {
+    if (!pa) return;
+    var b = e.target.closest && e.target.closest('button'); if (!b) return;
+    var d = b.dataset;
+    if (d.papick) {
+      paSync();
+      var p = state.products.filter(function (x) { return x.id === Number(d.papick); })[0];
+      if (p && pa.items.length < 10) pa.items.push({ product_id: p.id, name: shortName(p.title), link: p.affiliate_url || p.product_url || '' });
+      pa.preview = null; renderAutomation();
+    } else if (d.padel != null) { paSync(); pa.items.splice(Number(d.padel), 1); pa.preview = null; renderAutomation(); }
+    else if (d.pamove != null) {
+      paSync();
+      var i = Number(d.pamove), j = i + Number(d.dir);
+      if (j < 0 || j >= pa.items.length) return;
+      var it = pa.items.splice(i, 1)[0]; pa.items.splice(j, 0, it); pa.preview = null; renderAutomation();
+    } else if (d.palist) {
+      paSync();
+      var l = (pa.lists || []).filter(function (x) { return x.id === Number(d.palist); })[0];
+      if (l) {
+        l.items.forEach(function (x) { if (pa.items.length < 10 && !pa.items.some(function (y) { return y.product_id === x.product_id; })) pa.items.push({ product_id: x.product_id, name: x.name, link: x.link || '' }); });
+        pa.lists = null; pa.preview = null; renderAutomation();
+      }
+    }
+  });
+  dlg.addEventListener('close', function () { pa = null; });
+
+  Object.assign(actions, {
+    'pa-reload': function () { state.dm.posts = null; render(); },
+    'pa-open': function (t) { return openAutomation(t.dataset.id); },
+    'pa-pick': function () { paSync(); pa.pick = !pa.pick; pa.lists = null; renderAutomation(); var q = $('#pa-q', dlg); if (q) q.focus(); },
+    'pa-add': function () { paSync(); if (pa.items.length >= 10) throw new Error('No máximo 10 produtos por post.'); pa.items.push({ product_id: null, name: '', link: '' }); pa.preview = null; renderAutomation(); },
+    'pa-lists': function () {
+      paSync(); pa.pick = false;
+      return api('GET', '/api/link-lists').then(function (r) { if (pa) { pa.lists = r.lists; renderAutomation(); } });
+    },
+    'pa-preview': function () {
+      paSync();
+      return api('POST', '/api/direct/automations/' + encodeURIComponent(pa.mediaId) + '/preview', automationBody())
+        .then(function (r) { pa.preview = r; renderAutomation(); }, function (e) { var el = $('#pa-err', dlg); if (el) el.textContent = e.message; });
+    },
+    'pa-save': function () {
+      paSync();
+      var id = pa.mediaId;
+      return api('PUT', '/api/direct/automations/' + encodeURIComponent(id), automationBody()).then(function () {
+        dlg.close(); toast('Automação salva ⚡'); state.dm.posts = null; render();
+      }, function (e) { var el = $('#pa-err', dlg); if (el) el.textContent = e.message; });
+    },
+    'pa-delete': function () {
+      if (!confirm('Excluir a automação deste post? Quem comentar não recebe mais a resposta automática.')) return null;
+      var id = pa.mediaId;
+      return api('DELETE', '/api/direct/automations/' + encodeURIComponent(id)).then(function () { dlg.close(); toast('Automação excluída'); state.dm.posts = null; render(); });
+    },
+    // avisos do Telegram só para você
+    'tg-alert-find': function () {
+      return api('GET', '/api/connections/telegram/me-chats').then(function (r) { state.tgMe = r.chats; if (!r.chats.length) toast('Mande /start para o seu bot no Telegram e toque de novo.'); render(); });
+    },
+    'tg-alert-off': function () { return api('PUT', '/api/connections/telegram/alerts', { chat_id: '' }).then(function () { state.tg.alert_chat_id = null; toast('Avisos desligados'); render(); }); },
+  });
+
+  /** Telegram: avisos só para você (conversa privada com o bot). */
+  function tgAlertsBlock(tg) {
+    if (tg.alert_chat_id) return '<div class="tg-alert on"><p>🔔 <b>Avisos ligados</b>: quando pedirem o link num post sem automação, o bot te avisa na conversa privada.</p><button class="btn small ghost" data-act="tg-alert-off">Desligar avisos</button></div>';
+    var me = state.tgMe;
+    return '<div class="tg-alert"><p>🔔 <b>Receber avisos só para você</b>: quando alguém pedir o link num post sem automação.</p><ol class="steps"><li>No Telegram, abra o seu bot e toque em <b>Iniciar</b> (ou mande <b>/start</b>).</li><li>Toque em <b>Procurar minha conversa</b>.</li></ol>' +
+      '<div class="row"><button class="btn small" data-act="tg-alert-find">Procurar minha conversa</button></div>' +
+      (me && me.length ? '<div class="stack" style="margin-top:8px">' + me.map(function (c) { return '<button class="btn small primary" data-act="tg-alert-use" data-id="' + esc(c.id) + '">Avisar ' + esc(c.title) + (c.username ? ' (@' + esc(c.username) + ')' : '') + '</button>'; }).join('') + '</div>' : '') + '</div>';
+  }
+  Object.assign(actions, {
+    'tg-alert-use': function (t) {
+      return api('PUT', '/api/connections/telegram/alerts', { chat_id: t.dataset.id }).then(function (r) { state.tg.alert_chat_id = r.alert_chat_id; state.tgMe = null; toast('Avisos ligados! Mandei uma mensagem de teste no seu Telegram.'); render(); });
+    },
+  });
+
   /* ---------- Postar agora: direto do produto, sem fila e sem agendador ---------- */
   // { products, product, group, channel, caption, media: [{type,url}], uploads, busy, sending, status, permalink, note, error, waOpened, customMedia }
   var post = null;
@@ -2466,7 +2658,7 @@
     if (d.dmdays) { state.dm.days = Number(d.dmdays); state.dm.report = null; return render(); }
     if (d.dmfilter) { state.dm.filter = d.dmfilter; return loadDirect().then(render); }
     if (d.dmsend) {
-      var dmText = ($('#dm-' + d.dmsend) || {}).value;
+      var dmText = d.dmauto ? undefined : ($('#dm-' + d.dmsend) || {}).value;
       t.disabled = true; t.textContent = 'Enviando…';
       return api('POST', '/api/direct/comments/' + d.dmsend + '/send', { text: dmText }).then(function () { toast('Link enviado no Direct 💌'); return loadDirect().then(render); })
         .catch(function (err) { return loadDirect().then(render).then(function () { throw err; }); });

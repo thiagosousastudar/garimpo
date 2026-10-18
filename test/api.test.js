@@ -52,6 +52,7 @@ function makeMockFetch(log, { failMedia = false, videoStates = [], childStates =
       if (u.pathname.endsWith('/comments')) return json(200, { data: (meta.comments || {})[u.pathname.split('/').slice(-2)[0]] || [] });
       if (u.pathname.endsWith('/messages')) {
         if (meta.dmError) return json(400, { error: { message: '(#10) Application does not have permission for this action', code: 10 } });
+        if (meta.templateError && JSON.parse(body.message).attachment) return json(400, { error: { message: '(#100) Invalid parameter', code: 100 } });
         (meta.dms = meta.dms || []).push({ recipient: JSON.parse(body.recipient), message: JSON.parse(body.message) });
         return json(200, { recipient_id: 'IGSID1', message_id: 'm_1' });
       }
@@ -2395,4 +2396,89 @@ test('conta masculina: WhatsApp simples e objetivo (frase de efeito, nome, De/Po
   assert.deepEqual(lines.slice(1), ['', 'Perfume Paris Elysees Vodka Man EDT 100ml', '', 'De R$ 117 Por R$ 60', 'Aplique o cupom de *10% OFF* no anúncio 🎟️', '', 'Loja Oficial Clube Rosa no ML', 'https://meli.la/2oCUsm1']);
   const fem = await buildCaption(p, 'whatsapp', { ai: false, cfg: {}, follow: 'anninha', tone: undefined });
   assert.match(fem.caption, /Segue a gente no Instagram/, 'a conta feminina continua igual');
+});
+
+test('automação por post: palavra do post, texto + produtos com botão numa mensagem só, resposta escolhida, envio sozinho e aviso no Telegram', async () => {
+  const opts = { meta: {}, shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const api = t.client();
+    await signup(api);
+    const p = (await api('POST', '/api/products', PRODUTO)).data.product; // Mercado Livre
+    await api('PUT', '/api/connections/instagram', { ig_user_id: '17841400000000000', access_token: TOKEN });
+    const now = new Date().toISOString().replace(/\.\d+Z$/, '+0000');
+    const old = new Date(Date.now() - 12 * 864e5).toISOString().replace(/\.\d+Z$/, '+0000');
+    // post antigo (12 dias), publicado fora do Garimpo
+    opts.meta.posts = [{ id: 'M2', permalink: 'https://instagram.com/reel/M2', comments_count: 0, like_count: 7, media_type: 'VIDEO', thumbnail_url: 'https://img.exemplo.com/m2.jpg', caption: 'Bombonieres lindas', timestamp: old }];
+    const posts = (await api('GET', '/api/direct/posts')).data.posts;
+    assert.deepEqual([posts[0].id, posts[0].likes, posts[0].thumb, posts[0].automation], ['M2', 7, 'https://img.exemplo.com/m2.jpg', null]);
+    const sg = await api('GET', '/api/direct/automations/M2');
+    assert.equal(sg.data.suggestion?.replies, 'AUTO', JSON.stringify(sg));
+    assert.equal((await api('PUT', '/api/direct/automations/M2', { keywords: 'LINDOS', items: [] })).status, 400);
+    assert.equal((await api('PUT', '/api/direct/automations/M2', { keywords: 'LINDOS', items: [{ name: 'X', link: 'http://inseguro.com' }] })).status, 400);
+    const body = { keywords: 'LINDOS', replies: 'Mandei no Direct! 💌; Olha seu Direct ✨', dm_text: 'Oie {nome}... Segue os links', button_text: '',
+      items: [{ product_id: p.id }, { name: 'Porta-frios', link: 'https://s.shopee.com.br/xyz' }], permalink: 'https://instagram.com/reel/M2' };
+    const pv = (await api('POST', '/api/direct/automations/M2/preview', body)).data;
+    assert.match(pv.text, /^Oie fulano\.\.\. Segue os links/);
+    assert.deepEqual(pv.buttons, ['1. Ver no ML', '2. Ver na Shopee']);
+    assert.equal((await api('PUT', '/api/direct/automations/M2', body)).status, 200);
+    assert.equal((await api('GET', '/api/direct/posts')).data.posts[0].automation.items, 2);
+
+    // comentários: vale a palavra do post (LINDOS), não as gerais
+    opts.meta.posts[0].comments_count = 2;
+    opts.meta.comments = { M2: [{ id: 'K1', text: 'Lindos demais!', username: 'ana', timestamp: now }, { id: 'K2', text: 'quero', username: 'bia', timestamp: now }] };
+    await api('POST', '/api/direct/sync');
+    const list = (await api('GET', '/api/direct/comments?filter=todos')).data.items;
+    const k1 = list.find((c) => c.username === 'ana');
+    assert.deepEqual([k1.matched, k1.automation, list.find((c) => c.username === 'bia').matched], [true, true, false]);
+    assert.match(k1.preview, /Porta-frios/);
+
+    // envio: uma mensagem só, com texto e botões; links medidos (/r/)
+    assert.equal((await api('POST', `/api/direct/comments/${k1.id}/send`, {})).status, 200);
+    const dm = opts.meta.dms.pop();
+    assert.equal(dm.recipient.comment_id, 'K1');
+    const pay = dm.message.attachment.payload;
+    assert.equal(pay.template_type, 'button');
+    assert.match(pay.text, /^Oie ana\.\.\. Segue os links\n\n1️⃣ Air Fryer 3,5L\n👉 https:\/\/app\.exemplo\.com\/r\//);
+    assert.deepEqual(pay.buttons.map((b) => b.title), ['1. Ver no ML', '2. Ver na Shopee']);
+    assert.ok(pay.buttons.every((b) => /\/r\/[A-Za-z0-9]+$/.test(b.url)));
+    assert.match(opts.meta.replies.pop().text, /^(Mandei no Direct! 💌|Olha seu Direct ✨)$/);
+
+    // botões recusados pela Meta: vai em texto com os links
+    opts.meta.templateError = true;
+    opts.meta.posts[0].comments_count = 3;
+    opts.meta.comments.M2.push({ id: 'K3', text: 'LINDOS', username: 'carla', timestamp: now });
+    // envio sozinho: automação ativa responde mesmo com o automático geral desligado
+    await t.pool.query('update users set dm_synced_at = null'); // passaram os 3 minutos
+    await require('../src/services/igdm').runDmTick({ pool: t.pool, cfg: t.cfg, fetchImpl: t.fetchImpl, log: { error() {} } });
+    const dm3 = opts.meta.dms.pop();
+    assert.equal(dm3.recipient.comment_id, 'K3');
+    assert.match(dm3.message.text, /Porta-frios\n👉 https:\/\/app\.exemplo\.com\/r\//);
+    opts.meta.templateError = false;
+
+    // aviso no Telegram (conversa privada) quando pedem o link num post sem automação — uma vez por post
+    await api('PUT', '/api/connections/telegram', { token: '123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789' });
+    assert.deepEqual((await api('GET', '/api/connections/telegram/me-chats')).data.chats.map((c) => c.id), ['55']);
+    const al = await api('PUT', '/api/connections/telegram/alerts', { chat_id: '55' });
+    assert.equal(al.status, 200, JSON.stringify(al.data));
+    opts.meta.posts.unshift({ id: 'M3', permalink: 'https://instagram.com/p/M3', comments_count: 1, media_type: 'IMAGE', media_url: 'https://img.exemplo.com/m3.jpg', timestamp: now });
+    opts.meta.comments.M3 = [{ id: 'Q1', text: 'quero o link', username: 'dani', timestamp: now }];
+    await api('POST', '/api/direct/sync');
+    opts.meta.posts[0].comments_count = 2;
+    opts.meta.comments.M3.push({ id: 'Q2', text: 'quero tbm', username: 'edu', timestamp: now });
+    await api('POST', '/api/direct/sync');
+    const alerts = opts.shopee.tg.sent.filter((m) => m.method === 'sendMessage' && /⛔/.test(m.text));
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].chat_id, '55');
+    assert.match(alerts[0].text, /instagram\.com\/p\/M3/);
+
+    // outro usuário não vê nem mexe
+    const b = t.client();
+    await signup(b, 'b@exemplo.com');
+    assert.equal((await b('GET', '/api/direct/automations/M2')).data.automation, null);
+    await b('DELETE', '/api/direct/automations/M2');
+    assert.ok((await api('GET', '/api/direct/automations/M2')).data.automation);
+    assert.equal((await api('DELETE', '/api/direct/automations/M2')).status, 200);
+    assert.equal((await api('GET', '/api/direct/automations/M2')).data.automation, null);
+  } finally { t.close(); }
 });

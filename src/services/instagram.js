@@ -147,8 +147,14 @@ function createInstagramClient({ cfg, fetchImpl = fetch }) {
      * Resposta privada: manda uma mensagem no Direct de quem comentou (1 por comentário, até 7 dias depois).
      * É o recurso oficial da Meta para "comenta QUERO que eu te mando".
      */
-    async privateReply({ igUserId, token, commentId, text }) {
-      return call('POST', `/${igUserId}/messages`, { recipient: JSON.stringify({ comment_id: commentId }), message: JSON.stringify({ text }) }, token);
+    async privateReply({ igUserId, token, commentId, text, message }) {
+      return call('POST', `/${igUserId}/messages`, { recipient: JSON.stringify({ comment_id: commentId }), message: JSON.stringify(message || { text }) }, token);
+    },
+
+    /** Posts e Reels da conta, com foto e números, para a tela de automações. */
+    async allMedia({ igUserId, token, limit = 30 }) {
+      const d = await call('GET', `/${igUserId}/media`, { fields: 'id,timestamp,comments_count,like_count,permalink,media_type,media_url,thumbnail_url,caption', limit }, token);
+      return d.data || [];
     },
 
     /** Resposta pública no comentário (ex.: "Te mandei no Direct!"). */

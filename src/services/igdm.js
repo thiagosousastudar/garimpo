@@ -7,6 +7,7 @@
  */
 const { HttpError } = require('../util');
 const { createInstagramClient } = require('./instagram');
+const postauto = require('./postauto');
 
 const WINDOW_MS = 7 * 864e5; // a Meta só aceita resposta privada até 7 dias depois do comentário
 const SYNC_EVERY_MS = 3 * 60 * 1000;
@@ -101,14 +102,17 @@ async function syncUser({ pool, cfg, fetchImpl, uid, settings }) {
   const client = createInstagramClient({ cfg, fetchImpl });
   const own = (await pool.query('select ig_username from connections where user_id = $1', [uid])).rows[0]?.ig_username || null;
   const s = settings || settingsOf((await pool.query('select * from users where id = $1', [uid])).rows[0]);
-  const media = (await client.recentMedia({ igUserId, token })).filter((m) => Date.now() - new Date(String(m.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).getTime() < WINDOW_MS);
+  const autos = new Map((await pool.query('select * from post_automations where user_id = $1 and active = true', [uid])).rows.map((r) => [r.media_id, postauto.parse(r)]));
+  const media = (await client.recentMedia({ igUserId, token, limit: 25 })).filter((m) => autos.has(m.id) || Date.now() - new Date(String(m.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).getTime() < WINDOW_MS);
   let fresh = 0;
+  const askedNoAuto = new Map(); // post -> quantos pediram o link sem automação nem produto do Garimpo
   for (const m of media) {
     const seen = (await pool.query('select comments_count from ig_media_seen where user_id = $1 and media_id = $2', [uid, m.id])).rows[0];
     const count = Number(m.comments_count) || 0;
     if (seen && seen.comments_count === count) continue;
     if (count > 0) {
-      const { queueItemId } = await productsForMedia(pool, uid, m.id);
+      const { queueItemId, products: linked } = await productsForMedia(pool, uid, m.id);
+      const auto = autos.get(m.id);
       for (const c of await client.comments({ mediaId: m.id, token })) {
         const username = c.username || c.from?.username || null;
         if (own && username && username.toLowerCase() === own.toLowerCase()) continue; // respostas da própria conta
@@ -118,15 +122,34 @@ async function syncUser({ pool, cfg, fetchImpl, uid, settings }) {
           `insert into ig_comments (user_id, comment_id, media_id, queue_item_id, username, text, commented_at, matched)
              values ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [uid, c.id, m.id, queueItemId, username, String(c.text || '').slice(0, 1000),
-            c.timestamp ? new Date(String(c.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).toISOString() : null, matches(c.text, s.keywords)]);
+            c.timestamp ? new Date(String(c.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).toISOString() : null, matches(c.text, auto ? auto.keywords : s.keywords)]);
         fresh++;
+        if (!auto && !linked.length && matches(c.text, s.keywords)) askedNoAuto.set(m.id, { n: (askedNoAuto.get(m.id)?.n || 0) + 1, permalink: m.permalink });
       }
     }
     if (seen) await pool.query('update ig_media_seen set comments_count = $1, checked_at = now() where user_id = $2 and media_id = $3', [count, uid, m.id]);
     else await pool.query('insert into ig_media_seen (user_id, media_id, comments_count) values ($1,$2,$3)', [uid, m.id, count]);
   }
   await pool.query('update users set dm_synced_at = now() where id = $1', [uid]);
+  if (askedNoAuto.size) await alertNoAutomation({ pool, cfg, fetchImpl, uid, posts: askedNoAuto }).catch(() => {});
   return fresh;
+}
+
+/** Telegram (conversa privada com o bot): "pediram o link num post sem automação", uma vez por post. */
+async function alertNoAutomation({ pool, cfg, fetchImpl, uid, posts }) {
+  const c = (await pool.query('select tg_token_enc, tg_alert_chat_id from connections where user_id = $1', [uid])).rows[0];
+  if (!c || !c.tg_token_enc || !c.tg_alert_chat_id) return 0;
+  const { decrypt } = require('../util');
+  const { createTelegramClient } = require('./telegram');
+  const tg = createTelegramClient({ token: decrypt(c.tg_token_enc, cfg.encryptionKey), fetchImpl });
+  let n = 0;
+  for (const [mediaId, info] of posts) {
+    const claim = await pool.query('update ig_media_seen set alerted_at = now() where user_id = $1 and media_id = $2 and alerted_at is null returning media_id', [uid, mediaId]);
+    if (!claim.rows.length) continue;
+    const text = `⛔ ${info.n === 1 ? 'Uma pessoa pediu' : `${info.n} pessoas pediram`} o link num post sem automação!\n${info.permalink || ''}\n\nConfigure em: ${cfg.appUrl}/#direct`;
+    try { await tg.sendMessage(c.tg_alert_chat_id, text); n++; } catch (_) { /* aviso é extra */ }
+  }
+  return n;
 }
 
 /** Envia o Direct de um comentário (texto pronto ou o personalizado). Reserva o comentário para não mandar duas vezes. */
@@ -140,6 +163,21 @@ async function sendFor({ pool, cfg, fetchImpl, uid, commentRowId, text: custom }
   }
   const s = settingsOf((await pool.query('select * from users where id = $1', [uid])).rows[0]);
   let text = custom && String(custom).trim();
+  let message = null; // mensagem com botões (automação do post)
+  const auto = !text ? await postauto.automationFor(pool, uid, row.media_id) : null;
+  if (auto) {
+    let items = await postauto.resolveItems(pool, uid, auto);
+    if (!items.length) throw new HttpError(400, 'A automação deste post não tem produto com link.');
+    if (s.track_links) {
+      const { createLink } = require('./links');
+      items = await Promise.all(items.map(async (it) => {
+        try { return { ...it, link: (await createLink(pool, cfg, { uid, productId: it.product_id, commentId: row.id, target: it.link })).url }; } catch (_) { return it; }
+      }));
+    }
+    const nome = row.username ? row.username.replace(/^@/, '') : '';
+    const built = postauto.buildDirect(auto, items, { nome, voice: s.voice });
+    message = built.message; text = built.text;
+  }
   if (!text) {
     let { products } = await productsForMedia(pool, uid, row.media_id);
     // link curto por pessoa: mostra quem pediu e clicou (leva ao mesmo link de afiliado)
@@ -160,16 +198,22 @@ async function sendFor({ pool, cfg, fetchImpl, uid, commentRowId, text: custom }
   const { igUserId, token } = await credentials(pool, cfg, uid);
   const client = createInstagramClient({ cfg, fetchImpl });
   try {
-    await client.privateReply({ igUserId, token, commentId: row.comment_id, text });
+    try {
+      await client.privateReply({ igUserId, token, commentId: row.comment_id, text, message });
+    } catch (e1) {
+      // mensagem com botões recusada (formato): manda a mesma coisa em texto, com os links
+      if (!message || !message.attachment || e1.rateLimited || /permission|not authorized|\(#10\)|\(#200\)|allowed window|2534022|already/i.test(e1.message)) throw e1;
+      await client.privateReply({ igUserId, token, commentId: row.comment_id, text });
+    }
   } catch (e) {
     const msg = friendlyError(e);
     await pool.query(`update ig_comments set status = 'erro', error = $1 where id = $2`, [msg, row.id]);
     throw new HttpError(e.rateLimited ? 429 : 502, msg);
   }
   await pool.query(`update ig_comments set status = 'enviado', sent_at = now(), reply_text = $1, error = null where id = $2`, [text, row.id]);
-  if (s.public_reply) {
+  if (s.public_reply || auto) {
     const replies = s.voice === 'masculino' ? PUBLIC_REPLIES_M : PUBLIC_REPLIES;
-    const pub = replies[Math.floor(Math.random() * replies.length)];
+    const pub = auto ? postauto.publicReply(auto, s.voice) : replies[Math.floor(Math.random() * replies.length)];
     try { await client.replyComment({ commentId: row.comment_id, token, text: pub }); } catch (_) { /* a resposta pública é só um extra */ }
   }
   return (await pool.query('select * from ig_comments where id = $1', [row.id])).rows[0];
@@ -178,9 +222,12 @@ async function sendFor({ pool, cfg, fetchImpl, uid, commentRowId, text: custom }
 /** Envia sozinho para os comentários novos que pediram o link (modo automático). */
 async function autoSend({ pool, cfg, fetchImpl, uid, log = console, max = 20 }) {
   const { rows } = await pool.query(
-    `select id from ig_comments where user_id = $1 and status = 'novo' and matched = true order by id limit $2`, [uid, max]);
+    `select id, media_id from ig_comments where user_id = $1 and status = 'novo' and matched = true order by id limit $2`, [uid, max]);
+  const u = (await pool.query('select dm_auto from users where id = $1', [uid])).rows[0];
+  const withAuto = new Set((await pool.query('select media_id from post_automations where user_id = $1 and active = true', [uid])).rows.map((x) => x.media_id));
   let sent = 0;
   for (const r of rows) {
+    if (!(u && u.dm_auto) && !withAuto.has(r.media_id)) continue;
     try { await sendFor({ pool, cfg, fetchImpl, uid, commentRowId: r.id }); sent++; } catch (e) { log.error?.(`[direct] comentário ${r.id}: ${e.message}`); }
   }
   return sent;
@@ -191,9 +238,14 @@ async function runDmTick({ pool, cfg, fetchImpl, log = console }) {
   const since = new Date(Date.now() - SYNC_EVERY_MS).toISOString();
   // Política de privacidade: comentários e respostas guardados por até 90 dias
   await pool.query('delete from ig_comments where created_at < $1', [new Date(Date.now() - 90 * 864e5).toISOString()]);
-  const { rows } = await pool.query(
+  // quem ligou o automático geral ou tem algum post com automação ativa
+  const byAuto = (await pool.query(
     `select u.* from users u join connections c on c.user_id = u.id
-       where u.dm_auto = true and c.ig_token_enc is not null and (u.dm_synced_at is null or u.dm_synced_at < $1)`, [since]);
+       where u.dm_auto = true and c.ig_token_enc is not null and (u.dm_synced_at is null or u.dm_synced_at < $1)`, [since])).rows;
+  const byPost = (await pool.query(
+    `select distinct u.* from users u join connections c on c.user_id = u.id join post_automations a on a.user_id = u.id
+       where a.active = true and c.ig_token_enc is not null and (u.dm_synced_at is null or u.dm_synced_at < $1)`, [since])).rows;
+  const rows = [...new Map([...byAuto, ...byPost].map((u) => [u.id, u])).values()];
   let sent = 0;
   for (const u of rows.slice(0, 10)) {
     const claim = await pool.query('update users set dm_synced_at = now() where id = $1 and (dm_synced_at is null or dm_synced_at < $2) returning id', [u.id, since]);

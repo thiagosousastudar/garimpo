@@ -44,6 +44,17 @@ function createTelegramClient({ token, fetchImpl = fetch }) {
      * Grupos e canais onde o bot recebeu algo recentemente (precisa ter sido adicionado e haver
      * uma mensagem/postagem depois disso). Devolve [{ id, title, type }].
      */
+    /** Conversas privadas com o bot (quem mandou /start): para receber avisos só para você. */
+    async privateChats() {
+      const updates = await call('getUpdates', { limit: 100, allowed_updates: ['message'] });
+      const by = new Map();
+      for (const u of updates || []) {
+        const chat = (u.message || {}).chat;
+        if (chat && chat.type === 'private') by.set(String(chat.id), { id: String(chat.id), title: [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.username || String(chat.id), username: chat.username || null });
+      }
+      return [...by.values()];
+    },
+
     async chats() {
       const updates = await call('getUpdates', { limit: 100, allowed_updates: ['message', 'channel_post', 'my_chat_member'] });
       const by = new Map();

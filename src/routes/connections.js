@@ -121,12 +121,12 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
   });
 
   /* ---------- Telegram (bot oficial): canal automático do piloto ---------- */
-  const tgRow = async (uid) => (await pool.query('select tg_token_enc, tg_chat_id, tg_chat_title from connections where user_id = $1', [uid])).rows[0] || {};
+  const tgRow = async (uid) => (await pool.query('select tg_token_enc, tg_chat_id, tg_chat_title, tg_alert_chat_id from connections where user_id = $1', [uid])).rows[0] || {};
   const tgClient = (row) => createTelegramClient({ token: decrypt(row.tg_token_enc, cfg.encryptionKey), fetchImpl });
 
   r.get('/telegram', async (req, res) => {
     const t = await tgRow(req.uid);
-    res.json({ connected: Boolean(t.tg_token_enc), chat_id: t.tg_chat_id || null, chat_title: t.tg_chat_title || null, ready: Boolean(t.tg_token_enc && t.tg_chat_id) });
+    res.json({ connected: Boolean(t.tg_token_enc), chat_id: t.tg_chat_id || null, chat_title: t.tg_chat_title || null, ready: Boolean(t.tg_token_enc && t.tg_chat_id), alert_chat_id: t.tg_alert_chat_id || null });
   });
 
   /** Salva o token do bot (testado no Telegram antes). */
@@ -169,8 +169,31 @@ function connectionRoutes({ pool, cfg, fetchImpl }) {
     res.json({ ready: true, chat_id: chatId, chat_title: title });
   });
 
+  /** Avisos só para você (conversa privada com o bot): quem mandou /start ao bot aparece aqui. */
+  r.get('/telegram/me-chats', async (req, res) => {
+    const t = await tgRow(req.uid);
+    if (!t.tg_token_enc) throw new HttpError(400, 'Conecte o bot do Telegram primeiro.');
+    try { res.json({ chats: await tgClient(t).privateChats() }); } catch (e) { throw new HttpError(502, e.message); }
+  });
+
+  /** Liga (chat_id) ou desliga (vazio) os avisos de "pediram o link num post sem automação". */
+  r.put('/telegram/alerts', async (req, res) => {
+    const t = await tgRow(req.uid);
+    if (!t.tg_token_enc) throw new HttpError(400, 'Conecte o bot do Telegram primeiro.');
+    const chatId = String(req.body?.chat_id || '').trim();
+    if (!chatId) {
+      await pool.query('update connections set tg_alert_chat_id = null where user_id = $1', [req.uid]);
+      return res.json({ alert_chat_id: null });
+    }
+    if (!/^\d{1,20}$/.test(chatId)) throw new HttpError(400, 'Escolha a sua conversa com o bot na lista.');
+    try { await tgClient(t).sendMessage(chatId, '🔔 Avisos do Garimpo ligados! Quando alguém pedir o link num post sem automação, eu te aviso aqui.'); }
+    catch (e) { throw new HttpError(400, `Não consegui te mandar mensagem: ${e.message}. Mande /start para o bot e tente de novo.`); }
+    await pool.query('update connections set tg_alert_chat_id = $1 where user_id = $2', [chatId, req.uid]);
+    res.json({ alert_chat_id: chatId });
+  });
+
   r.delete('/telegram', async (req, res) => {
-    await pool.query('update connections set tg_token_enc = null, tg_chat_id = null, tg_chat_title = null where user_id = $1', [req.uid]);
+    await pool.query('update connections set tg_token_enc = null, tg_chat_id = null, tg_chat_title = null, tg_alert_chat_id = null where user_id = $1', [req.uid]);
     res.json({ ok: true });
   });
 
