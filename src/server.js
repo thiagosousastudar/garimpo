@@ -14,6 +14,7 @@ const { garimpoRoutes } = require('./routes/garimpo');
 const { automationRoutes } = require('./routes/automations');
 const { couponRoutes } = require('./routes/coupons');
 const { linkListRoutes } = require('./routes/linklists');
+const { vitrineRoutes, publicVitrineRoutes } = require('./routes/vitrine');
 const { directRoutes } = require('./routes/dm');
 const { createStorage } = require('./services/storage');
 const { startScheduler } = require('./services/publisher');
@@ -64,6 +65,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
     res.set('cache-control', 'no-store');
     res.redirect(302, target);
   });
+  app.use('/v', publicVitrineRoutes({ pool, cfg })); // vitrine pública (mini site da bio) e páginas de post
   app.use('/api/auth', authRoutes({ pool, cfg }));
   const guard = requireAuth(cfg);
   app.use('/api/products', guard, productRoutes({ pool, cfg, fetchImpl }));
@@ -73,6 +75,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   app.use('/api/earnings', guard, earningsRoutes({ pool, cfg }));
   app.use('/api/coupons', guard, couponRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/link-lists', guard, linkListRoutes({ pool }));
+  app.use('/api/vitrine', guard, vitrineRoutes({ pool, cfg }));
   app.use('/api/direct', guard, directRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/automations', guard, automationRoutes({ pool, cfg, fetchImpl }));
   app.use('/api/connections', guard, connectionRoutes({ pool, cfg, fetchImpl }));

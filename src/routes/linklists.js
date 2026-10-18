@@ -39,8 +39,11 @@ function linkListRoutes({ pool }) {
       ? (await pool.query('select id, title, affiliate_url, product_url, image_url from products where user_id = $1', [uid])).rows.filter((p) => ids.includes(p.id))
       : [];
     const by = new Map(prods.map((p) => [p.id, p]));
+    // com vitrine criada, cada lista tem a sua página (/v/endereco/p/id)
+    const slug = (await pool.query('select slug from storefronts where user_id = $1', [uid])).rows[0]?.slug || null;
     return rows.map((x) => ({
       id: x.id, name: x.name, greeting: x.greeting, closing: x.closing, updated_at: x.updated_at,
+      page_path: slug ? `/v/${slug}/p/${x.id}` : null,
       items: itemsOf(x).filter((i) => by.has(i.product_id)).map((i) => {
         const p = by.get(i.product_id);
         return { product_id: p.id, name: i.name || p.title, title: p.title, link: p.affiliate_url || p.product_url || null, has_affiliate: Boolean(p.affiliate_url), image_url: p.image_url };

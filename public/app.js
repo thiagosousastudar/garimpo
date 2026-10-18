@@ -65,6 +65,8 @@
     pq: '', pflag: '', plimit: 24, pexp: {}, // Produtos: busca, situação, quantos mostrar, cards abertos na lista
     pview: prefGet('pview', 'lista'), // Produtos: 'lista' (compacta) ou 'cards'
     gview: prefGet('gview', 'produtos'), // Garimpar: 'produtos' ou 'cupons'
+    pv: prefGet('pv', 'produtos'), // Produtos: 'produtos' ou 'vitrine'
+    vit: null, // vitrine (mini site da bio), carregada ao abrir
     cp: { items: [], settings: null, loaded: false, parsed: null, text: '', mk: 'ML', link: '', msgChannel: 'whatsapp', msg: null },
     dm: { items: [], loaded: false, filter: 'pedidos', settings: null, defaults: null, syncedAt: null }, // Direct
     qfilter: '', // filtro da Fila ('', 'wa' = WhatsApp a enviar, 'piloto')
@@ -654,7 +656,10 @@
     }
     var noLink = state.products.filter(function (p) { return !p.affiliate_url; }).length;
     var views = '<div class="seg" role="group" aria-label="Modo de exibição"><button type="button" data-pview="lista" aria-pressed="' + (state.pview === 'lista') + '">☰ Lista</button><button type="button" data-pview="cards" aria-pressed="' + (state.pview !== 'lista') + '">▦ Cards</button></div>';
-    return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos. Os novos aparecem no topo; mude a ordem quando quiser.</p></div>' +
+    var pvSwitch = '<div class="seg gview" role="group" aria-label="Produtos ou vitrine"><button type="button" data-pv="produtos" aria-pressed="' + (state.pv !== 'vitrine') + '">📦 Produtos</button>' +
+      '<button type="button" data-pv="vitrine" aria-pressed="' + (state.pv === 'vitrine') + '">🛍️ Vitrine (link da bio)</button></div>';
+    if (state.pv === 'vitrine') return '<div class="pagehead"><h2>Vitrine</h2><p>Seu mini site para o link da bio: categorias com os produtos que você escolher.</p></div>' + pvSwitch + viewVitrine();
+    return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos. Os novos aparecem no topo; mude a ordem quando quiser.</p></div>' + pvSwitch +
       '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button><button class="btn" data-act="ml-lists">💌 Listas de links</button>' +
       (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
       '<div class="psearch"><input id="f-q" type="search" placeholder="Buscar nos seus produtos…" value="' + esc(state.pq) + '" aria-label="Buscar produtos" autocomplete="off">' + views + '</div>' +
@@ -1465,6 +1470,10 @@
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
   function linksMessage(m) {
+    if (m.asPage && m.page_path) {
+      return [m.greeting || '', '👉 Todos os itens do post, com link direto:\n' + location.origin + m.page_path, m.closing || '']
+        .filter(function (s) { return String(s).trim(); }).join('\n\n');
+    }
     var items = m.items.filter(function (x) { return x.link; });
     return [m.greeting || '', items.map(function (x) { return '- ' + String(x.name || '').trim() + '\n' + x.link; }).join('\n\n'), m.closing || '']
       .filter(function (s) { return String(s).trim(); }).join('\n\n');
@@ -1495,6 +1504,7 @@
       '<div class="field"><label for="ml-close">Despedida</label><textarea id="ml-close" class="mlshort">' + esc(m.closing || '') + '</textarea></div>' +
       (noLink ? '<p class="err small">' + noLink + ' produto' + (noLink > 1 ? 's' : '') + ' sem link ficou de fora. Use Editar no produto para colar o link de afiliado.</p>' : '') +
       (noAff ? '<p class="err small">' + noAff + ' produto' + (noAff > 1 ? 's estão' : ' está') + ' com o link comum da loja: sem o link de afiliado você não ganha a comissão.</p>' : '') +
+      (m.page_path ? '<label class="check"><input type="checkbox" id="ml-aspage"' + (m.asPage ? ' checked' : '') + '> Mandar <b>um link só</b>: a página do post na sua vitrine, com foto e botão de cada item</label>' : '') +
       '<div class="field"><label for="ml-out">Mensagem pronta</label><textarea id="ml-out" readonly>' + esc(msg) + '</textarea></div>' +
       '<div class="row end"><button type="button" class="btn" data-act="ml-close">Fechar</button>' +
       '<button type="button" class="btn" data-act="ml-save">' + (m.id ? 'Salvar alterações' : 'Salvar lista') + '</button>' +
@@ -1507,6 +1517,7 @@
       ? '<p class="hint">Nenhuma lista salva ainda. Em Produtos, marque os itens do post com <b>Juntar</b>, toque em <b>💌 Mensagem com links</b> e depois em <b>Salvar lista</b>.</p>'
       : mlLists.map(function (l) {
         return '<div class="linkitem"><div class="row"><div class="grow"><b>' + esc(l.name) + '</b><p class="hint" style="margin:2px 0 0">' + l.items.length + ' produto' + (l.items.length === 1 ? '' : 's') + ' · salva ' + ago(l.updated_at) + '</p></div>' +
+          (l.page_path ? '<button type="button" class="btn small" data-mlpage="' + esc(l.page_path) + '">🔗 Copiar página</button>' : '') +
           '<button type="button" class="btn small primary" data-mlopen="' + l.id + '">Abrir</button><button type="button" class="btn small ghost" data-mldrop="' + l.id + '">Excluir</button></div></div>';
       }).join('');
     dlg.innerHTML = '<h2>💌 Listas de links</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' + body +
@@ -1522,6 +1533,7 @@
     if (t.id === 'ml-name') mlist.name = t.value;
     else if (t.id === 'ml-open') mlist.greeting = t.value;
     else if (t.id === 'ml-close') mlist.closing = t.value;
+    else if (t.id === 'ml-aspage') { mlist.asPage = t.checked; prefSet('mlAsPage', t.checked ? '1' : ''); }
     else if (t.dataset && t.dataset.mli != null) mlist.items[Number(t.dataset.mli)].name = t.value;
     else return;
     var msg = linksMessage(mlist);
@@ -1539,7 +1551,9 @@
       mlist.items.splice(Number(b.dataset.mldel), 1); renderLinksMsg();
     } else if (mlLists && b.dataset.mlopen) {
       var l = mlLists.filter(function (x) { return x.id === Number(b.dataset.mlopen); })[0];
-      if (l) openLinksMsg({ id: l.id, name: l.name, greeting: l.greeting == null ? prefGet('mlOpen', ML_OPEN) : l.greeting, closing: l.closing == null ? prefGet('mlClose', ML_CLOSE) : l.closing, items: l.items.slice() });
+      if (l) openLinksMsg({ id: l.id, page_path: l.page_path, asPage: Boolean(l.page_path && prefGet('mlAsPage', '')), name: l.name, greeting: l.greeting == null ? prefGet('mlOpen', ML_OPEN) : l.greeting, closing: l.closing == null ? prefGet('mlClose', ML_CLOSE) : l.closing, items: l.items.slice() });
+    } else if (mlLists && b.dataset.mlpage) {
+      copyText(location.origin + b.dataset.mlpage).then(function (ok) { toast(ok ? 'Link da página copiado! Use no Story, no Direct ou no WhatsApp.' : location.origin + b.dataset.mlpage); });
     } else if (mlLists && b.dataset.mldrop) {
       var d = mlLists.filter(function (x) { return x.id === Number(b.dataset.mldrop); })[0];
       if (d && confirm('Excluir a lista "' + d.name + '"? Os produtos continuam salvos.')) {
@@ -1574,7 +1588,186 @@
       var body = { name: m.name, greeting: m.greeting, closing: m.closing, items: m.items.map(function (x) { return { product_id: x.product_id, name: x.name }; }) };
       return api(m.id ? 'PUT' : 'POST', '/api/link-lists' + (m.id ? '/' + m.id : ''), body).then(function (r) {
         if (mlist !== m) return;
-        m.id = r.list.id; toast('Lista salva. Ela fica em Produtos → 💌 Listas de links.'); renderLinksMsg();
+        m.id = r.list.id; m.page_path = r.list.page_path; toast('Lista salva. Ela fica em Produtos → 💌 Listas de links.'); renderLinksMsg();
+      });
+    },
+  });
+
+  /* ---------- Vitrine (mini site da bio): configuração, categorias e produtos ---------- */
+  var VIT_THEMES = [['rosa', '#C2496A', 'Rosa'], ['creme', '#9C6B30', 'Creme'], ['salvia', '#4F7A58', 'Sálvia'], ['azul', '#2F5D8E', 'Azul'], ['lavanda', '#7451A8', 'Lavanda'], ['preto', '#161616', 'Preto']];
+  var VIT_SUGG = [['🍳', 'Cozinha'], ['🛁', 'Banheiro'], ['☕', 'Cantinho do café'], ['🏠', 'Casa e decoração'], ['👗', 'Moda'], ['💄', 'Beleza'], ['🧸', 'Infantil'], ['📱', 'Tech'], ['🔥', 'Mais pedidos']];
+  var vpick = null; // escolha de produtos de uma categoria: { id, name, items: [ids], q }
+
+  function loadVitrine() {
+    if (state.vitLoading) return;
+    state.vitLoading = true;
+    api('GET', '/api/vitrine').then(function (r) { state.vit = r; }, function (e) { state.vit = { error: e.message }; })
+      .then(function () { state.vitLoading = false; render(); });
+  }
+  function productById(id) { return state.products.filter(function (p) { return p.id === id; })[0]; }
+
+  function viewVitrine() {
+    var v = state.vit;
+    if (!v) { loadVitrine(); return '<p class="hint">Carregando a vitrine…</p>'; }
+    if (v.error) return '<p class="err">' + esc(v.error) + '</p>';
+    var s = v.store;
+    var theme = state.vitTheme || (s && s.theme) || 'rosa';
+    var f = function (id, label, val, attrs, hint) {
+      return '<div class="field"><label for="' + id + '">' + label + '</label><input id="' + id + '" name="' + id.replace('vf-', '') + '" type="text" value="' + esc(val == null ? '' : val) + '" ' + (attrs || '') + '>' + (hint ? '<p class="hint">' + hint + '</p>' : '') + '</div>';
+    };
+    var host = location.host;
+    var form = '<form class="stack" id="vit-form" autocomplete="off">' +
+      '<div class="field"><label for="vf-slug">Endereço da vitrine</label><div class="vslug"><span>' + esc(host) + '/v/</span><input id="vf-slug" name="slug" type="text" required value="' + esc(s ? s.slug : v.suggestion) + '" placeholder="anninha-achados" autocapitalize="none" spellcheck="false"></div><p class="hint">Letras minúsculas, números e hífen. É o link que vai na sua bio.</p></div>' +
+      f('vf-title', 'Nome que aparece no topo', s ? s.title : '', 'required maxlength="60" placeholder="Ex.: Achadinhos da Anninha"') +
+      '<div class="field"><label for="vf-bio">Frase de apresentação</label><textarea id="vf-bio" name="bio" maxlength="200" class="mlshort" placeholder="Ex.: Achadinhos de casa, cozinha e beleza que eu testei e amei 💖">' + esc(s && s.bio || '') + '</textarea></div>' +
+      '<div class="field"><label>Cor da vitrine</label><div class="swatches">' + VIT_THEMES.map(function (t) {
+        return '<button type="button" class="sw' + (theme === t[0] ? ' on' : '') + '" data-act="vit-theme" data-theme="' + t[0] + '" style="background:' + t[1] + '" title="' + t[2] + '" aria-label="Cor ' + t[2] + '" aria-pressed="' + (theme === t[0]) + '"></button>';
+      }).join('') + '</div></div>' +
+      '<div class="cols">' + f('vf-instagram', 'Seu @ no Instagram', s ? s.instagram : (state.conn && state.conn.username) || '', 'placeholder="anninhaachadinhospraticos"') +
+      f('vf-avatar_url', 'Foto (link, opcional)', s ? s.avatar_url : '', 'placeholder="https://…"', 'Sem foto, aparecem as suas iniciais.') + '</div>' +
+      '<div class="cols">' + f('vf-whatsapp_url', 'Grupo/canal do WhatsApp (opcional)', s ? s.whatsapp_url : '', 'placeholder="https://chat.whatsapp.com/…"') +
+      f('vf-telegram_url', 'Canal do Telegram (opcional)', s ? s.telegram_url : '', 'placeholder="https://t.me/…"') + '</div>' +
+      '<label class="check"><input type="checkbox" id="vf-published"' + (s && s.published ? ' checked' : '') + '> <b>Vitrine publicada</b> (qualquer pessoa com o link vê)</label>' +
+      '<p class="err" id="vit-err" role="alert"></p><button class="btn primary" type="submit">' + (s ? 'Salvar' : 'Criar minha vitrine') + '</button></form>';
+
+    if (!s) {
+      return '<section class="card"><h3>Crie sua vitrine</h3><p class="hint">Uma página para o link da bio com os seus achadinhos separados por categoria. Quem clica no produto vai direto para a loja pelo seu link de afiliado.</p>' + form + '</section>';
+    }
+
+    var linkCard = '<section class="card vlink"><div class="row"><span class="pill ' + (s.published ? 'posted' : '') + '">' + (s.published ? '● Publicada' : 'Rascunho: só você vê') + '</span><span class="grow"></span><span class="hint">' + (s.views || 0) + ' visita' + (s.views === 1 ? '' : 's') + '</span></div>' +
+      '<p class="vurl"><code>' + esc(s.url) + '</code></p>' +
+      '<div class="row"><button class="btn small primary" data-act="vit-copy">Copiar link</button><a class="btn small" href="' + esc(s.url) + '" target="_blank" rel="noopener">Abrir vitrine ↗</a>' +
+      (s.published ? '' : '<button class="btn small" data-act="vit-publish">Publicar agora</button>') + '</div>' +
+      '<details class="sched"><summary>Como colocar na bio do Instagram</summary><ol class="steps"><li>No Instagram, toque em <b>Editar perfil → Links → Adicionar link externo</b>.</li><li>Cole o link da vitrine e dê o título "Meus achadinhos".</li><li>Na legenda dos posts, use: <i>"Link na bio 💖"</i> ou <i>"Comenta EU QUERO"</i>.</li></ol></details></section>';
+
+    var secs = v.sections;
+    var used = {}; secs.forEach(function (x) { used[x.name.toLowerCase()] = true; });
+    var sugg = VIT_SUGG.filter(function (x) { return !used[x[1].toLowerCase()]; }).slice(0, 6);
+    var secList = secs.map(function (x, i) {
+      var ps = x.items.map(productById).filter(Boolean);
+      var clicks = ps.reduce(function (n, p) { return n + (p.vitrine_clicks || 0); }, 0);
+      return '<div class="vsec"><div class="row"><span class="vem">' + esc(x.emoji || '🛍️') + '</span><div class="grow"><b>' + esc(x.name) + '</b><p class="hint" style="margin:2px 0 0">' + ps.length + ' produto' + (ps.length === 1 ? '' : 's') + (clicks ? ' · 👆 ' + clicks + ' clique' + (clicks === 1 ? '' : 's') : '') + (x.description ? ' · ' + esc(x.description) : '') + '</p></div>' +
+        '<div class="mlbtns"><button class="btn small ghost" data-act="vit-move" data-id="' + x.id + '" data-dir="-1" aria-label="Subir"' + (i ? '' : ' disabled') + '>↑</button><button class="btn small ghost" data-act="vit-move" data-id="' + x.id + '" data-dir="1" aria-label="Descer"' + (i < secs.length - 1 ? '' : ' disabled') + '>↓</button>' +
+        '<button class="btn small ghost" data-act="vit-edit" data-id="' + x.id + '">Editar</button><button class="btn small ghost" data-act="vit-del" data-id="' + x.id + '" aria-label="Excluir categoria">✕</button></div></div>' +
+        (ps.length ? '<div class="vthumbs">' + ps.slice(0, 8).map(function (p) { return thumb(p, true); }).join('') + (ps.length > 8 ? '<span class="hint">+' + (ps.length - 8) + '</span>' : '') + '</div>' : '') +
+        '<div class="row"><button class="btn small primary" data-act="vit-pick" data-id="' + x.id + '">' + (ps.length ? 'Escolher e ordenar produtos' : '+ Escolher produtos') + '</button></div></div>';
+    }).join('');
+
+    return linkCard +
+      '<section class="card"><div class="row"><h3 class="grow" style="margin:0">Categorias</h3><button class="btn small primary" data-act="vit-new">+ Nova categoria</button></div>' +
+      (sugg.length ? '<div class="filters" style="padding:0"><span class="hint">Sugestões:</span>' + sugg.map(function (x) { return '<button type="button" class="chip small" data-act="vit-sugg" data-emoji="' + esc(x[0]) + '" data-name="' + esc(x[1]) + '">' + esc(x[0] + ' ' + x[1]) + '</button>'; }).join('') + '</div>' : '') +
+      (secList || '<p class="hint">Nenhuma categoria ainda. Crie a primeira (ex.: Cozinha) e escolha os produtos que entram nela.</p>') + '</section>' +
+      '<section class="card"><h3>Páginas dos posts</h3><p class="hint">Cada lista salva em <b>💌 Mensagem com links</b> vira uma página com os itens do post e aparece na vitrine em "Dos últimos posts". Abra em Produtos → 💌 Listas de links → Copiar página.</p></section>' +
+      '<section class="card"><details class="sched"' + (secs.length ? '' : ' open') + '><summary>Configurações da vitrine</summary>' + form + '</details></section>';
+  }
+
+  /** Lê o formulário da vitrine. */
+  function vitFormData() {
+    var g = function (id) { var el = $('#' + id); return el ? el.value : ''; };
+    var s = state.vit.store;
+    return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || 'rosa',
+      instagram: g('vf-instagram'), avatar_url: g('vf-avatar_url'), whatsapp_url: g('vf-whatsapp_url'), telegram_url: g('vf-telegram_url'),
+      published: Boolean(($('#vf-published') || {}).checked) };
+  }
+  function saveVitrine(data) {
+    return api('PUT', '/api/vitrine', data).then(function () { state.vit = null; state.vitTheme = null; toast('Vitrine salva'); render(); });
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.target.id !== 'vit-form') return;
+    e.preventDefault();
+    saveVitrine(vitFormData()).catch(function (err) { var el = $('#vit-err'); if (el) el.textContent = err.message; });
+  });
+
+  function sectionById(id) { return state.vit.sections.filter(function (x) { return x.id === Number(id); })[0]; }
+  function sectionDialog(x, preset) {
+    x = x || {};
+    preset = preset || {};
+    openDialog(x.id ? 'Editar categoria' : 'Nova categoria',
+      '<div class="cols"><div class="field" style="flex:0 0 90px"><label for="emoji">Emoji</label><input id="emoji" name="emoji" type="text" maxlength="8" value="' + esc(x.emoji || preset.emoji || '') + '" placeholder="🍳"></div>' +
+      '<div class="field"><label for="name">Nome</label><input id="name" name="name" type="text" maxlength="40" required value="' + esc(x.name || preset.name || '') + '" placeholder="Ex.: Cozinha"></div></div>' +
+      '<div class="field"><label for="description">Descrição curta (opcional)</label><input id="description" name="description" type="text" maxlength="140" value="' + esc(x.description || '') + '" placeholder="Ex.: Potes, organizadores e utensílios que facilitam o dia a dia"></div>',
+      x.id ? 'Salvar' : 'Criar e escolher produtos',
+      function (d) {
+        return api(x.id ? 'PUT' : 'POST', '/api/vitrine/sections' + (x.id ? '/' + x.id : ''), d).then(function (r) {
+          if (x.id) { state.vit = null; render(); return null; }
+          state.vit.sections.push(r.section); render();
+          setTimeout(function () { openPicker(r.section); }, 0);
+          return null;
+        });
+      });
+  }
+
+  /* escolha de produtos da categoria */
+  function openPicker(sec) {
+    vpick = { id: sec.id, name: sec.name, items: sec.items.slice(), q: '' };
+    dlg.innerHTML = '<h2>' + esc((sec.emoji ? sec.emoji + ' ' : '') + sec.name) + '</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' +
+      '<input id="vp-q" type="search" placeholder="Buscar nos seus produtos…" aria-label="Buscar produtos" autocomplete="off">' +
+      '<div id="vp-body"></div>' +
+      '<div class="row end"><button type="button" class="btn" data-act="vp-cancel">Cancelar</button><button type="button" class="btn primary" data-act="vp-save">Salvar</button></div></div>';
+    renderPicker();
+    if (!dlg.open) dlg.showModal();
+  }
+  function renderPicker() {
+    var body = $('#vp-body', dlg); if (!body || !vpick) return;
+    var inSet = {}; vpick.items.forEach(function (id) { inSet[id] = true; });
+    var chosen = vpick.items.map(productById).filter(Boolean);
+    var q = normTxt(vpick.q);
+    var rest = state.products.filter(function (p) { return !inSet[p.id] && (!q || normTxt(p.title + ' ' + (p.category || '')).indexOf(q) > -1); }).slice(0, 60);
+    var row = function (p, i, inside) {
+      return '<div class="mlitem vpitem">' + thumb(p, true) + '<div class="grow"><b class="vpt">' + esc(p.title) + '</b><p class="hint" style="margin:2px 0 0">' + brl(p.price) + (p.affiliate_url ? '' : ' · <span class="err">sem link de afiliado</span>') + (p.vitrine_clicks ? ' · 👆 ' + p.vitrine_clicks : '') + '</p></div>' +
+        (inside ? '<div class="mlbtns"><button type="button" class="btn small ghost" data-vpmove="' + i + '" data-dir="-1" aria-label="Subir"' + (i ? '' : ' disabled') + '>↑</button><button type="button" class="btn small ghost" data-vpmove="' + i + '" data-dir="1" aria-label="Descer"' + (i < chosen.length - 1 ? '' : ' disabled') + '>↓</button><button type="button" class="btn small ghost" data-vpdel="' + p.id + '" aria-label="Tirar">✕</button></div>'
+          : '<button type="button" class="btn small" data-vpadd="' + p.id + '">+ Adicionar</button>') + '</div>';
+    };
+    var inside = '<p class="lblsm">Na categoria (' + chosen.length + ') <span class="hint">· a ordem aqui é a ordem na vitrine</span></p>' +
+      '<div class="mllist">' + (chosen.map(function (p, i) { return row(p, i, true); }).join('') || '<p class="hint">Nenhum ainda. Busque e adicione.</p>') + '</div>';
+    var add = '<p class="lblsm">Adicionar' + (q ? ' · resultados para "' + esc(vpick.q) + '"' : '') + '</p>' +
+      '<div class="mllist">' + (rest.map(function (p) { return row(p, 0, false); }).join('') || '<p class="hint">Nenhum produto encontrado.</p>') + '</div>';
+    // buscando: resultados primeiro, para ver o que dá para adicionar
+    body.innerHTML = q ? add + inside : inside + add;
+  }
+  dlg.addEventListener('input', function (e) { if (vpick && e.target.id === 'vp-q') { vpick.q = e.target.value; renderPicker(); } });
+  dlg.addEventListener('click', function (e) {
+    if (!vpick) return;
+    var b = e.target.closest && e.target.closest('button'); if (!b) return;
+    if (b.dataset.vpadd) { vpick.items.push(Number(b.dataset.vpadd)); renderPicker(); }
+    else if (b.dataset.vpdel) { vpick.items = vpick.items.filter(function (id) { return id !== Number(b.dataset.vpdel); }); renderPicker(); }
+    else if (b.dataset.vpmove != null) {
+      var list = vpick.items.filter(function (id) { return productById(id); });
+      var i = Number(b.dataset.vpmove), j = i + Number(b.dataset.dir);
+      if (j < 0 || j >= list.length) return;
+      var it = list.splice(i, 1)[0]; list.splice(j, 0, it); vpick.items = list; renderPicker();
+    }
+  });
+  dlg.addEventListener('close', function () { vpick = null; });
+
+  Object.assign(actions, {
+    'vit-theme': function (t) {
+      state.vitTheme = t.dataset.theme;
+      document.querySelectorAll('[data-act="vit-theme"]').forEach(function (b) { var on = b.dataset.theme === state.vitTheme; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    },
+    'vit-copy': function () { return copyText(state.vit.store.url).then(function (ok) { toast(ok ? 'Link copiado! Cole na bio do Instagram.' : state.vit.store.url); }); },
+    'vit-publish': function () { var s = state.vit.store; return saveVitrine(Object.assign({}, s, { published: true })); },
+    'vit-new': function () { sectionDialog(null); },
+    'vit-sugg': function (t) { sectionDialog(null, { emoji: t.dataset.emoji, name: t.dataset.name }); },
+    'vit-edit': function (t) { sectionDialog(sectionById(t.dataset.id)); },
+    'vit-del': function (t) {
+      var x = sectionById(t.dataset.id);
+      if (!x || !confirm('Excluir a categoria "' + x.name + '"? Os produtos continuam salvos.')) return null;
+      return api('DELETE', '/api/vitrine/sections/' + x.id).then(function () { state.vit = null; toast('Categoria excluída'); render(); });
+    },
+    'vit-move': function (t) {
+      var secs = state.vit.sections, i = secs.indexOf(sectionById(t.dataset.id)), j = i + Number(t.dataset.dir);
+      if (i < 0 || j < 0 || j >= secs.length) return null;
+      var it = secs.splice(i, 1)[0]; secs.splice(j, 0, it); render();
+      return api('PUT', '/api/vitrine/order', { ids: secs.map(function (x) { return x.id; }) });
+    },
+    'vit-pick': function (t) { openPicker(sectionById(t.dataset.id)); },
+    'vp-cancel': function () { dlg.close(); },
+    'vp-save': function () {
+      var p = vpick;
+      return api('PUT', '/api/vitrine/sections/' + p.id, { items: p.items.filter(function (id) { return productById(id); }) }).then(function (r) {
+        var x = sectionById(p.id); if (x) x.items = r.section.items;
+        dlg.close(); toast('Categoria salva'); render();
       });
     },
   });
@@ -2123,6 +2316,7 @@
     if (d.copylink) { copyText(d.copylink); toast('Link copiado'); return null; }
     if (d.walink) { var wt = '🛍️ *' + d.waname + '* na Shopee\n👉 ' + d.walink; copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return null; }
     if (d.gview) { state.gview = d.gview; prefSet('gview', d.gview); return render(); }
+    if (d.pv) { state.pv = d.pv; prefSet('pv', d.pv); if (d.pv === 'vitrine') state.vit = null; return render(); }
     if (d.cpch) { state.cp.msgChannel = d.cpch; return loadCouponMsg().then(render); }
     if (d.cpedit) { return cpEditDialog(state.cp.items.filter(function (c) { return c.id === Number(d.cpedit); })[0]); }
     if (d.cptoggle) { var cc = state.cp.items.filter(function (c) { return c.id === Number(d.cptoggle); })[0]; return api('PATCH', '/api/coupons/' + cc.id, { active: !cc.active }).then(loadCoupons).then(render); }

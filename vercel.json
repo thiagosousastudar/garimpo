@@ -3,7 +3,11 @@
   "framework": null,
   "regions": ["gru1"],
   "outputDirectory": "public",
-  "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }],
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/r/(.*)", "destination": "/api" },
+    { "source": "/v/(.*)", "destination": "/api" }
+  ],
   "functions": { "api/index.js": { "maxDuration": 60 } },
   "headers": [
     {

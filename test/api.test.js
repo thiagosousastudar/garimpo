@@ -2168,3 +2168,81 @@ test('listas de links: salva os produtos de um post com nome curto, devolve o li
     assert.equal((await a('GET', '/api/link-lists')).data.lists.length, 0);
   } finally { t.close(); }
 });
+
+test('vitrine: mini site da bio com categorias, prévia só para a dona, clique contado e página do post', async () => {
+  const t = await boot();
+  const base = `http://127.0.0.1:${t.server.address().port}`;
+  const html = async (url, headers = {}) => { const r = await fetch(base + url, { headers, redirect: 'manual' }); return { status: r.status, text: await r.text(), location: r.headers.get('location') }; };
+  try {
+    const a = t.client();
+    await signup(a);
+    const mk = async (title, extra = {}) => (await a('POST', '/api/products', { ...PRODUTO, marketplace: 'SH', title, product_url: `https://shopee.com.br/product/1/${title.length}${Math.random()}`, ...extra })).data.product;
+    const p1 = await mk('Pote hermético <b>1,5L</b>', { affiliate_url: 'https://s.shopee.com.br/POTE1', original_price: 59.9, price: '29,90' });
+    const p2 = await mk('Porta-frios', { affiliate_url: 'https://s.shopee.com.br/FRIOS2' });
+
+    assert.equal((await a('PUT', '/api/vitrine', { slug: 'API', title: 'X' })).status, 400);
+    assert.equal((await a('PUT', '/api/vitrine', { slug: 'api', title: 'X' })).status, 400);
+    assert.equal((await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'X', whatsapp_url: 'https://evil.com/x' })).status, 400);
+    const sv = await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Achadinhos <da> Anninha', bio: 'Casa & cozinha', theme: 'salvia', instagram: '@anninha', whatsapp_url: 'https://chat.whatsapp.com/ABC', published: false });
+    assert.equal(sv.status, 200, JSON.stringify(sv.data));
+    assert.equal(sv.data.url, 'https://app.exemplo.com/v/anninha');
+
+    const s1 = await a('POST', '/api/vitrine/sections', { name: 'Cozinha', emoji: '🍳', items: [p1.id, p2.id] });
+    assert.equal(s1.status, 200, JSON.stringify(s1.data));
+    const s2 = await a('POST', '/api/vitrine/sections', { name: 'Banheiro' });
+    assert.deepEqual((await a('GET', '/api/vitrine')).data.sections.map((x) => x.name), ['Cozinha', 'Banheiro']);
+    await a('PUT', '/api/vitrine/order', { ids: [s2.data.section.id, s1.data.section.id] });
+    assert.deepEqual((await a('GET', '/api/vitrine')).data.sections.map((x) => x.name), ['Banheiro', 'Cozinha']);
+
+    // rascunho: visitante não vê; a dona vê como prévia
+    assert.equal((await html('/v/anninha')).status, 404);
+    const cookie = { cookie: 'garimpo_session=' + require('jsonwebtoken').sign({ uid: p1.user_id }, t.cfg.jwtSecret) };
+    const pv = await html('/v/anninha', cookie);
+    assert.equal(pv.status, 200);
+    assert.match(pv.text, /Prévia: só você vê/);
+
+    // outro usuário não pega o mesmo endereço nem usa produto alheio
+    const b = t.client();
+    await signup(b, 'b@exemplo.com');
+    assert.equal((await b('PUT', '/api/vitrine', { slug: 'anninha', title: 'Outra' })).status, 409);
+    assert.equal((await b('POST', '/api/vitrine/sections', { name: 'X', items: [p1.id] })).status, 400);
+    assert.equal((await b('PUT', `/api/vitrine/sections/${s1.data.section.id}`, { name: 'hack' })).status, 404);
+
+    await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Achadinhos <da> Anninha', bio: 'Casa & cozinha', theme: 'salvia', instagram: 'anninha', published: true });
+    const pg = await html('/v/anninha');
+    assert.equal(pg.status, 200);
+    assert.match(pg.text, /Achadinhos &lt;da&gt; Anninha/);
+    assert.match(pg.text, /Pote hermético &lt;b&gt;1,5L&lt;\/b&gt;/);
+    assert.ok(!pg.text.includes('<b>1,5L</b>'));
+    assert.match(pg.text, /−50%/);
+    assert.match(pg.text, /R\$\s?29,90/);
+    assert.ok(!/comiss[aã]o de|commission/i.test(pg.text.replace(/posso ganhar uma comissão/, '')));
+    assert.ok(!pg.text.includes('POTE1'), 'o link de afiliado passa pelo /ir, não aparece cru');
+    assert.match(pg.text, /href="\/v\/anninha\/ir\/\d+"/);
+    assert.match(pg.text, /Cozinha/);
+    assert.ok(!pg.text.includes('id="c' + s2.data.section.id + '"'), 'categoria vazia não aparece');
+
+    // clique: gente conta, robô não
+    const go = await html(`/v/anninha/ir/${p1.id}`, { 'user-agent': 'Mozilla/5.0 (iPhone)' });
+    assert.equal(go.status, 302);
+    assert.equal(go.location, 'https://s.shopee.com.br/POTE1');
+    await html(`/v/anninha/ir/${p1.id}`, { 'user-agent': 'facebookexternalhit/1.1' });
+    const prods = (await a('GET', '/api/products')).data;
+    const list = Array.isArray(prods) ? prods : prods.products || prods.items;
+    assert.equal(list.find((x) => x.id === p1.id).vitrine_clicks, 1);
+    assert.equal((await html(`/v/anninha/ir/999999`)).status, 404);
+
+    // página do post (lista salva)
+    const ll = await a('POST', '/api/link-lists', { name: 'Carrossel cozinha', items: [{ product_id: p2.id, name: 'Porta-frios' }, { product_id: p1.id, name: 'Pote com colher' }] });
+    assert.equal(ll.data.list.page_path, `/v/anninha/p/${ll.data.list.id}`);
+    const post = await html(ll.data.list.page_path);
+    assert.equal(post.status, 200);
+    assert.match(post.text, /1\. Porta-frios[\s\S]*2\. Pote com colher/);
+    assert.match((await html('/v/anninha')).text, /Dos últimos posts[\s\S]*Carrossel cozinha/);
+    // lista de outro usuário não abre pela vitrine
+    const lb = await b('POST', '/api/products', { ...PRODUTO, title: 'Do B' });
+    const bl = await b('POST', '/api/link-lists', { name: 'B', items: [{ product_id: lb.data.product.id }] });
+    assert.equal((await html(`/v/anninha/p/${bl.data.list.id}`)).status, 404);
+    assert.equal((await html('/v/nao-existe')).status, 404);
+  } finally { t.close(); }
+});
