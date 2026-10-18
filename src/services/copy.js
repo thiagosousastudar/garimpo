@@ -222,25 +222,59 @@ function mascTags(p) {
   return [...new Set(all)].join(' ');
 }
 
+/** "R$ 78" quando o valor é redondo, senão "R$ 77,90". */
+function brlClean(v) {
+  const n = Math.round(Number(v) * 100) / 100;
+  return Number.isInteger(n) ? 'R$ ' + n.toLocaleString('pt-BR') : brl(n);
+}
+
+/** Nome curto em caixa alta: "CAMISETA BÁSICA DA OGOCHI" (com a marca, se houver) ou as 3 primeiras palavras. */
+function cleanHeadline(p) {
+  const brand = String(details(p).brand || '').trim();
+  const stop = /^(de|da|do|das|dos|com|para|e|em|a|o|p\/|kit)$/i;
+  const words = String(p.title || '').replace(/[|,(\[].*$/, '').split(/\s+/).filter((w) => w && (!brand || w.toLowerCase() !== brand.toLowerCase()));
+  const head = words.slice(0, brand ? 2 : 3);
+  while (head.length > 1 && stop.test(head[head.length - 1])) head.pop();
+  return (head.join(' ') + (brand ? ` da ${brand}` : '')).toLocaleUpperCase('pt-BR');
+}
+
+/** Cupom no estilo limpo: com código, "Use o cupom X e ganhe 10% OFF"; sem código, "Aplique o cupom de 10% OFF no anúncio". */
+function cleanCouponLine(c) {
+  const off = c.kind === 'value' ? `${brlClean(c.amount)} OFF` : `${Number(c.amount)}% OFF`;
+  return c.code ? `Use o cupom *${c.code}* e ganhe *${off}* 🎟️` : `Aplique o cupom de *${off}* no anúncio 🎟️`;
+}
+
+/** Selo de confiança numa linha: loja oficial; senão avaliação e vendas; senão frete grátis. */
+function cleanTrust(p) {
+  const d = details(p);
+  if (d.official_store) return `Loja Oficial ${p.marketplace === 'ML' ? 'no ML' : 'na Shopee'}`;
+  const a = [Number(p.rating) >= 4.5 ? `Avaliação ★ ${Number(p.rating).toFixed(1).replace('.', ',')}` : '', salesText(p.sales_k)].filter(Boolean);
+  if (a.length) return a.join(' · ');
+  return d.free_shipping ? 'Frete grátis' : '';
+}
+
+/** Preço do estilo limpo: "De R$ 78 Por R$ 54" (com desconto, mesmo com opções), "A partir de R$ 54" ou "Por R$ 54". */
+function cleanPrice(p) {
+  const { desc } = scoreProduct(p);
+  if (desc > 0 && p.original_price) return `De ${brlClean(p.original_price)} Por ${brlClean(p.price)}`;
+  return details(p).price_max > Number(p.price) ? `A partir de ${brlClean(p.price)}` : `Por ${brlClean(p.price)}`;
+}
+
 function mascCopy(p, channel) {
   if (channel === 'whatsapp') {
-    const { desc } = scoreProduct(p);
-    const off = desc > 0 && p.original_price;
     const from = details(p).price_max > Number(p.price);
+    const trust = cleanTrust(p);
     return [
-      off && desc >= 30 ? pick(M_WA_HOOKS_DISCOUNT) : pick(M_WA_HOOKS),
+      cleanHeadline(p),
+      ...(from ? ['_várias opções disponíveis_'] : []),
       '',
-      `📦 *${p.title}*`,
+      p.title,
       '',
-      ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 ${from ? 'A partir de' : 'Por'}: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 ${from ? 'A partir de' : 'Por apenas'}: *${brl(p.price)}*`]),
-      ...(from ? ['📦 Tem opções: o preço muda conforme a escolha'] : []),
-      ...(p._coupon ? [couponLine(p._coupon, 'whatsapp')] : []),
-      ...waPerks(p),
+      cleanPrice(p),
+      ...(p._coupon ? [cleanCouponLine(p._coupon)] : []),
       '',
-      `👉 ${p.affiliate_url || PLACEHOLDER}`,
-      '',
-      pick(M_WA_CLOSERS),
-      ...(p._site ? ['', `🛒 Mais achados: ${p._site.url}`] : []),
+      ...(trust ? [trust] : []),
+      p.affiliate_url || PLACEHOLDER,
     ].join('\n');
   }
   return [
@@ -262,22 +296,7 @@ function mascCopy(p, channel) {
 function mascGroupCopy(list, channel) {
   const site = list[0] && list[0]._site;
   if (channel === 'whatsapp') {
-    return [
-      pick([`🔥 *${list.length} ACHADOS QUE VALEM A PENA!*`, `💪 *SEPAREI ${list.length} ACHADOS PRA VOCÊ!*`]),
-      '',
-      ...list.flatMap((p, i) => {
-        const { desc } = scoreProduct(p);
-        const off = desc > 0 && p.original_price;
-        return [
-          `${NUMS[i]} *${p.title}*`,
-          `💥 ${details(p).price_max > Number(p.price) ? 'a partir de ' : ''}*${brl(p.price)}*${off ? ` ~${brl(p.original_price)}~ (−${desc}%)` : ''}${details(p).free_shipping ? ' · 🚚 frete grátis' : ''}`,
-          `👉 ${p.affiliate_url || PLACEHOLDER}`,
-          '',
-        ];
-      }),
-      pick(M_WA_CLOSERS),
-      ...(site ? ['', `🛒 Mais achados: ${site.url}`] : []),
-    ].join('\n');
+    return list.map((p) => [cleanHeadline(p), cleanPrice(p), p.affiliate_url || PLACEHOLDER].join('\n')).join('\n\n');
   }
   const tags = [...new Set(list.flatMap((p) => mascTags(p).split(' ')))].slice(0, 12).join(' ');
   return [
@@ -337,6 +356,7 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
 async function buildCaption(p0, channel, opts) {
   const out = await buildCaptionRaw(opts.site ? { ...p0, _site: opts.site } : p0, channel, opts);
   const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
+  if (opts.tone === 'masculino' && channel === 'whatsapp' && out.source !== 'ia') return out;
   return { ...out, caption: withFollow(text, opts.follow, channel, opts.tone === 'masculino') };
 }
 
@@ -430,6 +450,7 @@ async function buildGroupCaption(list0, channel, opts) {
   const list = list0.map((p) => ({ ...p, ...(opts.site ? { _site: opts.site } : {}), ...(opts.tone === 'masculino' ? { _tone: 'masculino' } : {}) }));
   const out = await buildGroupCaptionRaw(list, channel, opts);
   const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
+  if (opts.tone === 'masculino' && channel === 'whatsapp' && out.source !== 'ia') return out;
   return { ...out, caption: withFollow(text, opts.follow, channel, opts.tone === 'masculino') };
 }
 

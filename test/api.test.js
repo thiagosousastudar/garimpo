@@ -2382,3 +2382,17 @@ test('contas ligadas: cria a conta masculina, troca sem senha, etiqueta da Shope
     assert.equal((await a('POST', '/api/auth/switch', { id: mascId })).status, 403);
   } finally { t.close(); }
 });
+
+test('conta masculina: WhatsApp no estilo limpo (caixa alta, De/Por sem centavos, selo e link no fim, sem convite)', async () => {
+  const { buildCaption } = require('../src/services/copy');
+  const p = { marketplace: 'ML', title: 'Camiseta Básica Ogochi Masculina Lisa (P ao XGG)', price: 54, original_price: 78, affiliate_url: 'https://meli.la/1VXkVTL',
+    extras: JSON.stringify({ brand: 'Ogochi', official_store: true, price_max: 59 }) };
+  const out = await buildCaption(p, 'whatsapp', { ai: false, cfg: {}, follow: 'blackbox', site: { label: 'x.com.br', url: 'https://x.com.br' }, tone: 'masculino',
+    coupons: [{ marketplace: 'ML', code: '', kind: 'percent', amount: 10, active: true }] });
+  assert.equal(out.caption, [
+    'CAMISETA BÁSICA DA OGOCHI', '_várias opções disponíveis_', '', 'Camiseta Básica Ogochi Masculina Lisa (P ao XGG)', '',
+    'De R$ 78 Por R$ 54', 'Aplique o cupom de *10% OFF* no anúncio 🎟️', '', 'Loja Oficial no ML', 'https://meli.la/1VXkVTL',
+  ].join('\n'));
+  const fem = await buildCaption(p, 'whatsapp', { ai: false, cfg: {}, follow: 'anninha', tone: undefined });
+  assert.match(fem.caption, /Segue a gente no Instagram/, 'a conta feminina continua igual');
+});
