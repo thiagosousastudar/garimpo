@@ -62,12 +62,37 @@ async function clientFor({ pool, cfg, fetchImpl, uid, marketplace }) {
   const conn = await loadConnection(pool, uid, marketplace);
   if (!conn) throw new HttpError(400, `Conecte a ${NAMES[marketplace] || 'loja'} na aba Conexões para garimpar.`);
   if (marketplace === 'SH') {
-    return createShopeeClient({ appId: conn.app_id, secret: decrypt(conn.secret_enc, cfg.encryptionKey), fetchImpl });
+    const client = createShopeeClient({ appId: conn.app_id, secret: decrypt(conn.secret_enc, cfg.encryptionKey), fetchImpl });
+    // etiqueta da conta (Sub ID) vai em todo link gerado: separa as vendas quando duas contas usam a mesma Shopee
+    const tag = (await pool.query('select sh_sub_id from users where id = $1', [uid])).rows[0]?.sh_sub_id || null;
+    if (tag) {
+      const orig = client.shortLink.bind(client);
+      client.shortLink = ({ url, subIds = [] }) => orig({ url, subIds: [tag, ...subIds.filter((x) => String(x).toLowerCase() !== tag)] });
+    }
+    client.subTag = tag;
+    return client;
   }
   const token = await mercadoLivreToken({ pool, cfg, fetchImpl, conn });
   const com = conn.default_commission === null ? null : Number(conn.default_commission);
   const zip = (await pool.query('select ship_zip from users where id = $1', [uid])).rows[0]?.ship_zip || null;
   return createMercadoLivreClient({ token, defaultCommission: com, commissionTable: commissionTableOf(conn), zip, fetchImpl });
+}
+
+/**
+ * Conta com etiqueta: troca o link de afiliado dos itens da Shopee (o da busca vem sem etiqueta) por um gerado
+ * com a etiqueta da conta. Se a Shopee falhar, fica o link original.
+ */
+async function tagShopeeLinks({ pool, cfg, fetchImpl, uid, items }) {
+  const sh = items.filter((it) => it && it.marketplace === 'SH' && it.product_url);
+  if (!sh.length) return items;
+  const tag = (await pool.query('select sh_sub_id from users where id = $1', [uid])).rows[0]?.sh_sub_id;
+  if (!tag) return items;
+  let client;
+  try { client = await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'SH' }); } catch (_) { return items; }
+  for (const it of sh) {
+    try { it.affiliate_url = await client.shortLink({ url: it.product_url }); } catch (_) { /* fica o link da busca */ }
+  }
+  return items;
 }
 
 /** Tabela de comissão do Mercado Livre por categoria principal: { "MLB5726": 6, ... }. */
@@ -214,4 +239,4 @@ async function freshData({ pool, cfg, fetchImpl, uid, product }) {
   return item;
 }
 
-module.exports = { externalIdFrom, search, trends, categories, enrich, freshData, clientFor, saveMercadoLivreTokens, loadConnection, applyCommissionTable, commissionTableOf, NAMES };
+module.exports = { tagShopeeLinks, externalIdFrom, search, trends, categories, enrich, freshData, clientFor, saveMercadoLivreTokens, loadConnection, applyCommissionTable, commissionTableOf, NAMES };

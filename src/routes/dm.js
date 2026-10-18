@@ -1,6 +1,6 @@
 const express = require('express');
 const { HttpError } = require('../util');
-const { settingsOf, syncUser, sendFor, autoSend, productsForMedia, buildMessage, DEFAULT_KEYWORDS, DEFAULT_TEMPLATE, WINDOW_MS } = require('../services/igdm');
+const { settingsOf, syncUser, sendFor, autoSend, productsForMedia, buildMessage, DEFAULT_KEYWORDS, DEFAULT_TEMPLATE, DEFAULT_TEMPLATE_M, WINDOW_MS } = require('../services/igdm');
 
 const STATUS = ['novo', 'enviado', 'erro', 'ignorado', 'fora_do_prazo', 'enviando'];
 
@@ -66,7 +66,7 @@ function directRoutes({ pool, cfg, fetchImpl }) {
 
   r.get('/settings', async (req, res) => {
     const s = settingsOf((await pool.query('select * from users where id = $1', [req.uid])).rows[0]);
-    res.json({ settings: s, defaults: { keywords: DEFAULT_KEYWORDS, template: DEFAULT_TEMPLATE } });
+    res.json({ settings: s, defaults: { keywords: DEFAULT_KEYWORDS, template: s.voice === 'masculino' ? DEFAULT_TEMPLATE_M : DEFAULT_TEMPLATE } });
   });
 
   r.put('/settings', async (req, res) => {

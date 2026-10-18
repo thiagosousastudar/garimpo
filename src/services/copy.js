@@ -146,6 +146,7 @@ function premiumCopy(p, channel) {
 
 function templateCopy(p, channel) {
   if (p._tone === 'premium') return premiumCopy(p, channel);
+  if (p._tone === 'masculino') return mascCopy(p, channel);
   const f = facts(p);
   if (channel === 'whatsapp') {
     const { desc } = scoreProduct(p);
@@ -205,9 +206,92 @@ function igProof(p) {
 }
 
 /** Chamada para a vitrine no Instagram: com domínio próprio mostra o endereço; sem ele, "link da bio". */
-function siteLine(site, lead) {
-  return site && site.label ? `🛍️ ${lead} ${site.label}` : '🛍️ Ou pega no link da bio';
+function siteLine(site, lead, icon = '🛍️') {
+  return site && site.label ? `${icon} ${lead} ${site.label}` : `${icon} Ou pega no link da bio`;
 }
+
+/* ---------- tom masculino: direto, sem corações, foco em custo-benefício ---------- */
+const M_IG_HOOKS = ['Achado do dia 🔥', 'Vale cada centavo 💪', 'Olha esse achado 👀', 'Esse aqui compensa 💯', 'Upgrade garantido ⚙️'];
+const M_WA_HOOKS = ['🔥 *ACHADO DO DIA!*', '💪 *VALE CADA CENTAVO!*', '👀 *OLHA ESSE ACHADO!*', '⚙️ *UPGRADE GARANTIDO!*'];
+const M_WA_HOOKS_DISCOUNT = ['💥 *PREÇO DERRUBADO!*', '🚨 *DESCONTO PESADO!*', '📉 *CAIU O PREÇO!*'];
+const M_WA_CLOSERS = ['⏰ Preço pode mudar a qualquer momento. Garante o seu! 👊', '🏃 Preço bom assim não dura. Aproveita! 👊', '💬 Pegou? Depois me conta o que achou! 👊'];
+
+function mascTags(p) {
+  const base = TAGS[String(p.category || '').toLowerCase()] || '';
+  const all = `${base} #achados #achadosmasculinos ${p.marketplace === 'ML' ? '#mercadolivre' : '#shopee'} #ofertas`.split(/\s+/).filter(Boolean);
+  return [...new Set(all)].join(' ');
+}
+
+function mascCopy(p, channel) {
+  if (channel === 'whatsapp') {
+    const { desc } = scoreProduct(p);
+    const off = desc > 0 && p.original_price;
+    const from = details(p).price_max > Number(p.price);
+    return [
+      off && desc >= 30 ? pick(M_WA_HOOKS_DISCOUNT) : pick(M_WA_HOOKS),
+      '',
+      `📦 *${p.title}*`,
+      '',
+      ...(off ? [`💸 De: ~${brl(p.original_price)}~`, `💥 ${from ? 'A partir de' : 'Por'}: *${brl(p.price)}* (−${desc}% OFF)`] : [`💥 ${from ? 'A partir de' : 'Por apenas'}: *${brl(p.price)}*`]),
+      ...(from ? ['📦 Tem opções: o preço muda conforme a escolha'] : []),
+      ...(p._coupon ? [couponLine(p._coupon, 'whatsapp')] : []),
+      ...waPerks(p),
+      '',
+      `👉 ${p.affiliate_url || PLACEHOLDER}`,
+      '',
+      pick(M_WA_CLOSERS),
+      ...(p._site ? ['', `🛒 Mais achados: ${p._site.url}`] : []),
+    ].join('\n');
+  }
+  return [
+    pick(M_IG_HOOKS),
+    '',
+    `📦 ${p.title}`,
+    '',
+    ...igPrice(p),
+    ...(p._coupon ? [couponLine(p._coupon, 'instagram')] : []),
+    ...igProof(p),
+    '',
+    '👉 Comenta EU QUERO que eu mando o link',
+    siteLine(p._site, 'Ou pega na vitrine:', '🛒'),
+    '',
+    mascTags(p),
+  ].join('\n');
+}
+
+function mascGroupCopy(list, channel) {
+  const site = list[0] && list[0]._site;
+  if (channel === 'whatsapp') {
+    return [
+      pick([`🔥 *${list.length} ACHADOS QUE VALEM A PENA!*`, `💪 *SEPAREI ${list.length} ACHADOS PRA VOCÊ!*`]),
+      '',
+      ...list.flatMap((p, i) => {
+        const { desc } = scoreProduct(p);
+        const off = desc > 0 && p.original_price;
+        return [
+          `${NUMS[i]} *${p.title}*`,
+          `💥 ${details(p).price_max > Number(p.price) ? 'a partir de ' : ''}*${brl(p.price)}*${off ? ` ~${brl(p.original_price)}~ (−${desc}%)` : ''}${details(p).free_shipping ? ' · 🚚 frete grátis' : ''}`,
+          `👉 ${p.affiliate_url || PLACEHOLDER}`,
+          '',
+        ];
+      }),
+      pick(M_WA_CLOSERS),
+      ...(site ? ['', `🛒 Mais achados: ${site.url}`] : []),
+    ].join('\n');
+  }
+  const tags = [...new Set(list.flatMap((p) => mascTags(p).split(' ')))].slice(0, 12).join(' ');
+  return [
+    `🔥 ${list.length} achados que valem a pena. Arrasta pro lado ➡️`,
+    '',
+    ...list.map((p, i) => `${NUMS[i]} ${groupLine(p)}`),
+    '',
+    '👉 Comenta o NÚMERO do produto que eu mando o link',
+    siteLine(site, 'Todos na vitrine:', '🛒'),
+    '',
+    tags,
+  ].join('\n');
+}
+
 
 async function aiCopy(p, channel, { cfg, fetchImpl }) {
   const dados = {
@@ -231,7 +315,8 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
     : channel === 'whatsapp'
       ? `Mensagem de WhatsApp da Anninha, como uma amiga animada que achou algo incrível: primeira linha em *negrito* e caixa alta com emoji, nome do produto em *negrito*, "De: ~preço original~" riscado (se houver) e "Por: *preço*", cada destaque numa linha com emoji (frete grátis, mais vendido etc., só se os dados disserem), depois a linha "👉 ${p.affiliate_url || PLACEHOLDER}" e um fechamento animado. Use a formatação do WhatsApp (*negrito*, ~riscado~). Sem prazos ou "tempo limitado" inventados; pode dizer que o preço pode mudar.`
       : 'Legenda de Instagram: gancho forte na primeira linha, 3 a 4 benefícios curtos com emojis, chamada para "link na bio", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
-  const prompt = `Escreva em português do Brasil. ${formato}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
+  const voz = p._tone === 'masculino' ? ' Tom masculino, direto, sem corações nem diminutivos.' : '';
+  const prompt = `Escreva em português do Brasil.${voz} ${formato}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
   const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -252,11 +337,11 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
 async function buildCaption(p0, channel, opts) {
   const out = await buildCaptionRaw(opts.site ? { ...p0, _site: opts.site } : p0, channel, opts);
   const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
-  return { ...out, caption: withFollow(text, opts.follow, channel) };
+  return { ...out, caption: withFollow(text, opts.follow, channel, opts.tone === 'masculino') };
 }
 
 async function buildCaptionRaw(p00, channel, { ai, cfg, fetchImpl, coupons, tone }) {
-  const p0 = tone === 'premium' ? { ...p00, _tone: 'premium' } : p00;
+  const p0 = tone === 'premium' || tone === 'masculino' ? { ...p00, _tone: tone } : p00;
   // cupom cadastrado que combina com o produto (mesma loja, compra mínima atendida) entra no texto
   const coupon = coupons && coupons.length ? bestCouponFor(p0, coupons) : null;
   const p = coupon ? { ...p0, _coupon: coupon } : p0;
@@ -285,6 +370,7 @@ function groupLine(p) {
 
 /** Texto de um post com vários produtos (carrossel no Instagram, lista no WhatsApp). */
 function templateGroupCopy(list, channel) {
+  if (list[0] && list[0]._tone === 'masculino') return mascGroupCopy(list, channel);
   if (channel === 'whatsapp') {
     return [
       pick([`🔥 *SEPAREI ${list.length} ACHADINHOS PRA VOCÊ!*`, `😍 *GENTE, OLHA ESSES ${list.length} ACHADOS!*`, `🚨 *${list.length} ACHADINHOS IMPERDÍVEIS NA ÁREA!*`]),
@@ -325,7 +411,8 @@ async function aiGroupCopy(list, channel, { cfg, fetchImpl }) {
   const formato = channel === 'whatsapp'
     ? 'Mensagem de WhatsApp listando os produtos numerados (1️⃣, 2️⃣...), cada um com preço e, na linha de baixo, "👉 " seguido do link exato informado. Tom de amigo, emojis moderados.'
     : 'Legenda de Instagram para um carrossel: gancho curto dizendo para arrastar pro lado, lista numerada (1️⃣, 2️⃣...) com nome curto e preço de cada produto, chamada "comenta o número que eu te mando o link", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
-  const prompt = `Escreva em português do Brasil. ${formato}\nUse SOMENTE os dados abaixo, na mesma ordem. Não invente especificações, cupons, prazos nem urgência.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
+  const voz = list[0] && list[0]._tone === 'masculino' ? ' Tom masculino, direto, sem corações nem diminutivos.' : '';
+  const prompt = `Escreva em português do Brasil.${voz} ${formato}\nUse SOMENTE os dados abaixo, na mesma ordem. Não invente especificações, cupons, prazos nem urgência.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
   const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
@@ -340,10 +427,10 @@ async function aiGroupCopy(list, channel, { cfg, fetchImpl }) {
 
 /** Texto para vários produtos. Mesmas regras do buildCaption: IA se pedida e configurada, senão modelo. */
 async function buildGroupCaption(list0, channel, opts) {
-  const list = opts.site ? list0.map((p) => ({ ...p, _site: opts.site })) : list0;
+  const list = list0.map((p) => ({ ...p, ...(opts.site ? { _site: opts.site } : {}), ...(opts.tone === 'masculino' ? { _tone: 'masculino' } : {}) }));
   const out = await buildGroupCaptionRaw(list, channel, opts);
   const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
-  return { ...out, caption: withFollow(text, opts.follow, channel) };
+  return { ...out, caption: withFollow(text, opts.follow, channel, opts.tone === 'masculino') };
 }
 
 async function buildGroupCaptionRaw(list, channel, { ai, cfg, fetchImpl }) {
@@ -356,6 +443,16 @@ async function buildGroupCaptionRaw(list, channel, { ai, cfg, fetchImpl }) {
   }
   const warning = ai && !cfg.anthropicKey ? 'ANTHROPIC_API_KEY não configurada. Usei o modelo padrão.' : undefined;
   return { caption: templateGroupCopy(list, channel), source: 'modelo', warning };
+}
+
+/* ---------- tom da conta ---------- */
+
+/** Tom do texto: o pedido pela tela (premium, masculino, feminino) ou, sem pedido, o tom da conta. */
+async function resolveTone(pool, uid, requested) {
+  if (requested === 'premium' || requested === 'masculino') return requested;
+  if (requested === 'anninha' || requested === 'feminino') return undefined;
+  const u = (await pool.query('select voice from users where id = $1', [uid])).rows[0];
+  return u && u.voice === 'masculino' ? 'masculino' : undefined;
 }
 
 /* ---------- vitrine (mini site) ---------- */
@@ -393,15 +490,15 @@ async function followHandle(pool, uid) {
 }
 
 /** Linha do convite: no Instagram o @ (link na legenda não é clicável); no WhatsApp/Telegram o link do perfil. */
-function followLine(handle, channel) {
-  if (channel === 'instagram') return `💖 Segue @${handle} pra não perder nenhum achadinho!`;
+function followLine(handle, channel, masc) {
+  if (channel === 'instagram') return masc ? `👊 Segue @${handle} pra não perder nenhum achado!` : `💖 Segue @${handle} pra não perder nenhum achadinho!`;
   return `📲 Segue a gente no Instagram: https://www.instagram.com/${handle}/`;
 }
 
 /** Põe o convite no fim do texto (no Instagram, antes das hashtags). Não repete se já houver. */
-function withFollow(text, handle, channel) {
+function withFollow(text, handle, channel, masc) {
   if (!handle || !text || String(text).toLowerCase().includes(String(handle).toLowerCase())) return text;
-  const line = followLine(handle, channel);
+  const line = followLine(handle, channel, masc);
   const lines = String(text).replace(/\s+$/, '').split('\n');
   if (channel === 'instagram' && /^#/.test(lines[lines.length - 1] || '')) {
     const tags = lines.pop();
@@ -411,4 +508,4 @@ function withFollow(text, handle, channel) {
   return [...lines, '', line].join('\n');
 }
 
-module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, followHandle, withFollow, vitrineSite, withSite, PLACEHOLDER };
+module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, followHandle, withFollow, vitrineSite, withSite, resolveTone, PLACEHOLDER };

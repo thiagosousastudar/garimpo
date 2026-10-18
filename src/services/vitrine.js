@@ -12,6 +12,11 @@ const THEMES = {
   azul: { bg1: '#F1F5FB', bg2: '#E2EAF5', ink: '#17222E', muted: '#566577', accent: '#2F5D8E', accentInk: '#FFFFFF', soft: '#DFE9F6', card: '#FFFFFF', line: '#D2DEEC' },
   lavanda: { bg1: '#F6F2FB', bg2: '#EAE3F5', ink: '#221B2E', muted: '#665C78', accent: '#7451A8', accentInk: '#FFFFFF', soft: '#ECE3F8', card: '#FFFFFF', line: '#DDD3EC' },
   preto: { bg1: '#161616', bg2: '#0E0E0E', ink: '#F5F1EA', muted: '#B5ADA2', accent: '#D9B36C', accentInk: '#161616', soft: '#2A2620', card: '#1F1F1F', line: '#2E2E2E' },
+  // tons do perfil masculino
+  grafite: { bg1: '#F1F2F4', bg2: '#E3E5E9', ink: '#16191D', muted: '#5B6470', accent: '#2E3640', accentInk: '#FFFFFF', soft: '#E4E7EB', card: '#FFFFFF', line: '#D6DAE0' },
+  marinho: { bg1: '#EEF3F9', bg2: '#DCE5F0', ink: '#0F1B2D', muted: '#4A5B73', accent: '#1F3A5F', accentInk: '#FFFFFF', soft: '#DDE6F2', card: '#FFFFFF', line: '#CBD7E6' },
+  militar: { bg1: '#F1F3EC', bg2: '#E2E6D8', ink: '#1D2414', muted: '#5B6650', accent: '#4F5F34', accentInk: '#FFFFFF', soft: '#E2E7D6', card: '#FFFFFF', line: '#D3D9C4' },
+  laranja: { bg1: '#161616', bg2: '#0E0E0E', ink: '#F5F1EA', muted: '#B5ADA2', accent: '#F28C28', accentInk: '#161616', soft: '#2A2017', card: '#1F1F1F', line: '#2E2E2E', dark: true },
 };
 const THEME_NAMES = Object.keys(THEMES);
 

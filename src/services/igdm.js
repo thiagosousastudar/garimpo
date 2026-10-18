@@ -13,6 +13,9 @@ const SYNC_EVERY_MS = 3 * 60 * 1000;
 const DEFAULT_KEYWORDS = ['quero', 'eu quero', 'link', 'manda', 'me manda', 'quanto', 'preço', 'valor', 'onde compra'];
 const DEFAULT_TEMPLATE = 'Oi, {nome}! 💖 Que bom que você gostou!\n\nAqui está o link do {produto}:\n👉 {link}\n\nQualquer dúvida é só me chamar! ✨';
 const PUBLIC_REPLIES = ['Te mandei no Direct! 💌', 'Já te enviei o link no Direct! 💖', 'Corre no Direct que o link tá lá! ✨', 'Link enviado no seu Direct! 😍'];
+// tom masculino
+const DEFAULT_TEMPLATE_M = 'Fala, {nome}! 👊 Valeu pelo interesse!\n\nSegue o link do {produto}:\n👉 {link}\n\nQualquer dúvida, é só chamar!';
+const PUBLIC_REPLIES_M = ['Te mandei no Direct! 👊', 'Link enviado no Direct! 📩', 'Confere o Direct, mandei lá! 🔥', 'Já mandei no Direct! ✅'];
 const NUMS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -22,7 +25,8 @@ function settingsOf(u) {
   return {
     auto: Boolean(u?.dm_auto),
     keywords: kws.length ? kws : DEFAULT_KEYWORDS,
-    template: u?.dm_template && u.dm_template.trim() ? u.dm_template : DEFAULT_TEMPLATE,
+    template: u?.dm_template && u.dm_template.trim() ? u.dm_template : u?.voice === 'masculino' ? DEFAULT_TEMPLATE_M : DEFAULT_TEMPLATE,
+    voice: u?.voice === 'masculino' ? 'masculino' : 'feminino',
     public_reply: u?.dm_public_reply !== false,
     track_links: u?.dm_track_links !== false,
   };
@@ -71,7 +75,8 @@ function buildMessage(settings, comment, products) {
     const p = list[0];
     return settings.template.split('{nome}').join(nome).split('{produto}').join(p.title).split('{link}').join(p.affiliate_url || p.product_url);
   }
-  return [`Oi, ${nome}! 💖 Aqui estão os links:`, '', ...list.map((p, i) => `${NUMS[i] || `${i + 1}.`} ${p.title}\n👉 ${p.affiliate_url || p.product_url}`), '', 'Qualquer dúvida é só me chamar! ✨'].join('\n');
+  const masc = settings.voice === 'masculino';
+  return [masc ? `Fala, ${nome}! 👊 Seguem os links:` : `Oi, ${nome}! 💖 Aqui estão os links:`, '', ...list.map((p, i) => `${NUMS[i] || `${i + 1}.`} ${p.title}\n👉 ${p.affiliate_url || p.product_url}`), '', masc ? 'Qualquer dúvida, é só chamar!' : 'Qualquer dúvida é só me chamar! ✨'].join('\n');
 }
 
 /** Mensagem de erro da Meta em português. */
@@ -163,7 +168,8 @@ async function sendFor({ pool, cfg, fetchImpl, uid, commentRowId, text: custom }
   }
   await pool.query(`update ig_comments set status = 'enviado', sent_at = now(), reply_text = $1, error = null where id = $2`, [text, row.id]);
   if (s.public_reply) {
-    const pub = PUBLIC_REPLIES[Math.floor(Math.random() * PUBLIC_REPLIES.length)];
+    const replies = s.voice === 'masculino' ? PUBLIC_REPLIES_M : PUBLIC_REPLIES;
+    const pub = replies[Math.floor(Math.random() * replies.length)];
     try { await client.replyComment({ commentId: row.comment_id, token, text: pub }); } catch (_) { /* a resposta pública é só um extra */ }
   }
   return (await pool.query('select * from ig_comments where id = $1', [row.id])).rows[0];
@@ -204,5 +210,5 @@ async function runDmTick({ pool, cfg, fetchImpl, log = console }) {
 
 module.exports = {
   settingsOf, matches, buildMessage, syncUser, sendFor, autoSend, runDmTick, productsForMedia,
-  DEFAULT_KEYWORDS, DEFAULT_TEMPLATE, WINDOW_MS,
+  DEFAULT_KEYWORDS, DEFAULT_TEMPLATE, DEFAULT_TEMPLATE_M, WINDOW_MS,
 };

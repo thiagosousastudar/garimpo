@@ -1,6 +1,6 @@
 const express = require('express');
 const { HttpError, parseNum, parseCsv } = require('../util');
-const { search, trends, categories, enrich, clientFor, externalIdFrom } = require('../services/garimpo');
+const { search, trends, categories, enrich, clientFor, externalIdFrom, tagShopeeLinks } = require('../services/garimpo');
 const { previewLink, fromShopeeBatch, fillImages } = require('../services/linkpreview');
 const { scoreProduct } = require('../services/score');
 const { serializeExtras, parseExtras, mergeExtras } = require('../services/extras');
@@ -168,7 +168,7 @@ function garimpoRoutes({ pool, cfg, fetchImpl }) {
     let skipped = 0;
     const dups = [];
     const errors = [];
-    const full = await enrich({ pool, cfg, fetchImpl, uid: req.uid, items: list.filter((x) => x && typeof x === 'object') });
+    const full = await tagShopeeLinks({ pool, cfg, fetchImpl, uid: req.uid, items: await enrich({ pool, cfg, fetchImpl, uid: req.uid, items: list.filter((x) => x && typeof x === 'object') }) });
     for (const it of full) {
       try {
         const d = parseBody({

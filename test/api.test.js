@@ -2317,3 +2317,68 @@ test('legendas com a vitrine: Instagram mostra o domínio próprio; WhatsApp põ
     assert.match(g.data.caption, /Todos na minha vitrine: anninhaachadinhos\.com\.br/);
   } finally { t.close(); }
 });
+
+test('contas ligadas: cria a conta masculina, troca sem senha, etiqueta da Shopee nos links e vendas separadas', async () => {
+  const opts = { shopee: {} };
+  const t = await boot({}, opts);
+  try {
+    const a = t.client();
+    await signup(a);
+    assert.equal((await a('PUT', '/api/connections/shopee', { app_id: '18123456789', secret: 'segredo-da-shopee-123' })).status, 200);
+    const me0 = (await a('GET', '/api/auth/me')).data;
+    assert.deepEqual([me0.voice, me0.principal, me0.accounts.length], ['feminino', true, 1]);
+
+    const nova = await a('POST', '/api/auth/accounts', { name: 'Achados Masc', email: 'm@exemplo.com', password: 'senha-forte-2', voice: 'masculino', sh_sub_id: 'masc', copy_keys: true });
+    assert.equal(nova.status, 201, JSON.stringify(nova.data));
+    assert.equal(nova.data.accounts.length, 2);
+    const mascId = nova.data.accounts.find((x) => !x.current).id;
+    assert.equal((await a('POST', '/api/auth/accounts', { name: 'Outra', email: 'o@exemplo.com', password: 'senha-forte-3', sh_sub_id: 'masc' })).status, 409, 'etiqueta repetida');
+    assert.equal((await a('POST', '/api/auth/accounts', { name: 'Outra', email: 'm@exemplo.com', password: 'senha-forte-3' })).status, 409, 'e-mail repetido');
+
+    // estranho não troca para a conta de ninguém
+    const x = t.client();
+    await signup(x, 'x@exemplo.com');
+    assert.equal((await x('POST', '/api/auth/switch', { id: mascId })).status, 403);
+
+    // troca: vira a conta masculina, com a Shopee copiada
+    assert.equal((await a('POST', '/api/auth/switch', { id: mascId })).status, 200);
+    const me1 = (await a('GET', '/api/auth/me')).data;
+    assert.deepEqual([me1.user.email, me1.voice, me1.sh_sub_id, me1.principal], ['m@exemplo.com', 'masculino', 'masc', false]);
+    assert.equal((await a('GET', '/api/connections/marketplaces')).data.SH.connected, true);
+    assert.equal((await a('GET', '/api/products')).data.products.length, 0, 'produtos separados');
+
+    // produto salvo do garimpo ganha link com a etiqueta da conta
+    const sv = await a('POST', '/api/garimpo/save', { items: [{ title: 'Kit Chaves 12 peças', marketplace: 'SH', price: 89.9, original_price: 149.9, commission_pct: 10,
+      product_url: 'https://shopee.com.br/product/77/1001', affiliate_url: 'https://s.shopee.com.br/af1001', external_id: '77.1001', image_url: 'https://cf.shopee.com.br/file/1001' }] });
+    assert.equal(sv.status, 200, JSON.stringify(sv.data));
+    assert.equal(sv.data.products[0].affiliate_url, 'https://s.shopee.com.br/GERADO');
+    assert.match(t.calls.filter((c) => c.gql && /generateShortLink/.test(c.gql)).pop().gql, /subIds: \["masc"\]/);
+
+    // tom masculino na legenda e no Direct
+    const pid = sv.data.products[0].id;
+    const ig = (await a('POST', '/api/queue/preview', { product_id: pid, channel: 'instagram' })).data.caption;
+    assert.match(ig, /Comenta EU QUERO que eu mando o link/);
+    assert.match(ig, /#achadosmasculinos/);
+    assert.doesNotMatch(ig, /💖/);
+    assert.match((await a('POST', '/api/queue/preview', { product_id: pid, channel: 'instagram', tone: 'anninha' })).data.caption, /Comenta EU QUERO que eu te mando o link/);
+    assert.match((await a('GET', '/api/direct/settings')).data.settings.template, /^Fala, \{nome\}! 👊/);
+
+    // vendas: cada conta fica com as suas
+    const now = Math.floor(Date.now() / 1000);
+    const conv = (id, utm, com) => ({ purchaseTime: now - 3600, conversionId: id, utmContent: utm, orders: [{ orderId: `o${id}`, orderStatus: 'COMPLETED', items: [{ shopId: 77, itemId: 1001, itemName: 'x', itemPrice: '89.9', qty: 1, itemTotalCommission: String(com), displayItemStatus: 'Completed' }] }] });
+    opts.shopee.conversions = [conv(1, 'masc-instagram', 5.5), conv(2, '', 3), conv(3, 'garimpo-whatsapp', 2)];
+    const sm = (await a('POST', '/api/garimpo/shopee/sync-sales')).data;
+    assert.deepEqual([sm.created, sm.skipped], [1, 2]);
+    // volta para a principal (sem senha) e importa o resto
+    const principalId = (await a('GET', '/api/auth/accounts')).data.accounts.find((y) => !y.current).id;
+    assert.equal((await a('POST', '/api/auth/switch', { id: principalId })).status, 200);
+    const sp = (await a('POST', '/api/garimpo/shopee/sync-sales')).data;
+    assert.deepEqual([sp.created, sp.skipped], [2, 1]);
+    const tot = (await a('GET', '/api/earnings/accounts?days=30')).data.accounts;
+    assert.deepEqual(tot.map((y) => [y.current, y.total]).sort(), [[false, 5.5], [true, 5]]);
+
+    // desligar: some da lista e não troca mais
+    assert.equal((await a('DELETE', `/api/auth/accounts/${mascId}`)).data.accounts.length, 1);
+    assert.equal((await a('POST', '/api/auth/switch', { id: mascId })).status, 403);
+  } finally { t.close(); }
+});

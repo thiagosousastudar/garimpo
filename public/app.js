@@ -58,6 +58,7 @@
     shipFilter: '', // filtro de frete na aba Produtos ('', 'free', 'cheap')
     shipZip: null, // CEP de referência do frete
     psel: {}, // produtos marcados para postar juntos (carrossel)
+    voice: 'feminino', subTag: null, principal: true, accounts: [], // conta: tom, etiqueta da Shopee e contas ligadas
     brand: { color: null, handle: null }, // identidade das capas (cor e @)
     autos: [], // pilotos automáticos
     tg: null, // conexão do Telegram
@@ -154,7 +155,7 @@
       ['ganhos', 'Ganhos', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
       ['conexoes', 'Conexões', '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3A4 4 0 0011 18.7l1-1"/>']];
     return '<header class="top"><div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .8-4.4 4.2 1.1 6L12 16.7 6.7 19.6l1.1-6L3.4 9.4l6-.8z"/></svg></div><h1>Garimpo</h1></div>' +
-      '<div class="top-actions"><span class="who">' + esc(state.user.name || state.user.email) + '</span>' + themeButton() + '<button class="btn small ghost" data-act="logout">Sair</button></div></header>' +
+      '<div class="top-actions">' + (state.accounts.length > 1 ? '<button class="btn small ghost who-switch" data-act="acct-menu" title="Trocar de conta">' + voiceIcon(state.voice) + ' ' + esc(state.user.name || state.user.email) + ' <span aria-hidden="true">⇄</span></button>' : '<span class="who">' + esc(state.user.name || state.user.email) + '</span>') + themeButton() + '<button class="btn small ghost" data-act="logout">Sair</button></div></header>' +
       '<nav class="tabs" role="tablist" aria-label="Seções">' + tabs.map(function (t) {
         return '<button role="tab" aria-selected="' + (state.tab === t[0]) + '" data-tab="' + t[0] + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + t[2] + '</svg>' + t[1] + (t[0] === 'fila' && pend ? '<span class="badge">' + pend + '</span>' : '') + '</button>';
       }).join('') + '</nav><main>' + body + '</main>';
@@ -829,7 +830,7 @@
       field('price_max', 'Preço até (R$)', numv(c.filters.price_max), 'inputmode="decimal" placeholder="qualquer"') + '</div>' +
       '<div class="field"><label for="a_ship">Frete</label><select id="a_ship" name="shipping">' + opt(SHIP_OPTS, c.filters.shipping) + '</select></div>' +
       chk('official_only', '1', c.filters.official_only, '💎 Só lojas oficiais (Mercado Livre: loja oficial · Shopee: Mall/oficial)') + '</fieldset>' +
-      '<fieldset class="fs"><legend>Texto</legend><div class="field"><label for="a_tone">Tom do texto</label><select id="a_tone" name="tone">' + opt([['anninha', 'Anninha (animado, de achadinho)'], ['premium', '💎 Premium (curadoria, sóbrio)']], c.tone || 'anninha') + '</select></div></fieldset>' +
+      '<fieldset class="fs"><legend>Texto</legend><div class="field"><label for="a_tone">Tom do texto</label><select id="a_tone" name="tone">' + opt([['anninha', '💖 Feminino (animado, de achadinho)'], ['masculino', '💪 Masculino (direto, custo-benefício)'], ['premium', '💎 Premium (curadoria, sóbrio)']], c.tone || (state.voice === 'masculino' ? 'masculino' : 'anninha')) + '</select></div></fieldset>' +
       '<fieldset class="fs"><legend>Quando</legend><div class="cols">' +
       '<div class="field"><label for="a_start">Das</label><input id="a_start" name="start" type="time" value="' + esc(c.window.start) + '" required></div>' +
       '<div class="field"><label for="a_end">Até</label><input id="a_end" name="end" type="time" value="' + esc(c.window.end) + '" required></div></div><div class="cols">' +
@@ -1010,7 +1011,7 @@
       return '<tr><td class="num">' + e.day.split('-').reverse().join('/') + '</td><td>' + esc(e.product_title || '—') + '</td><td>' + esc(e.channel) + '</td><td class="r num">' + e.clicks + '</td><td class="r num">' + e.orders + '</td><td class="r num">' + brl(e.commission) + '</td>' +
         '<td><select data-earn-status="' + e.id + '" aria-label="Situação">' + st + '</select></td><td><button class="btn small ghost danger" data-del-earn="' + e.id + '">Excluir</button></td></tr>';
     }).join('');
-    return '<div class="pagehead"><h2>Ganhos</h2><p>Comissão dos últimos ' + s.range.days + ' dias: <b class="num">' + brl(k.total) + '</b></p></div>' +
+    return '<div class="pagehead"><h2>Ganhos</h2><p>Comissão dos últimos ' + s.range.days + ' dias: <b class="num">' + brl(k.total) + '</b></p></div>' + accountsEarnings() +
       '<div class="toolbar"><button class="btn primary" data-act="new-earning">Novo lançamento</button><button class="btn" data-act="import-earnings">Importar CSV</button>' +
       (mktReady('SH') ? '<button class="btn" data-act="sh-sales" title="As vendas da Shopee também entram sozinhas a cada 6 horas">🔄 Importar vendas da Shopee</button>' : '') +
       '<select id="f-days" aria-label="Período">' + [7, 14, 30, 90].map(function (d) { return '<option value="' + d + '"' + (d === state.days ? ' selected' : '') + '>Últimos ' + d + ' dias</option>'; }).join('') + '</select></div>' +
@@ -1099,7 +1100,7 @@
       '<li>Copie o <b>Client ID</b> e a <b>Client Secret</b> para cá e clique em Salvar e autorizar. Na página do Mercado Livre, aceite.</li>' +
       '<li>A comissão padrão vale para as categorias que você não preencher na tabela abaixo.</li></ol>' +
       (ml.authorized ? shipZipCard() + commissionTableCard(ml) : '') + '</section>';
-    return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar, Instagram e Telegram para publicar direto do painel.</p></div><div class="conn">' + mlCard + shCard + telegramCard() +
+    return '<div class="pagehead"><h2>Conexões</h2><p>Lojas para garimpar, Instagram e Telegram para publicar direto do painel.</p></div><div class="conn">' + accountsCard() + mlCard + shCard + telegramCard() +
       '<section class="card"><h3>Instagram</h3>' +
       (c.connected ? '<p class="ok">Conectado' + (c.username ? ' como <b>@' + esc(c.username) + '</b>' : ' (conta ' + esc(c.ig_user_id) + ')') + '.</p><div class="actions row"><button class="btn small" data-act="test-ig">Testar conexão</button><button class="btn small danger" data-act="disconnect-ig">Desconectar</button></div>' : '<p class="hint">Não conectado. Sem conexão você ainda pode copiar os textos e postar manualmente.</p>') +
       (c.public_media === false ? '<p class="err">Este servidor está em endereço local. O Instagram só consegue ler fotos e vídeos de uma URL pública, então a publicação vai falhar até você configurar APP_URL com o seu domínio.</p>' : '') +
@@ -1453,6 +1454,13 @@
   /* ---------- Mensagem com links: produtos marcados (ou lista salva) -> texto pronto para o Direct/WhatsApp ---------- */
   var ML_OPEN = 'Oie! Cheguei com os links que você pediu!';
   var ML_CLOSE = 'Se o link não abrir por aqui, copia e cola no seu bloco de notas ou em uma conversa do WhatsApp para dar para clicar! Beijo 💋';
+  var ML_OPEN_M = 'Fala! Seguem os links que você pediu 👊';
+  var ML_CLOSE_M = 'Se o link não abrir por aqui, copia e cola no navegador ou numa conversa do WhatsApp. Qualquer dúvida, é só chamar! 🤝';
+  function mlPref(which) {
+    var masc = state.voice === 'masculino';
+    return prefGet('ml' + which + '.' + state.user.id, which === 'open' ? (masc ? ML_OPEN_M : ML_OPEN) : (masc ? ML_CLOSE_M : ML_CLOSE));
+  }
+  function mlPrefSet(m) { prefSet('mlopen.' + state.user.id, m.greeting || ''); prefSet('mlclose.' + state.user.id, m.closing || ''); }
   var mlist = null;   // mensagem aberta: { id, name, greeting, closing, items: [{ product_id, name, link, has_affiliate }] }
   var mlLists = null; // listas salvas (tela "Listas de links")
 
@@ -1479,7 +1487,7 @@
       .filter(function (s) { return String(s).trim(); }).join('\n\n');
   }
   function linksMsgFromProducts(list) {
-    return { id: null, name: '', greeting: prefGet('mlOpen', ML_OPEN), closing: prefGet('mlClose', ML_CLOSE),
+    return { id: null, name: '', greeting: mlPref('open'), closing: mlPref('close'),
       items: list.map(function (p) { return { product_id: p.id, name: shortName(p.title), link: p.affiliate_url || p.product_url || null, has_affiliate: Boolean(p.affiliate_url) }; }) };
   }
   function openLinksMsg(m) { mlLists = null; mlist = m; renderLinksMsg(); if (!dlg.open) dlg.showModal(); }
@@ -1551,7 +1559,7 @@
       mlist.items.splice(Number(b.dataset.mldel), 1); renderLinksMsg();
     } else if (mlLists && b.dataset.mlopen) {
       var l = mlLists.filter(function (x) { return x.id === Number(b.dataset.mlopen); })[0];
-      if (l) openLinksMsg({ id: l.id, page_path: l.page_path, asPage: Boolean(l.page_path && prefGet('mlAsPage', '')), name: l.name, greeting: l.greeting == null ? prefGet('mlOpen', ML_OPEN) : l.greeting, closing: l.closing == null ? prefGet('mlClose', ML_CLOSE) : l.closing, items: l.items.slice() });
+      if (l) openLinksMsg({ id: l.id, page_path: l.page_path, asPage: Boolean(l.page_path && prefGet('mlAsPage', '')), name: l.name, greeting: l.greeting == null ? mlPref('open') : l.greeting, closing: l.closing == null ? mlPref('close') : l.closing, items: l.items.slice() });
     } else if (mlLists && b.dataset.mlpage) {
       copyText(location.origin + b.dataset.mlpage).then(function (ok) { toast(ok ? 'Link da página copiado! Use no Story, no Direct ou no WhatsApp.' : location.origin + b.dataset.mlpage); });
     } else if (mlLists && b.dataset.mldrop) {
@@ -1574,7 +1582,7 @@
     'ml-copy': function () {
       var txt = linksMessage(mlist);
       if (!txt.trim() || !mlist.items.some(function (x) { return x.link; })) throw new Error('Nenhum produto com link na mensagem.');
-      prefSet('mlOpen', mlist.greeting || ''); prefSet('mlClose', mlist.closing || '');
+      mlPrefSet(mlist);
       return copyText(txt).then(function (ok) {
         if (ok) return toast('Mensagem copiada! Agora é só colar no Direct.');
         var out = $('#ml-out', dlg); if (out) { out.focus(); out.select(); }
@@ -1584,7 +1592,7 @@
     'ml-save': function () {
       var m = mlist;
       if (!String(m.name || '').trim()) { var n = $('#ml-name', dlg); if (n) n.focus(); throw new Error('Dê um nome para a lista, por exemplo "Carrossel cozinha organizada".'); }
-      prefSet('mlOpen', m.greeting || ''); prefSet('mlClose', m.closing || '');
+      mlPrefSet(m);
       var body = { name: m.name, greeting: m.greeting, closing: m.closing, items: m.items.map(function (x) { return { product_id: x.product_id, name: x.name }; }) };
       return api(m.id ? 'PUT' : 'POST', '/api/link-lists' + (m.id ? '/' + m.id : ''), body).then(function (r) {
         if (mlist !== m) return;
@@ -1594,7 +1602,8 @@
   });
 
   /* ---------- Vitrine (mini site da bio): configuração, categorias e produtos ---------- */
-  var VIT_THEMES = [['rosa', '#C2496A', 'Rosa'], ['creme', '#9C6B30', 'Creme'], ['salvia', '#4F7A58', 'Sálvia'], ['azul', '#2F5D8E', 'Azul'], ['lavanda', '#7451A8', 'Lavanda'], ['preto', '#161616', 'Preto']];
+  var VIT_THEMES = [['rosa', '#C2496A', 'Rosa'], ['creme', '#9C6B30', 'Creme'], ['salvia', '#4F7A58', 'Sálvia'], ['azul', '#2F5D8E', 'Azul'], ['lavanda', '#7451A8', 'Lavanda'], ['preto', '#161616', 'Preto'],
+    ['grafite', '#2E3640', 'Grafite'], ['marinho', '#1F3A5F', 'Azul-marinho'], ['militar', '#4F5F34', 'Verde-militar'], ['laranja', '#F28C28', 'Preto e laranja']];
   var VIT_SUGG = [['🍳', 'Cozinha'], ['🛁', 'Banheiro'], ['☕', 'Cantinho do café'], ['🏠', 'Casa e decoração'], ['👗', 'Moda'], ['💄', 'Beleza'], ['🧸', 'Infantil'], ['📱', 'Tech'], ['🔥', 'Mais pedidos']];
   var vpick = null; // escolha de produtos de uma categoria: { id, name, items: [ids], q }
 
@@ -1611,7 +1620,7 @@
     if (!v) { loadVitrine(); return '<p class="hint">Carregando a vitrine…</p>'; }
     if (v.error) return '<p class="err">' + esc(v.error) + '</p>';
     var s = v.store;
-    var theme = state.vitTheme || (s && s.theme) || 'rosa';
+    var theme = state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'marinho' : 'rosa');
     var f = function (id, label, val, attrs, hint) {
       return '<div class="field"><label for="' + id + '">' + label + '</label><input id="' + id + '" name="' + id.replace('vf-', '') + '" type="text" value="' + esc(val == null ? '' : val) + '" ' + (attrs || '') + '>' + (hint ? '<p class="hint">' + hint + '</p>' : '') + '</div>';
     };
@@ -1711,7 +1720,7 @@
   function vitFormData() {
     var g = function (id) { var el = $('#' + id); return el ? el.value : ''; };
     var s = state.vit.store;
-    return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || 'rosa',
+    return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'marinho' : 'rosa'),
       instagram: g('vf-instagram'), domain: g('vf-domain'), avatar_url: g('vf-avatar_url'), whatsapp_url: g('vf-whatsapp_url'), telegram_url: g('vf-telegram_url'),
       published: Boolean(($('#vf-published') || {}).checked) };
   }
@@ -1822,6 +1831,108 @@
     },
   });
 
+  /* ---------- contas ligadas (ex.: perfil feminino e masculino) ---------- */
+  function voiceIcon(v) { return v === 'masculino' ? '👨' : '👩'; }
+  function applyAccount(m) {
+    state.voice = m.voice === 'masculino' ? 'masculino' : 'feminino';
+    state.subTag = m.sh_sub_id || null;
+    state.principal = m.principal !== false;
+    state.accounts = m.accounts || [];
+  }
+  function switchAccount(id) {
+    return api('POST', '/api/auth/switch', { id: Number(id) }).then(function () { location.reload(); });
+  }
+
+  function accountsCard() {
+    var list = state.accounts || [];
+    var others = list.filter(function (a) { return !a.current; });
+    var rows = list.map(function (a) {
+      return '<div class="acct' + (a.current ? ' on' : '') + '"><span class="acct-ic">' + voiceIcon(a.voice) + '</span><div class="grow"><b>' + esc(a.name) + '</b>' + (a.current ? ' <span class="pill posted">você está aqui</span>' : '') +
+        '<p class="hint" style="margin:2px 0 0">' + esc(a.email) + (a.ig_username ? ' · @' + esc(a.ig_username) : '') + ' · tom ' + (a.voice === 'masculino' ? 'masculino' : 'feminino') +
+        (a.sh_sub_id ? ' · etiqueta <code>' + esc(a.sh_sub_id) + '</code>' : '') + (a.principal ? ' · principal' : '') + '</p></div>' +
+        (a.current ? '' : '<button class="btn small primary" data-act="acct-switch" data-id="' + a.id + '">Entrar</button><button class="btn small ghost" data-act="acct-unlink" data-id="' + a.id + '" aria-label="Desligar ' + esc(a.name) + '">Desligar</button>') + '</div>';
+    }).join('');
+    var sel = function (id, cur) { return '<select id="' + id + '" name="voice"><option value="feminino"' + (cur !== 'masculino' ? ' selected' : '') + '>💖 Feminino</option><option value="masculino"' + (cur === 'masculino' ? ' selected' : '') + '>💪 Masculino</option></select>'; };
+    return '<section class="card accounts"><h3>Suas contas</h3><p class="hint">Uma conta do Garimpo para cada perfil do Instagram (ex.: feminino e masculino). Cada uma tem seus produtos, fila, piloto, Direct, vitrine e ganhos. Troque pelo botão com o seu nome, no topo.</p>' +
+      '<div class="accts">' + rows + '</div>' +
+      '<form class="stack" id="acct-profile-form"><h4>Esta conta</h4><div class="cols"><div class="field"><label for="ap-voice">Tom das legendas e do Direct</label>' + sel('ap-voice', state.voice) + '</div>' +
+      '<div class="field"><label for="ap-tag">Etiqueta da Shopee (Sub ID)</label><input id="ap-tag" name="sh_sub_id" type="text" maxlength="20" value="' + esc(state.subTag || '') + '" placeholder="Ex.: anninha" autocapitalize="none" spellcheck="false"></div></div>' +
+      '<label class="check"><input type="checkbox" id="ap-principal"' + (state.principal ? ' checked' : '') + '> Conta principal: recebe também as vendas de links sem etiqueta</label>' +
+      '<p class="hint">A etiqueta vai em todo link da Shopee gerado pelo Garimpo e separa as vendas de cada conta na aba Ganhos. Link criado direto no portal da Shopee: preencha o campo <b>Sub ID</b> com a etiqueta da conta.</p>' +
+      '<p class="err" id="ap-err" role="alert"></p><div class="row"><button class="btn small primary" type="submit">Salvar</button></div></form>' +
+      '<details class="sched"' + (others.length ? '' : ' open') + '><summary>➕ Criar conta vinculada</summary><form class="stack" id="acct-new-form" autocomplete="off">' +
+      '<div class="cols"><div class="field"><label for="an-name">Nome da conta</label><input id="an-name" name="name" type="text" maxlength="60" required placeholder="Ex.: Achados Masculinos"></div>' +
+      '<div class="field"><label for="an-voice">Tom</label>' + sel('an-voice', 'masculino') + '</div></div>' +
+      '<div class="cols"><div class="field"><label for="an-email">E-mail de acesso</label><input id="an-email" name="email" type="email" required autocomplete="off" placeholder="outro e-mail seu"></div>' +
+      '<div class="field"><label for="an-pass">Senha (mínimo 8)</label><input id="an-pass" name="password" type="password" minlength="8" required autocomplete="new-password"></div></div>' +
+      '<div class="field"><label for="an-tag">Etiqueta da Shopee (Sub ID)</label><input id="an-tag" name="sh_sub_id" type="text" maxlength="20" placeholder="Ex.: masc" autocapitalize="none" spellcheck="false"></div>' +
+      '<label class="check"><input type="checkbox" id="an-copy" checked> Usar as mesmas chaves da Shopee e do Mercado Livre (no Mercado Livre é só autorizar de novo)</label>' +
+      '<p class="err" id="an-err" role="alert"></p><div class="row"><button class="btn small primary" type="submit">Criar conta</button></div></form></details>' +
+      '<details class="sched"><summary>🔗 Vincular conta que já existe</summary><form class="stack" id="acct-link-form" autocomplete="off">' +
+      '<div class="cols"><div class="field"><label for="al-email">E-mail da outra conta</label><input id="al-email" name="email" type="email" required autocomplete="off"></div>' +
+      '<div class="field"><label for="al-pass">Senha da outra conta</label><input id="al-pass" name="password" type="password" required autocomplete="new-password"></div></div>' +
+      '<p class="err" id="al-err" role="alert"></p><div class="row"><button class="btn small" type="submit">Vincular</button></div></form></details></section>';
+  }
+
+  /** Ganhos: quando há contas ligadas, um quadro com cada uma no período. */
+  function accountsEarnings() {
+    if ((state.accounts || []).length < 2) return '';
+    var key = state.days;
+    if (!state.acctEarn || state.acctEarn.days !== key) {
+      if (!state.acctEarnBusy) {
+        state.acctEarnBusy = true;
+        api('GET', '/api/earnings/accounts?days=' + key).then(function (r) { state.acctEarn = r; }, function () { state.acctEarn = { days: key, accounts: [] }; })
+          .then(function () { state.acctEarnBusy = false; render(); });
+      }
+      return '';
+    }
+    var list = state.acctEarn.accounts;
+    var total = list.reduce(function (n, a) { return n + a.total; }, 0);
+    return '<section class="card acct-earn"><h3>Todas as contas · últimos ' + key + ' dias</h3><div class="acct-grid">' + list.map(function (a) {
+      var pct = total ? Math.round(a.total / total * 100) : 0;
+      return '<div class="acct-k' + (a.current ? ' on' : '') + '"><span>' + voiceIcon((state.accounts.filter(function (x) { return x.id === a.id; })[0] || {}).voice) + ' ' + esc(a.name) + '</span><b class="num">' + brl(a.total) + '</b>' +
+        '<small>' + a.orders + ' pedido' + (a.orders === 1 ? '' : 's') + (a.pending ? ' · ' + brl(a.pending) + ' pendente' : '') + '</small><i style="width:' + pct + '%"></i></div>';
+    }).join('') + '<div class="acct-k total"><span>Total</span><b class="num">' + brl(total) + '</b><small>todas as contas</small></div></div></section>';
+  }
+
+  document.addEventListener('submit', function (e) {
+    var id = e.target.id;
+    if (id !== 'acct-profile-form' && id !== 'acct-new-form' && id !== 'acct-link-form') return;
+    e.preventDefault();
+    var v = function (x) { var el = $('#' + x); return el ? el.value : ''; };
+    var err = function (x, m) { var el = $('#' + x); if (el) el.textContent = m; };
+    if (id === 'acct-profile-form') {
+      api('PUT', '/api/auth/profile', { voice: v('ap-voice'), sh_sub_id: v('ap-tag'), principal: Boolean(($('#ap-principal') || {}).checked) })
+        .then(function (r) { applyAccount(Object.assign({}, r, { sh_sub_id: r.sh_sub_id })); toast('Conta salva'); render(); })
+        .catch(function (x) { err('ap-err', x.message); });
+    } else if (id === 'acct-new-form') {
+      api('POST', '/api/auth/accounts', { name: v('an-name'), voice: v('an-voice'), email: v('an-email'), password: v('an-pass'), sh_sub_id: v('an-tag'), copy_keys: Boolean(($('#an-copy') || {}).checked) })
+        .then(function (r) { state.accounts = r.accounts; toast('Conta criada! Toque em Entrar para usar.'); render(); })
+        .catch(function (x) { err('an-err', x.message); });
+    } else {
+      api('POST', '/api/auth/accounts/link', { email: v('al-email'), password: v('al-pass') })
+        .then(function (r) { state.accounts = r.accounts; toast('Conta vinculada'); render(); })
+        .catch(function (x) { err('al-err', x.message); });
+    }
+  });
+
+  Object.assign(actions, {
+    'acct-menu': function () {
+      var list = state.accounts || [];
+      dlg.innerHTML = '<h2>Trocar de conta</h2><div class="stack" style="display:flex;flex-direction:column;gap:8px">' + list.map(function (a) {
+        return '<button type="button" class="acct-pick' + (a.current ? ' on' : '') + '"' + (a.current ? ' disabled' : ' data-act="acct-switch" data-id="' + a.id + '"') + '><span class="acct-ic">' + voiceIcon(a.voice) + '</span><span class="grow"><b>' + esc(a.name) + '</b><small>' + (a.ig_username ? '@' + esc(a.ig_username) : esc(a.email)) + '</small></span>' + (a.current ? '<span class="pill posted">atual</span>' : '<span aria-hidden="true">→</span>') + '</button>';
+      }).join('') + '<div class="row end"><button type="button" class="btn small ghost" data-act="acct-manage">Gerenciar contas</button><button type="button" class="btn small" data-act="close-dlg">Fechar</button></div></div>';
+      if (!dlg.open) dlg.showModal();
+    },
+    'acct-switch': function (t) { return switchAccount(t.dataset.id); },
+    'acct-manage': function () { dlg.close(); state.tab = 'conexoes'; render(); window.scrollTo(0, 0); },
+    'acct-unlink': function (t) {
+      var a = (state.accounts || []).filter(function (x) { return x.id === Number(t.dataset.id); })[0];
+      if (!a || !confirm('Desligar a conta "' + a.name + '"? Ela continua existindo; só não troca mais por aqui (entra com e-mail e senha).')) return null;
+      return api('DELETE', '/api/auth/accounts/' + a.id).then(function (r) { state.accounts = r.accounts; toast('Conta desligada'); render(); });
+    },
+  });
+
   /* ---------- Postar agora: direto do produto, sem fila e sem agendador ---------- */
   // { products, product, group, channel, caption, media: [{type,url}], uploads, busy, sending, status, permalink, note, error, waOpened, customMedia }
   var post = null;
@@ -1841,7 +1952,7 @@
   function openPost(arg) {
     var list = (Array.isArray(arg) ? arg : [arg]).filter(Boolean);
     if (!list.length) return null;
-    post = { products: list, product: list[0], group: list.length > 1, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', media: [], uploads: [], busy: true, tone: prefGet('tone', 'anninha') };
+    post = { products: list, product: list[0], group: list.length > 1, channel: state.conn && state.conn.connected ? 'instagram' : 'whatsapp', caption: '', media: [], uploads: [], busy: true, tone: prefGet('tone.' + state.user.id, state.voice === 'masculino' ? 'masculino' : 'anninha') };
     renderPost();
     if (!dlg.open) dlg.showModal();
     return (post.group ? Promise.resolve(null) : freshBeforeQueue(list[0])).then(function (msg) { if (post) post.note = msg; return loadPreview(false); });
@@ -1851,7 +1962,7 @@
     if (!post) return null;
     post.busy = true; post.error = null; renderPost();
     var req = post.group
-      ? api('POST', '/api/queue/preview-group', { product_ids: post.products.map(function (p) { return p.id; }), channel: post.channel, ai: ai })
+      ? api('POST', '/api/queue/preview-group', { product_ids: post.products.map(function (p) { return p.id; }), channel: post.channel, ai: ai, tone: post.tone })
       : api('POST', '/api/queue/preview', { product_id: post.product.id, channel: post.channel, ai: ai, tone: post.tone });
     return req.then(function (r) {
       if (!post) return;
@@ -1945,7 +2056,7 @@
       media +
       '<textarea id="post-cap" aria-label="Texto do post"' + (locked ? ' readonly' : '') + '>' + esc(post.busy && !post.caption ? 'Preparando o texto…' : post.caption) + '</textarea>' +
       (ig ? '<p class="hint"><span id="post-cnt">' + post.caption.length + '</span>/2200 caracteres</p>' : '') +
-      (post.status ? '' : '<div class="row">' + (post.group ? '' : '<div class="seg" role="group" aria-label="Tom do texto"><button type="button" data-ptone="anninha" aria-pressed="' + (post.tone !== 'premium') + '"' + (post.busy ? ' disabled' : '') + '>Tom Anninha</button><button type="button" data-ptone="premium" aria-pressed="' + (post.tone === 'premium') + '"' + (post.busy ? ' disabled' : '') + '>💎 Premium</button></div>') + '<button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
+      (post.status ? '' : '<div class="row">' + (post.group ? '' : '<div class="seg" role="group" aria-label="Tom do texto">' + [['anninha', '💖 Feminino'], ['masculino', '💪 Masculino'], ['premium', '💎 Premium']].map(function (t) { return '<button type="button" data-ptone="' + t[0] + '" aria-pressed="' + ((post.tone || 'anninha') === t[0]) + '"' + (post.busy ? ' disabled' : '') + '>' + t[1] + '</button>'; }).join('') + '</div>') + '<button class="btn small" data-act="post-regen"' + (post.busy ? ' disabled' : '') + '>Refazer texto</button>' +
         (state.ai ? '<button class="btn small" data-act="post-regen-ai"' + (post.busy ? ' disabled' : '') + '>Refazer com IA</button>' : '') + '</div>') +
       '<p class="err" role="alert">' + esc(post.error || '') + '</p>' + actions + '</div>';
     if (post.cover && post.cover.open) drawCover();
@@ -2049,7 +2160,8 @@
   var COVER_CTAS = ['LINK NA BIO', 'LINK NOS STORIES', 'LINK NO GRUPO', 'COMENTE "EU QUERO"', 'CLIQUE NO LINK'];
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
   var COVER_BGS = [['creme', '#F6F1EA', 'Creme'], ['branco', '#FFFFFF', 'Branco'], ['rosa', '#F8ECEE', 'Rosa'], ['salvia', '#EEF2EC', 'Sálvia'],
-    ['azul', '#EDF2F8', 'Azul'], ['lavanda', '#F2EEF8', 'Lavanda'], ['preto', '#141414', 'Preto']];
+    ['azul', '#EDF2F8', 'Azul'], ['lavanda', '#F2EEF8', 'Lavanda'], ['preto', '#141414', 'Preto'],
+    ['grafite', '#22272E', 'Grafite'], ['marinho', '#14253D', 'Azul-marinho'], ['militar', '#E3E7D8', 'Verde-militar'], ['laranja', 'linear-gradient(135deg,#141414 55%,#F28C28 55%)', 'Preto e laranja']];
   var COVER_RADIUS = { oferta: 44, achadinho: 60, lista: 36, relampago: 48, foto: 0, minimal: 0, premium: 48 };
   var COVER_SHAPES = [['auto', 'Automática'], ['free', 'Solta'], ['arch', 'Arco'], ['round', 'Arredondada']];
   function coverRadius(cv) { return cv.radius != null && cv.radius !== '' ? Number(cv.radius) : COVER_RADIUS[cv.tpl] || 0; }
@@ -2184,7 +2296,7 @@
       if (!post.cover) {
         var tpl = post.group ? 'lista' : post.tone === 'premium' ? 'premium' : 'oferta';
         post.cover = {
-          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''), bg: prefGet('coverBg', 'creme'),
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''), bg: prefGet('coverBg.' + state.user.id, state.voice === 'masculino' ? 'grafite' : prefGet('coverBg', 'creme')),
           color: state.brand.color || DEFAULT_COLOR,
           handle: state.brand.handle || (state.conn && state.conn.username) || '',
         };
@@ -2406,13 +2518,13 @@
       return renderPost();
     }
     if (d.chook !== undefined && post && post.cover) { var hf = hookFill(HOOKS[Number(d.chook)]); post.cover.title = hf[0]; post.cover.script = hf[1]; post.cover.word = hf[2]; return renderPost(); }
-    if (d.cbg && post && post.cover) { post.cover.bg = d.cbg; prefSet('coverBg', d.cbg); return renderPost(); }
+    if (d.cbg && post && post.cover) { post.cover.bg = d.cbg; prefSet('coverBg.' + state.user.id, d.cbg); return renderPost(); }
     if (d.cshape && post && post.cover) { post.cover.shape = d.cshape; prefSet('coverShape', d.cshape); return renderPost(); }
     if (d.cfmt && post && post.cover) { post.cover.format = d.cfmt; prefSet('coverFormat', d.cfmt); return renderPost(); }
     if (d.ccolor && post && post.cover) { post.cover.color = d.ccolor; return renderPost(); }
     if (d.cphoto && post && post.cover) { post.cover.photo = d.cphoto; return renderPost(); }
     if (d.post) { return openPost(state.products.filter(function (x) { return x.id === Number(d.post); })[0]); }
-    if (d.ptone && post && post.tone !== d.ptone) { post.tone = d.ptone; prefSet('tone', d.ptone); return loadPreview(false); }
+    if (d.ptone && post && post.tone !== d.ptone) { post.tone = d.ptone; prefSet('tone.' + state.user.id, d.ptone); return loadPreview(false); }
     if (d.pchan && post && post.channel !== d.pchan) { post.channel = d.pchan; post.waOpened = false; post.waGuide = false; post.note = null; return loadPreview(false); }
     if (d.wa) { var wt = capValue(d.wa); copyText(wt); window.open(waLink(wt), '_blank', 'noopener'); return; }
     if (d.gmkt) { var g = state.g; if (g.mkt !== d.gmkt) { g.mkt = d.gmkt; g.results = []; g.sel = {}; g.done = false; g.more = false; } return render(); }
@@ -2574,7 +2686,7 @@
       drawCover();
       return;
     }
-    if (post && post.cover && t.id === 'cover-bg') { post.cover.bg = t.value; prefSet('coverBg', t.value); drawCover(); return; }
+    if (post && post.cover && t.id === 'cover-bg') { post.cover.bg = t.value; prefSet('coverBg.' + state.user.id, t.value); drawCover(); return; }
     if (post && post.cover && (t.id === 'cover-script' || t.id === 'cover-word')) { post.cover[t.id === 'cover-script' ? 'script' : 'word'] = t.value; drawCover(); return; }
     if (post && post.cover && (t.id === 'cover-title' || t.id === 'cover-color' || t.id === 'cover-handle')) {
       if (t.id === 'cover-title') post.cover.title = t.value;
@@ -2589,7 +2701,7 @@
       e.preventDefault();
       var f = Object.fromEntries(new FormData(e.target).entries());
       var url = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; return reload(); }); })
+      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; applyAccount(m); return reload(); }); })
         .catch(function (err) { var el = $('#auth-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'ig-form') {
       e.preventDefault();
@@ -2682,7 +2794,7 @@
   if (mlBack || igBack || location.hash) history.replaceState(null, '', location.pathname);
 
   api('GET', '/api/auth/me').then(function (m) {
-    state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null;
+    state.user = m.user; state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; applyAccount(m);
     return loadAll();
   }).catch(function () { state.user = null; return fetch('/api/health').catch(function () {}); }).then(function () {
     state.loading = false;

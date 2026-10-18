@@ -158,6 +158,11 @@
     azul: { bg: '#EDF2F8', line: '#6B8CAE', ink: '#17222E', soft: '#4A5B6E', label: '#4E7096', g: ['#1F334A', '#5A7CA1', '#C9D8EA'], veil: '10,20,35' },
     lavanda: { bg: '#F2EEF8', line: '#8B76B0', ink: '#221B2E', soft: '#5A506E', label: '#6F5A99', g: ['#36294D', '#7A67A0', '#D8CFEA'], veil: '25,15,40' },
     preto: { bg: '#141414', line: '#C9A96E', ink: '#FFFFFF', soft: 'rgba(255,255,255,0.78)', label: '#C9A96E', g: ['#0C0C0C', '#222222', '#383838'], veil: '0,0,0', dark: true },
+    // tons do perfil masculino
+    grafite: { bg: '#22272E', line: '#9AA3AD', ink: '#FFFFFF', soft: 'rgba(255,255,255,0.78)', label: '#B7C0CA', g: ['#14181D', '#2B323B', '#4A535E'], veil: '10,12,15', dark: true },
+    marinho: { bg: '#14253D', line: '#C9A96E', ink: '#FFFFFF', soft: 'rgba(255,255,255,0.8)', label: '#D9BE86', g: ['#0B1626', '#1B2F4D', '#33507A'], veil: '6,12,24', dark: true },
+    militar: { bg: '#EEF0E8', line: '#5A6B3E', ink: '#1D2414', soft: '#4B5640', label: '#4F5F34', g: ['#22291A', '#4A5838', '#B5BFA0'], veil: '20,25,12' },
+    laranja: { bg: '#141414', line: '#F28C28', ink: '#FFFFFF', soft: 'rgba(255,255,255,0.78)', label: '#F28C28', g: ['#0C0C0C', '#1F1F1F', '#3A2A1A'], veil: '0,0,0', dark: true },
   };
   /** Paleta a partir de uma cor livre (#rrggbb): tons calculados para combinar e manter a leitura. */
   function paletteFrom(hexColor) {

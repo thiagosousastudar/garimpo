@@ -10,17 +10,36 @@ const dayOf = (sec) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'n
 const channelOf = (utm) => (/instagram|insta\b|ig\b/i.test(String(utm || '')) ? 'instagram' : /whats|wpp|zap/i.test(String(utm || '')) ? 'whatsapp' : 'outro');
 const statusOf = (s) => (/complet/i.test(String(s || '')) ? 'confirmada' : /cancel/i.test(String(s || '')) ? 'cancelada' : 'pendente');
 
+/**
+ * Quais vendas são desta conta, pelas etiquetas (Sub IDs) do link: a etiqueta da conta; as sem etiqueta de
+ * nenhuma conta ligada vão para a conta principal. Sem contas ligadas, tudo é da conta (como antes).
+ */
+async function salesFilter(pool, uid) {
+  const me = (await pool.query('select sh_sub_id, sh_untagged from users where id = $1', [uid])).rows[0] || {};
+  const others = (await pool.query(
+    'select u.sh_sub_id from account_links l join users u on u.id = l.other_id where l.user_id = $1 and u.sh_sub_id is not null', [uid])).rows.map((r) => r.sh_sub_id);
+  const tags = (utm) => String(utm || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return (utm) => {
+    const t = tags(utm);
+    if (me.sh_sub_id && t.includes(me.sh_sub_id)) return true;
+    if (others.some((o) => t.includes(o))) return false;
+    return me.sh_untagged !== false;
+  };
+}
+
 /** Importa/atualiza as vendas dos últimos "days" dias. Devolve { created, updated, removed }. */
 async function syncShopeeSales({ pool, cfg, fetchImpl, uid, days = 60 }) {
   const { clientFor } = require('./garimpo');
   const sh = await clientFor({ pool, cfg, fetchImpl, uid, marketplace: 'SH' });
   const end = Date.now() / 1000;
   const start = end - Math.min(90, days) * 86400;
-  const out = { created: 0, updated: 0, removed: 0 };
+  const out = { created: 0, updated: 0, removed: 0, skipped: 0 };
+  const mine = await salesFilter(pool, uid);
   let scrollId = '';
   for (let page = 0; page < 20; page++) {
     const r = await sh.conversions({ start, end, scrollId });
     for (const conv of r.items) {
+      if (!mine(conv.utmContent)) { out.skipped++; continue; }
       for (const order of conv.orders || []) {
         for (const it of order.items || []) {
           const ref = `sh:${conv.conversionId}:${order.orderId}:${it.itemId}`;
@@ -55,6 +74,7 @@ async function syncShopeeSales({ pool, cfg, fetchImpl, uid, days = 60 }) {
     scrollId = r.scrollId;
   }
   await pool.query('update users set sh_sales_synced_at = now() where id = $1', [uid]);
+  if (!out.skipped) delete out.skipped; // só aparece quando há vendas de outra conta
   return out;
 }
 
@@ -73,4 +93,4 @@ async function runShopeeSalesTick({ pool, cfg, fetchImpl, log = console }) {
   return n;
 }
 
-module.exports = { syncShopeeSales, runShopeeSalesTick, channelOf, statusOf };
+module.exports = { syncShopeeSales, runShopeeSalesTick, salesFilter, channelOf, statusOf };

@@ -139,6 +139,24 @@ function earningsRoutes({ pool }) {
     res.json({ imported, errors });
   });
 
+  /** Todas as contas ligadas, lado a lado: comissão e pedidos no período. */
+  r.get('/accounts', async (req, res) => {
+    const days = Math.max(1, Math.min(365, Number(req.query.days) || 14));
+    const start = addDays(todayInTz(), -(days - 1));
+    const ids = [req.uid, ...(await pool.query('select other_id from account_links where user_id = $1', [req.uid])).rows.map((r) => r.other_id)];
+    const out = [];
+    for (const id of ids) {
+      const u = (await pool.query('select id, name, email from users where id = $1', [id])).rows[0];
+      if (!u) continue;
+      const k = (await pool.query(
+        `select coalesce(sum(commission), 0) as total, coalesce(sum(orders), 0) as orders,
+                coalesce(sum(case when status = 'pendente' then commission else 0 end), 0) as pending
+           from earnings where user_id = $1 and day >= $2`, [id, start])).rows[0];
+      out.push({ id: u.id, name: u.name || u.email, current: id === req.uid, total: Number(k.total), orders: Number(k.orders), pending: Number(k.pending) });
+    }
+    res.json({ days, accounts: out });
+  });
+
   r.get('/summary', async (req, res) => {
     const days = Math.max(1, Math.min(365, Number(req.query.days) || 14));
     const end = todayInTz();
