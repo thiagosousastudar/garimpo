@@ -661,7 +661,7 @@
       '<button type="button" data-pv="vitrine" aria-pressed="' + (state.pv === 'vitrine') + '">🛍️ Vitrine (link da bio)</button></div>';
     if (state.pv === 'vitrine') return '<div class="pagehead"><h2>Vitrine</h2><p>Seu mini site para o link da bio: categorias com os produtos que você escolher.</p></div>' + pvSwitch + viewVitrine();
     return '<div class="pagehead"><h2>Produtos</h2><p>Seus produtos salvos. Os novos aparecem no topo; mude a ordem quando quiser.</p></div>' + pvSwitch +
-      '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button><button class="btn" data-act="ml-lists">💌 Listas de links</button>' +
+      '<div class="toolbar"><button class="btn primary" data-act="links-open">Cadastrar por links</button><button class="btn" data-act="new-product">Novo produto</button><button class="btn" data-act="import-products">Importar CSV</button><button class="btn" data-act="ml-lists">💌 Listas de links</button><button class="btn" data-act="bm-open">⭐ Botão Salvar no Garimpo</button>' +
       (state.products.some(function (p) { return p.external_id && mktReady(p.marketplace); }) ? '<button class="btn" data-act="refresh-all">Atualizar todos os preços</button>' : '') + '</div>' +
       '<div class="psearch"><input id="f-q" type="search" placeholder="Buscar nos seus produtos…" value="' + esc(state.pq) + '" aria-label="Buscar produtos" autocomplete="off">' + views + '</div>' +
       '<div class="filters">' + chips + '<span class="sep"></span>' +
@@ -1389,7 +1389,7 @@
           var img = safeUrl(x.image_url);
           var head = '<div class="linkhead">' + (img ? '<img src="' + esc(img) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span class="noimg"></span>') +
             '<div class="grow"><div class="meta">' + (x.marketplace ? mktTag(x.marketplace) : '') +
-            (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source === 'planilha' ? '<span class="tag free">planilha da Shopee</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
+            (x.source === 'api' ? '<span class="tag free">dados da loja</span>' : x.source === 'navegador' ? '<span class="tag free">lido da página</span>' : x.source === 'planilha' ? '<span class="tag free">planilha da Shopee</span>' : x.source ? '<span class="tag plain">prévia do link</span>' : '') +
             (x.sales_k ? '<span class="hint">' + (x.sales_k >= 1 ? x.sales_k + ' mil' : Math.round(x.sales_k * 1000)) + ' vendidos</span>' : '') +
             (x.shop ? '<span class="hint">· ' + esc(x.shop) + '</span>' : '') +
             // abre a página do produto (não o link de afiliado, para não gerar clique na própria conta)
@@ -2124,6 +2124,114 @@
   Object.assign(actions, {
     'tg-alert-use': function (t) {
       return api('PUT', '/api/connections/telegram/alerts', { chat_id: t.dataset.id }).then(function (r) { state.tg.alert_chat_id = r.alert_chat_id; state.tgMe = null; toast('Avisos ligados! Mandei uma mensagem de teste no seu Telegram.'); render(); });
+    },
+  });
+
+  /* ---------- botão "Salvar no Garimpo" (favorito do navegador) ---------- */
+  /**
+   * Roda na página do produto que a pessoa abriu (Mercado Livre ou Shopee), não aqui: lê nome, preço, preço "de",
+   * foto e loja da própria página e abre o Garimpo com o produto pronto para conferir e salvar.
+   * Nada é enviado a terceiros; os dados vão no endereço (#importar=...) da aba nova do Garimpo.
+   */
+  function garimpoBookmarklet(origin) {
+    var host = location.hostname;
+    var mk = /mercadoli(vre|bre)\./.test(host) ? 'ML' : /shopee\./.test(host) ? 'SH' : null;
+    if (!mk) { alert('Abra a página de um produto do Mercado Livre ou da Shopee e toque de novo em "Salvar no Garimpo".'); return; }
+    var num = function (v) {
+      if (v == null || v === '') return null;
+      var s = String(v).replace(/[^\d.,]/g, '');
+      if (s.indexOf(',') > -1) s = s.replace(/\./g, '').replace(',', '.');
+      var n = parseFloat(s);
+      return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+    };
+    var aria = function (el) {
+      var t = el && (el.getAttribute('aria-label') || '');
+      var m = t.match(/([\d.]+)\s*reais(?:\s*com\s*(\d+)\s*centavos)?/i);
+      return m ? Number(m[1].replace(/\./g, '')) + (m[2] ? Number(m[2]) / 100 : 0) : el ? num(el.textContent) : null;
+    };
+    var meta = function (p) {
+      var el = document.querySelector('meta[property="' + p + '"],meta[name="' + p + '"],meta[itemprop="' + p + '"]');
+      return el ? el.getAttribute('content') : null;
+    };
+    var ld = null;
+    Array.prototype.forEach.call(document.querySelectorAll('script[type="application/ld+json"]'), function (s) {
+      try {
+        var j = JSON.parse(s.textContent);
+        [].concat(j, j && j['@graph'] || []).forEach(function (x) { if (!ld && x && x['@type'] === 'Product') ld = x; });
+      } catch (e) { /* bloco que não é JSON */ }
+    });
+    var off = ld && ld.offers ? [].concat(ld.offers)[0] || {} : {};
+    var h1 = document.querySelector('h1');
+    var title = String((ld && ld.name) || (h1 && h1.textContent) || meta('og:title') || document.title || '').replace(/\s*\|\s*Mercado Livre.*$/i, '').trim();
+    var img = (ld && [].concat(ld.image || [])[0]) || meta('og:image');
+    var price = num(off.price || off.lowPrice) || num(meta('product:price:amount') || meta('price'));
+    var orig = null;
+    var text = document.body ? document.body.innerText : '';
+    var shop = null, official = false;
+    if (mk === 'ML') {
+      var cur = document.querySelector('.ui-pdp-price__second-line .andes-money-amount, .ui-pdp-price .andes-money-amount:not(.andes-money-amount--previous)');
+      if (cur && !price) price = aria(cur);
+      orig = aria(document.querySelector('.ui-pdp-price s.andes-money-amount, .andes-money-amount--previous'));
+      var lo = text.match(/Loja oficial\s+([^\n+|]{2,40})/i);
+      if (lo) { shop = lo[1].replace(/\s+\d.*$/, '').trim(); official = true; }
+    } else {
+      var strike = Array.prototype.filter.call(document.querySelectorAll('div,span'), function (el) { return el.children.length === 0 && /^R\$\s?[\d.,]+$/.test(el.textContent.trim()) && /line-through/.test(getComputedStyle(el).textDecoration); })[0];
+      orig = strike ? num(strike.textContent) : null;
+      if (/Shopee Mall|Loja Oficial/i.test(text)) official = true;
+    }
+    if (!title || !price) {
+      if (!confirm('Não achei ' + (!title ? 'o nome' : 'o preço') + ' nesta página. Abrir o Garimpo mesmo assim para completar?')) return;
+    }
+    var data = { m: mk, t: title.slice(0, 300), p: price, o: orig && price && orig > price ? orig : null, i: img || null, u: location.href, s: shop, of: official };
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(data)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    window.open(origin + '/#importar=' + b64, '_blank');
+  }
+  function bookmarkletHref() {
+    return 'javascript:' + encodeURIComponent('(' + garimpoBookmarklet.toString() + ')(' + JSON.stringify(location.origin) + ');void 0');
+  }
+
+  /** Produto vindo do botão: abre "Cadastrar por links" com ele preenchido para conferir e salvar. */
+  var pendingImport = null;
+  (function () {
+    var m = location.hash.match(/^#importar=([A-Za-z0-9_-]+)/);
+    if (!m) return;
+    try { pendingImport = JSON.parse(decodeURIComponent(escape(atob(m[1].replace(/-/g, '+').replace(/_/g, '/'))))); } catch (_) { pendingImport = null; }
+    history.replaceState(null, '', location.pathname);
+  })();
+  function mlIdFrom(u) {
+    var s = decodeURIComponent(String(u || ''));
+    var m = s.match(/item_id[:=](MLB)-?(\d+)/i) || s.match(/[?&#]wid=(MLB)(\d+)/i) || s.match(/\/p\/(MLB)(\d+)/i) || s.match(/(MLB)-?(\d{6,})/i);
+    return m ? 'MLB' + m[2] : null;
+  }
+  function maybeImport() {
+    if (!pendingImport || !state.user) return;
+    var d = pendingImport; pendingImport = null;
+    var link = /^https:\/\//i.test(d.u || '') ? d.u : '';
+    var sh = d.m === 'SH' && String(link).match(/-i\.(\d+)\.(\d+)|\/product\/(\d+)\/(\d+)/);
+    var item = {
+      marketplace: d.m === 'SH' ? 'SH' : 'ML', title: String(d.t || ''), price: d.p || null, original_price: d.o || null,
+      image_url: /^https:\/\//i.test(d.i || '') ? d.i : null, product_url: link.split('#')[0].split('?')[0], affiliate_url: link, link: link,
+      external_id: d.m === 'SH' ? (sh ? (sh[1] || sh[3]) + '.' + (sh[2] || sh[4]) : null) : mlIdFrom(link),
+      shop: d.s || null, official_store: Boolean(d.of), source: 'navegador',
+    };
+    state.tab = 'descobrir'; state.pv = 'produtos'; render();
+    links = { text: '', items: [item] }; renderLinks(); if (!dlg.open) dlg.showModal();
+    if (d.m === 'ML' && !/meli\.la/i.test(link)) toast('Dica: o link curto do botão Compartilhar (meli.la) é o mais garantido para a comissão. Dá para colar no lugar.');
+  }
+
+  Object.assign(actions, {
+    'bm-open': function () {
+      dlg.innerHTML = '<h2>⭐ Botão "Salvar no Garimpo"</h2><div class="stack" style="display:flex;flex-direction:column;gap:10px">' +
+        '<p>Com ele, você abre o anúncio no Mercado Livre ou na Shopee, toca no botão e o produto chega aqui com <b>nome, preço, preço "de", foto e link</b>. Funciona até nos anúncios que a API não libera (cores e tamanhos, /up/MLBU…).</p>' +
+        '<p class="lblsm">1. Instale (uma vez, no computador)</p>' +
+        '<p class="hint">Mostre a barra de favoritos (<b>Ctrl + Shift + B</b>) e <b>arraste</b> o botão abaixo até ela:</p>' +
+        '<p style="text-align:center"><a class="btn primary bm-link" href="' + esc(bookmarkletHref()) + '" title="Arraste para a barra de favoritos">⭐ Salvar no Garimpo</a></p>' +
+        '<p class="lblsm">2. Use</p><ol class="steps"><li>Abra o anúncio (de preferência pela barra de Afiliados, para o link já ser seu).</li><li>Toque em <b>⭐ Salvar no Garimpo</b> na barra de favoritos.</li><li>O Garimpo abre com o produto preenchido: confira a comissão e toque em <b>Salvar</b>.</li></ol>' +
+        '<p class="hint">Tocar no botão aqui no Garimpo não faz nada: ele só funciona na página do produto. No celular, favoritos assim são difíceis de usar; prefira o computador.</p>' +
+        '<div class="row end"><button type="button" class="btn" data-act="close-dlg">Fechar</button></div></div>';
+      var a = $('.bm-link', dlg);
+      if (a) a.addEventListener('click', function (e) { e.preventDefault(); toast('Arraste o botão para a barra de favoritos.'); });
+      if (!dlg.open) dlg.showModal();
     },
   });
 
@@ -2895,7 +3003,7 @@
       e.preventDefault();
       var f = Object.fromEntries(new FormData(e.target).entries());
       var url = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; applyAccount(m); return reload(); }); })
+      api('POST', url, f).then(function (r) { state.user = r.user; return api('GET', '/api/auth/me').then(function (m) { state.ai = m.ai; state.signup = m.signup; state.brand = m.brand || state.brand; state.shipZip = m.ship_zip || null; applyAccount(m); return reload().then(maybeImport); }); })
         .catch(function (err) { var el = $('#auth-err'); if (el) el.textContent = err.message; });
     } else if (e.target.id === 'ig-form') {
       e.preventDefault();
@@ -2998,6 +3106,7 @@
     }
   }).then(function () {
     render();
+    maybeImport();
     if (mlBack === 'ok') toast('Mercado Livre autorizado. Já pode garimpar!');
     else if (mlBack) toast('Mercado Livre: ' + (mlMsg || 'não foi possível autorizar.'));
     if (igBack === 'ok') toast('Instagram conectado!');
