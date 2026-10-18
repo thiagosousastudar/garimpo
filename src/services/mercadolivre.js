@@ -280,11 +280,15 @@ function createMercadoLivreClient({ token, defaultCommission = null, commissionT
     async getItem(externalId) {
       const id = String(externalId || '');
       if (!/^MLB\d+$/.test(id)) throw new Error('ID do produto do Mercado Livre inválido.');
-      try {
-        const [prod, offer] = await Promise.all([get(`/products/${id}`), bestOffer(id)]);
-        return offer ? await catalogItem(prod, offer) : null;
-      } catch (e) {
-        if (e.status !== 404) throw e;
+      let prod = null;
+      try { prod = await get(`/products/${id}`); } catch (e) { if (e.status !== 404) throw e; }
+      if (prod) {
+        // produto de catálogo: sem vendedor em destaque agora ("No winners found"), vem nome e fotos sem preço
+        let offer = null;
+        try { offer = await bestOffer(id); } catch (e) { if (e.status !== 404) throw e; }
+        if (offer) return catalogItem(prod, offer);
+        const root = await rootOf(prod.category_id);
+        return fromCatalog(prod, null, commissionFor, null, root);
       }
       try {
         return fromItem(await get(`/items/${id}`), defaultCommission);

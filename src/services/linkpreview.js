@@ -134,6 +134,8 @@ async function previewLink(raw, { fetchImpl = fetch, mlClient = null, shClient =
       try {
         const full = await mlClient.getItem(id);
         if (full && full.price) return { ...full, link, affiliate_url: link, source: 'api' };
+        // catálogo sem vendedor em destaque agora: nome e foto da loja, preço a pessoa preenche
+        if (full && full.title) return { ...full, link, affiliate_url: link, source: 'manual', warning: 'O Mercado Livre não mostra o preço deste produto agora (sem vendedor em destaque). Preencha o preço.' };
       } catch (_) { /* cai na prévia */ }
     }
     const og = await openGraph(finalUrl, fetchImpl).catch(() => null);
