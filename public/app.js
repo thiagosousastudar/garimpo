@@ -1627,6 +1627,7 @@
       f('vf-avatar_url', 'Foto (link, opcional)', s ? s.avatar_url : '', 'placeholder="https://…"', 'Sem foto, aparecem as suas iniciais.') + '</div>' +
       '<div class="cols">' + f('vf-whatsapp_url', 'Grupo/canal do WhatsApp (opcional)', s ? s.whatsapp_url : '', 'placeholder="https://chat.whatsapp.com/…"') +
       f('vf-telegram_url', 'Canal do Telegram (opcional)', s ? s.telegram_url : '', 'placeholder="https://t.me/…"') + '</div>' +
+      f('vf-domain', 'Domínio próprio (opcional)', s ? s.domain : '', 'placeholder="anninhaachadinhos.com.br" autocapitalize="none" spellcheck="false"', 'O domínio que você comprou. Ele também precisa estar apontado para o Garimpo no Registro.br.') +
       '<label class="check"><input type="checkbox" id="vf-published"' + (s && s.published ? ' checked' : '') + '> <b>Vitrine publicada</b> (qualquer pessoa com o link vê)</label>' +
       '<p class="err" id="vit-err" role="alert"></p><button class="btn primary" type="submit">' + (s ? 'Salvar' : 'Criar minha vitrine') + '</button></form>';
 
@@ -1635,8 +1636,8 @@
     }
 
     var linkCard = '<section class="card vlink"><div class="row"><span class="pill ' + (s.published ? 'posted' : '') + '">' + (s.published ? '● Publicada' : 'Rascunho: só você vê') + '</span><span class="grow"></span><span class="hint">' + (s.views || 0) + ' visita' + (s.views === 1 ? '' : 's') + '</span></div>' +
-      '<p class="vurl"><code>' + esc(s.url) + '</code></p>' +
-      '<div class="row"><button class="btn small primary" data-act="vit-copy">Copiar link</button><a class="btn small" href="' + esc(s.url) + '" target="_blank" rel="noopener">Abrir vitrine ↗</a>' +
+      '<p class="vurl"><code>' + esc(s.domain_url || s.url) + '</code></p>' + (s.domain_url ? '<p class="hint" style="margin-top:-4px">Também abre em ' + esc(s.url) + '</p>' : '') +
+      '<div class="row"><button class="btn small primary" data-act="vit-copy">Copiar link</button><a class="btn small" href="' + esc(s.domain_url || s.url) + '" target="_blank" rel="noopener">Abrir vitrine ↗</a>' +
       (s.published ? '' : '<button class="btn small" data-act="vit-publish">Publicar agora</button>') + '</div>' +
       '<details class="sched"><summary>Como colocar na bio do Instagram</summary><ol class="steps"><li>No Instagram, toque em <b>Editar perfil → Links → Adicionar link externo</b>.</li><li>Cole o link da vitrine e dê o título "Meus achadinhos".</li><li>Na legenda dos posts, use: <i>"Link na bio 💖"</i> ou <i>"Comenta EU QUERO"</i>.</li></ol></details></section>';
 
@@ -1666,7 +1667,7 @@
     var g = function (id) { var el = $('#' + id); return el ? el.value : ''; };
     var s = state.vit.store;
     return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || 'rosa',
-      instagram: g('vf-instagram'), avatar_url: g('vf-avatar_url'), whatsapp_url: g('vf-whatsapp_url'), telegram_url: g('vf-telegram_url'),
+      instagram: g('vf-instagram'), domain: g('vf-domain'), avatar_url: g('vf-avatar_url'), whatsapp_url: g('vf-whatsapp_url'), telegram_url: g('vf-telegram_url'),
       published: Boolean(($('#vf-published') || {}).checked) };
   }
   function saveVitrine(data) {
@@ -1745,7 +1746,7 @@
       state.vitTheme = t.dataset.theme;
       document.querySelectorAll('[data-act="vit-theme"]').forEach(function (b) { var on = b.dataset.theme === state.vitTheme; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
     },
-    'vit-copy': function () { return copyText(state.vit.store.url).then(function (ok) { toast(ok ? 'Link copiado! Cole na bio do Instagram.' : state.vit.store.url); }); },
+    'vit-copy': function () { var u = state.vit.store.domain_url || state.vit.store.url; return copyText(u).then(function (ok) { toast(ok ? 'Link copiado! Cole na bio do Instagram.' : u); }); },
     'vit-publish': function () { var s = state.vit.store; return saveVitrine(Object.assign({}, s, { published: true })); },
     'vit-new': function () { sectionDialog(null); },
     'vit-sugg': function (t) { sectionDialog(null, { emoji: t.dataset.emoji, name: t.dataset.name }); },

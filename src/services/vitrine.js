@@ -85,7 +85,7 @@ function card(p, base, big = false) {
 
 function footer(s, base) {
   return `<footer><p class="disc">Os links desta página são de afiliado: posso ganhar uma comissão quando você compra por eles, sem nenhum custo a mais para você. Preços e estoque podem mudar; confira no site da loja antes de comprar.</p>
-<p class="fine">${esc(s.title)} · <a href="${esc(base)}">Vitrine</a></p></footer>`;
+<p class="fine">${esc(s.title)} · <a href="${esc(base || '/')}">Vitrine</a></p></footer>`;
 }
 
 function socials(s) {
@@ -134,10 +134,10 @@ function renderPost({ store: s, list, products, base, url, preview }) {
   const firstImg = products.find((p) => p.image);
   return `${head({ title: `${list.name} · ${s.title}`, description: `Os ${products.length} achadinhos do post, com link direto para a loja.`, image: firstImg && firstImg.image, theme: s.theme, url })}
 <body>${preview ? '<div class="pv">Prévia: só você vê. Publique a vitrine no Garimpo para liberar esta página.</div>' : ''}<main>
-<header class="hero small"><a class="back" href="${esc(base)}">${avatar(s, 'sm')}<span>${esc(s.title)}</span></a>
+<header class="hero small"><a class="back" href="${esc(base || '/')}">${avatar(s, 'sm')}<span>${esc(s.title)}</span></a>
 <h1>${esc(list.name)}</h1><p class="bio">Os ${products.length} ${products.length === 1 ? 'achadinho' : 'achadinhos'} do post, com link direto para a loja 💖</p></header>
 <div class="list">${products.map((p, i) => card({ ...p, name: `${i + 1}. ${p.name}` }, base, true)).join('') || '<p class="empty">Os itens deste post não estão mais disponíveis.</p>'}</div>
-<a class="more" href="${esc(base)}">Ver todos os achadinhos →</a>
+<a class="more" href="${esc(base || '/')}">Ver todos os achadinhos →</a>
 ${footer(s, base)}</main></body></html>`;
 }
 

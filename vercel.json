@@ -6,7 +6,10 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/r/(.*)", "destination": "/api" },
-    { "source": "/v/(.*)", "destination": "/api" }
+    { "source": "/v/(.*)", "destination": "/api" },
+    { "source": "/", "destination": "/api" },
+    { "source": "/p/(.*)", "destination": "/api" },
+    { "source": "/ir/(.*)", "destination": "/api" }
   ],
   "functions": { "api/index.js": { "maxDuration": 60 } },
   "headers": [

@@ -10,6 +10,15 @@ const MAX_SECTIONS = 20;
 const MAX_ITEMS = 60;
 
 const itemsOf = (row) => { try { const v = JSON.parse(row.items || '[]'); return Array.isArray(v) ? v.map(Number).filter(Number.isInteger) : []; } catch (_) { return []; } };
+/** "https://www.Loja.com.br/x" -> "loja.com.br" (null se vazio; erro se não parecer domínio). */
+function cleanDomain(v) {
+  const s = String(v || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').replace(/\.$/, '');
+  if (!s) return null;
+  if (!/^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(s)) throw new HttpError(400, 'Domínio inválido. Use só o endereço, ex.: anninhaachadinhos.com.br');
+  return s;
+}
+const hostOf = (req) => String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase().replace(/:\d+$/, '').replace(/^www\./, '');
+
 const text = (v, n) => { const s = String(v == null ? '' : v).trim(); return s ? s.slice(0, n) : null; };
 
 /** Endereço sugerido a partir do @ do Instagram ou do nome. */
@@ -51,7 +60,7 @@ function vitrineRoutes({ pool, cfg }) {
     }
     res.json({
       store: s && { slug: s.slug, title: s.title, bio: s.bio, theme: s.theme, avatar_url: s.avatar_url, whatsapp_url: s.whatsapp_url, telegram_url: s.telegram_url,
-        instagram: s.instagram, published: s.published, views: s.views, url: urlOf(s.slug) },
+        instagram: s.instagram, published: s.published, views: s.views, url: urlOf(s.slug), domain: s.domain || null, domain_url: s.domain ? `https://${s.domain}` : null },
       sections, suggestion, themes: THEME_NAMES,
     });
   });
@@ -72,14 +81,22 @@ function vitrineRoutes({ pool, cfg }) {
     const tg = link(b.telegram_url, /^https:\/\/(t\.me|telegram\.me)\//i, 'O link do Telegram deve começar com https://t.me/.');
     const ig = text(String(b.instagram || '').replace(/^@/, ''), 30);
     if (ig && !/^[A-Za-z0-9._]{1,30}$/.test(ig)) throw new HttpError(400, 'O @ do Instagram tem letras, números, ponto ou _.');
+    const domain = cleanDomain(b.domain);
+    const appHost = new URL(cfg.appUrl).hostname.replace(/^www\./, '');
+    if (domain && (domain === appHost || domain.endsWith('.vercel.app'))) throw new HttpError(400, 'Esse é o endereço do próprio Garimpo. Use o seu domínio, ex.: anninhaachadinhos.com.br');
+    if (domain) {
+      const other = (await pool.query('select user_id from storefronts where domain = $1', [domain])).rows[0];
+      if (other && other.user_id !== req.uid) throw new HttpError(409, 'Esse domínio já está ligado a outra vitrine.');
+    }
     await pool.query(
-      `insert into storefronts (user_id, slug, title, bio, theme, avatar_url, whatsapp_url, telegram_url, instagram, published, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+      `insert into storefronts (user_id, slug, title, bio, theme, avatar_url, whatsapp_url, telegram_url, instagram, published, domain, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
        on conflict (user_id) do update set slug = excluded.slug, title = excluded.title, bio = excluded.bio, theme = excluded.theme,
          avatar_url = excluded.avatar_url, whatsapp_url = excluded.whatsapp_url, telegram_url = excluded.telegram_url,
-         instagram = excluded.instagram, published = excluded.published, updated_at = now()`,
-      [req.uid, slug, title, text(b.bio, 200), theme, avatar, wa, tg, ig, Boolean(b.published)]
+         instagram = excluded.instagram, published = excluded.published, domain = excluded.domain, updated_at = now()`,
+      [req.uid, slug, title, text(b.bio, 200), theme, avatar, wa, tg, ig, Boolean(b.published), domain]
     );
+    domainCache.clear();
     res.json({ ok: true, url: urlOf(slug) });
   });
 
@@ -141,7 +158,10 @@ function publicVitrineRoutes({ pool, cfg }) {
     let owner = false;
     try { owner = jwt.verify(req.cookies?.garimpo_session || '', cfg.jwtSecret).uid === s.user_id; } catch (_) { owner = false; }
     if (!s.published && !owner) return {};
-    return { s, preview: !s.published };
+    // pelo domínio próprio os links ficam na raiz (/p/1, /ir/2); pelo Garimpo, em /v/endereco
+    const base = req.vitrineDomain ? '' : `/v/${s.slug}`;
+    const site = s.domain ? `https://${s.domain}` : `${cfg.appUrl}/v/${s.slug}`;
+    return { s, preview: !s.published, base, site };
   }
   const human = (req) => !BOTS.test(String(req.headers['user-agent'] || ''));
   const send = (res, status, html, cache) => {
@@ -150,7 +170,7 @@ function publicVitrineRoutes({ pool, cfg }) {
   const productsOf = async (uid) => new Map((await pool.query('select * from products where user_id = $1', [uid])).rows.map((p) => [p.id, p]));
 
   r.get('/:slug', async (req, res) => {
-    const { s, preview } = await storeFor(req);
+    const { s, preview, base, site } = await storeFor(req);
     if (!s) return send(res, 404, renderMissing('Essa vitrine não existe ou ainda não foi publicada.'));
     const prods = await productsOf(s.user_id);
     const sections = (await pool.query('select * from storefront_sections where user_id = $1 order by position, id', [s.user_id])).rows.map((x) => ({
@@ -164,20 +184,18 @@ function publicVitrineRoutes({ pool, cfg }) {
       return { id: l.id, name: l.name, count: ps.length, image: httpsUrl((ps.find((p) => p.image_url) || {}).image_url) };
     }).filter((p) => p.count);
     if (!preview && human(req)) await pool.query('update storefronts set views = views + 1 where user_id = $1', [s.user_id]);
-    const base = `/v/${s.slug}`;
-    send(res, 200, renderStore({ store: s, sections, posts, base, url: `${cfg.appUrl}${base}`, preview }), !preview);
+    send(res, 200, renderStore({ store: s, sections, posts, base, url: site, preview }), !preview);
   });
 
   r.get('/:slug/p/:id', async (req, res) => {
-    const { s, preview } = await storeFor(req);
+    const { s, preview, base, site } = await storeFor(req);
     if (!s) return send(res, 404, renderMissing('Essa página não existe ou ainda não foi publicada.'));
     const list = (await pool.query('select * from link_lists where id = $1 and user_id = $2', [Number(req.params.id) || 0, s.user_id])).rows[0];
     if (!list) return send(res, 404, renderMissing('Esse post não está mais disponível.'));
     const prods = await productsOf(s.user_id);
     let items = []; try { items = JSON.parse(list.items || '[]'); } catch (_) { items = []; }
     const products = items.filter((i) => prods.has(i.product_id)).map((i) => publicProduct(prods.get(i.product_id), i.name));
-    const base = `/v/${s.slug}`;
-    send(res, 200, renderPost({ store: s, list, products, base, url: `${cfg.appUrl}${base}/p/${list.id}`, preview }), !preview);
+    send(res, 200, renderPost({ store: s, list, products, base, url: `${site}/p/${list.id}`, preview }), !preview);
   });
 
   /** Botão do produto: conta o clique (gente, não robô) e leva ao link de afiliado. */
@@ -194,4 +212,32 @@ function publicVitrineRoutes({ pool, cfg }) {
   return r;
 }
 
-module.exports = { vitrineRoutes, publicVitrineRoutes, suggestSlug };
+/**
+ * Domínio próprio: quando o pedido chega por um domínio ligado a uma vitrine, "/", "/p/:id" e "/ir/:id"
+ * passam a ser a vitrine (o resto do site continua igual). Guarda a consulta por 1 minuto.
+ */
+const domainCache = new Map();
+function domainVitrine({ pool, cfg }) {
+  const appHost = new URL(cfg.appUrl).hostname.replace(/^www\./, '');
+  return async (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    const host = hostOf(req);
+    if (!host || host === appHost || host === 'localhost' || host === '127.0.0.1' || host.endsWith('.vercel.app')) return next();
+    const m = req.path.match(/^\/(?:(p|ir)\/(\d+))?\/?$/);
+    if (!m) return next();
+    try {
+      let hit = domainCache.get(host);
+      if (!hit || hit.at < Date.now() - 60000) {
+        const row = (await pool.query('select slug from storefronts where domain = $1', [host])).rows[0];
+        hit = { slug: row ? row.slug : null, at: Date.now() };
+        domainCache.set(host, hit);
+      }
+      if (!hit.slug) return next();
+      req.vitrineDomain = host;
+      req.url = `/v/${hit.slug}${m[1] ? `/${m[1]}/${m[2]}` : ''}`;
+    } catch (_) { /* sem banco: segue normal */ }
+    next();
+  };
+}
+
+module.exports = { vitrineRoutes, publicVitrineRoutes, domainVitrine, suggestSlug, cleanDomain };

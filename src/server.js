@@ -14,7 +14,7 @@ const { garimpoRoutes } = require('./routes/garimpo');
 const { automationRoutes } = require('./routes/automations');
 const { couponRoutes } = require('./routes/coupons');
 const { linkListRoutes } = require('./routes/linklists');
-const { vitrineRoutes, publicVitrineRoutes } = require('./routes/vitrine');
+const { vitrineRoutes, publicVitrineRoutes, domainVitrine } = require('./routes/vitrine');
 const { directRoutes } = require('./routes/dm');
 const { createStorage } = require('./services/storage');
 const { startScheduler } = require('./services/publisher');
@@ -65,6 +65,7 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
     res.set('cache-control', 'no-store');
     res.redirect(302, target);
   });
+  app.use(domainVitrine({ pool, cfg })); // domínio próprio: abre a vitrine na raiz
   app.use('/v', publicVitrineRoutes({ pool, cfg })); // vitrine pública (mini site da bio) e páginas de post
   app.use('/api/auth', authRoutes({ pool, cfg }));
   const guard = requireAuth(cfg);
@@ -82,6 +83,8 @@ function createApp({ pool, cfg, fetchImpl = fetch, storage = createStorage(cfg) 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 
   app.use('/uploads', express.static(cfg.uploadDir, { index: false, maxAge: '7d' }));
+  // painel: app.html na raiz (não é index.html para a Vercel mandar "/" ao servidor, que decide entre painel e vitrine)
+  app.get('/', (_req, res) => res.set('cache-control', 'no-cache').sendFile(path.join(__dirname, '..', 'public', 'app.html')));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   // eslint-disable-next-line no-unused-vars

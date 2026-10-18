@@ -2246,3 +2246,47 @@ test('vitrine: mini site da bio com categorias, prévia só para a dona, clique 
     assert.equal((await html('/v/nao-existe')).status, 404);
   } finally { t.close(); }
 });
+
+test('vitrine com domínio próprio: a raiz do domínio abre a vitrine; o endereço do Garimpo continua abrindo o painel', async () => {
+  const t = await boot();
+  const base = `http://127.0.0.1:${t.server.address().port}`;
+  const get = async (url, host) => { const r = await fetch(base + url, { headers: host ? { 'x-forwarded-host': host } : {}, redirect: 'manual' }); return { status: r.status, text: await r.text(), location: r.headers.get('location') }; };
+  try {
+    const a = t.client();
+    await signup(a);
+    const p = (await a('POST', '/api/products', { ...PRODUTO, title: 'Pote hermético', affiliate_url: 'https://s.shopee.com.br/POTE1' })).data.product;
+    assert.equal((await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Anninha', domain: 'app.exemplo.com' })).status, 400);
+    assert.equal((await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Anninha', domain: 'não é domínio' })).status, 400);
+    const sv = await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Anninha', published: true, domain: 'https://www.AnninhaAchadinhos.com.br/' });
+    assert.equal(sv.status, 200, JSON.stringify(sv.data));
+    const v = (await a('GET', '/api/vitrine')).data.store;
+    assert.deepEqual([v.domain, v.domain_url], ['anninhaachadinhos.com.br', 'https://anninhaachadinhos.com.br']);
+    await a('POST', '/api/vitrine/sections', { name: 'Cozinha', items: [p.id] });
+    const ll = (await a('POST', '/api/link-lists', { name: 'Post', items: [{ product_id: p.id }] })).data.list;
+
+    // pelo domínio (com ou sem www): vitrine na raiz, links sem /v/
+    for (const host of ['anninhaachadinhos.com.br', 'www.anninhaachadinhos.com.br']) {
+      const home = await get('/', host);
+      assert.equal(home.status, 200);
+      assert.match(home.text, /<h1>Anninha<\/h1>/);
+      assert.match(home.text, new RegExp(`href="/ir/${p.id}"`));
+      assert.match(home.text, new RegExp(`href="/p/${ll.id}"`));
+      assert.match(home.text, /og:url" content="https:\/\/anninhaachadinhos\.com\.br"/);
+    }
+    const post = await get(`/p/${ll.id}`, 'anninhaachadinhos.com.br');
+    assert.equal(post.status, 200);
+    assert.match(post.text, /class="back" href="\/"/);
+    const go = await get(`/ir/${p.id}`, 'anninhaachadinhos.com.br');
+    assert.equal(go.status, 302);
+    assert.equal(go.location, 'https://s.shopee.com.br/POTE1');
+    // outro domínio qualquer e o endereço do Garimpo: painel
+    assert.match((await get('/')).text, /app\.js\?v=/);
+    assert.match((await get('/', 'outro-dominio.com')).text, /app\.js\?v=/);
+    // pelo Garimpo, a vitrine segue em /v/anninha com os links completos
+    assert.match((await get('/v/anninha')).text, new RegExp(`href="/v/anninha/ir/${p.id}"`));
+    // outro usuário não pega o mesmo domínio
+    const b = t.client();
+    await signup(b, 'b@exemplo.com');
+    assert.equal((await b('PUT', '/api/vitrine', { slug: 'outra', title: 'B', domain: 'anninhaachadinhos.com.br' })).status, 409);
+  } finally { t.close(); }
+});
