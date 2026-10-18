@@ -347,7 +347,8 @@ test('fila: textos, edição, agendamento, mídia e regras de status', async () 
   const ig = await a('POST', '/api/queue', { product_id: p.id, channel: 'instagram' });
   assert.equal(ig.status, 201);
   assert.match(ig.data.item.caption, /Air Fryer 3,5L/);
-  assert.match(ig.data.item.caption, /Link na bio/);
+  assert.match(ig.data.item.caption, /Comenta EU QUERO/);
+  assert.match(ig.data.item.caption, /link da bio/);
   assert.equal(ig.data.item.media_type, 'image');
 
   const zap = await a('POST', '/api/queue', { product_id: p.id, channel: 'whatsapp' });
@@ -983,11 +984,10 @@ test('Mercado Livre profissional: tendências, categorias, selos, galeria, texto
     assert.equal(prod.free_shipping, true);
     assert.ok(!('extras' in prod));
 
-    // texto do post usa frete grátis/Full, loja oficial, ranking e características
+    // texto do post: enxuto, com frete grátis/Full e loja oficial numa linha (sem a lista de características)
     const prev = await api('POST', '/api/queue/preview', { product_id: prod.id, channel: 'instagram' });
-    assert.match(prev.data.caption, /frete grátis com entrega Full/i);
-    assert.match(prev.data.caption, /loja oficial/i);
-    assert.match(prev.data.caption, /Capacidade de 4,2 L/);
+    assert.match(prev.data.caption, /Frete grátis Full · Loja oficial/);
+    assert.doesNotMatch(prev.data.caption, /Capacidade de 4,2 L|Você economiza|Preços e estoque/);
 
     // histórico: preço muda em duas conferências; "atualizar todos" informa o que mudou
     opts.ml.catalogPrice = 279.9;
@@ -2288,5 +2288,32 @@ test('vitrine com domínio próprio: a raiz do domínio abre a vitrine; o endere
     const b = t.client();
     await signup(b, 'b@exemplo.com');
     assert.equal((await b('PUT', '/api/vitrine', { slug: 'outra', title: 'B', domain: 'anninhaachadinhos.com.br' })).status, 409);
+  } finally { t.close(); }
+});
+
+test('legendas com a vitrine: Instagram mostra o domínio próprio; WhatsApp põe o link da vitrine depois do link do produto', async () => {
+  const t = await boot();
+  try {
+    const a = t.client();
+    await signup(a);
+    const p = (await a('POST', '/api/products', PRODUTO)).data.product;
+    const prev = async (channel) => (await a('POST', '/api/queue/preview', { product_id: p.id, channel })).data.caption;
+    // sem vitrine publicada: "link da bio"
+    assert.match(await prev('instagram'), /Ou pega no link da bio/);
+    await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Anninha', published: true });
+    // vitrine sem domínio: Instagram segue com "link da bio" (endereço longo não cabe na legenda); WhatsApp usa o link
+    assert.match(await prev('instagram'), /Ou pega no link da bio/);
+    assert.match(await prev('whatsapp'), /🛍️ Mais achadinhos: https:\/\/app\.exemplo\.com\/v\/anninha/);
+    await a('PUT', '/api/vitrine', { slug: 'anninha', title: 'Anninha', published: true, domain: 'anninhaachadinhos.com.br' });
+    const ig = await prev('instagram');
+    assert.match(ig, /🛍️ Ou pega na minha vitrine: anninhaachadinhos\.com\.br/);
+    assert.match(ig, /🔥 De R\$\s?329,90 por R\$\s?189,90 \(42% OFF\)/);
+    const wa = await prev('whatsapp');
+    assert.ok(wa.indexOf('mercadolivre.com/sec/abc') < wa.indexOf('https://anninhaachadinhos.com.br'), 'o link do produto vem antes da vitrine');
+    // carrossel
+    const p2 = (await a('POST', '/api/products', { ...PRODUTO, title: 'Liquidificador', affiliate_url: 'https://mercadolivre.com/sec/liq', product_url: 'https://produto.mercadolivre.com.br/MLB-999-liq' })).data.product;
+    const g = await a('POST', '/api/queue/preview-group', { product_ids: [p.id, p2.id], channel: 'instagram' });
+    assert.equal(g.status, 200, JSON.stringify(g.data));
+    assert.match(g.data.caption, /Todos na minha vitrine: anninhaachadinhos\.com\.br/);
   } finally { t.close(); }
 });

@@ -135,10 +135,11 @@ function premiumCopy(p, channel) {
   if (p._coupon) lines.push(couponLine(p._coupon, channel));
   if (wa) {
     lines.push('', `👉 ${p.affiliate_url || PLACEHOLDER}`, '', pick(PREMIUM_CLOSERS));
+    if (p._site) lines.push('', `Mais seleções na vitrine: ${p._site.url}`);
   } else {
     const cat = TAGS[String(p.category || '').toLowerCase()] || '';
     const tags = [...new Set(`#selecaopremium #curadoria ${cat} #${p.marketplace === 'ML' ? 'mercadolivre' : 'shopee'}`.split(/\s+/).filter(Boolean))].join(' ');
-    lines.push('', 'Link na bio.', 'Preços e estoque podem mudar.', '', tags);
+    lines.push('', p._site && p._site.label ? `Na vitrine: ${p._site.label}` : 'Link na bio.', 'Preços e estoque podem mudar.', '', tags);
   }
   return lines.join('\n');
 }
@@ -163,11 +164,10 @@ function templateCopy(p, channel) {
       `👉 ${p.affiliate_url || PLACEHOLDER}`,
       '',
       pick(WA_CLOSERS),
+      ...(p._site ? ['', `🛍️ Mais achadinhos: ${p._site.url}`] : []),
     ].join('\n');
   }
   // Instagram: preço em linhas próprias, logo abaixo do nome (o Instagram não tem negrito nem riscado)
-  const perks = f.slice(1).filter((x) => !/^tem opções/.test(x)).map((x) => `✅ ${x[0].toUpperCase()}${x.slice(1)}`);
-  const hl = highlights(p).map((x) => `▫️ ${x}`);
   return [
     pick(IG_HOOKS),
     '',
@@ -175,27 +175,38 @@ function templateCopy(p, channel) {
     '',
     ...igPrice(p),
     ...(p._coupon ? [couponLine(p._coupon, 'instagram')] : []),
-    ...(perks.length ? ['', ...perks] : []),
-    ...(hl.length ? ['', ...hl] : []),
+    ...igProof(p),
     '',
-    '👉 Link na bio! Comenta EU QUERO que eu te mando.',
-    'Preços e estoque podem mudar.',
+    '👉 Comenta EU QUERO que eu te mando o link',
+    siteLine(p._site, 'Ou pega na minha vitrine:'),
     '',
     hashtags(p),
   ].join('\n');
 }
 
-/** Bloco de preço do Instagram: "de / por (−x%) / economia", ou "por apenas", ou "a partir de" (variações). */
+/** Preço do Instagram numa linha só: "De R$ X por R$ Y (55% OFF)", "Por apenas" ou "A partir de" (variações). */
 function igPrice(p) {
   const { desc } = scoreProduct(p);
   const from = details(p).price_max > Number(p.price);
   const off = desc > 0 && p.original_price;
-  const lines = [];
-  if (off) lines.push(`💸 De ${brl(p.original_price)}`);
-  lines.push(`🔥 ${from ? 'A partir de' : off ? 'Por' : 'Por apenas'} ${brl(p.price)}${off ? ` (${desc}% OFF)` : ''}`);
-  if (off && !from) lines.push(`💰 Você economiza ${brl(Number(p.original_price) - Number(p.price))}`);
-  if (from) lines.push('📦 Tem opções (kits/tamanhos): o preço muda conforme a escolha');
-  return lines;
+  if (from) return [`🔥 A partir de ${brl(p.price)}${off ? ` (${desc}% OFF)` : ''}`, '📦 Tem opções: o preço muda conforme a escolha'];
+  return [off ? `🔥 De ${brl(p.original_price)} por ${brl(p.price)} (${desc}% OFF)` : `🔥 Por apenas ${brl(p.price)}`];
+}
+
+/** Prova social do Instagram em até 2 linhas curtas: avaliação e vendas; frete, ranking e loja oficial. */
+function igProof(p) {
+  const d = details(p);
+  const a = [Number(p.rating) ? `${Number(p.rating).toFixed(1).replace('.', ',')}` : '', salesText(p.sales_k)].filter(Boolean);
+  const b = [d.free_shipping ? (d.full ? 'Frete grátis Full' : 'Frete grátis') : '', d.best_seller_rank && d.best_seller_rank <= 20 ? `${d.best_seller_rank}º mais vendido` : '', d.official_store ? 'Loja oficial' : ''].filter(Boolean);
+  const out = [];
+  if (a.length) out.push(`⭐ ${a.join(' · ')}`);
+  if (b.length) out.push(`✅ ${b.join(' · ')}`);
+  return out;
+}
+
+/** Chamada para a vitrine no Instagram: com domínio próprio mostra o endereço; sem ele, "link da bio". */
+function siteLine(site, lead) {
+  return site && site.label ? `🛍️ ${lead} ${site.label}` : '🛍️ Ou pega no link da bio';
 }
 
 async function aiCopy(p, channel, { cfg, fetchImpl }) {
@@ -239,8 +250,9 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
 
 /** Gera o texto. Usa IA se pedida e configurada; se falhar, cai no modelo e avisa. */
 async function buildCaption(p0, channel, opts) {
-  const out = await buildCaptionRaw(p0, channel, opts);
-  return { ...out, caption: withFollow(out.caption, opts.follow, channel) };
+  const out = await buildCaptionRaw(opts.site ? { ...p0, _site: opts.site } : p0, channel, opts);
+  const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
+  return { ...out, caption: withFollow(text, opts.follow, channel) };
 }
 
 async function buildCaptionRaw(p00, channel, { ai, cfg, fetchImpl, coupons, tone }) {
@@ -288,6 +300,7 @@ function templateGroupCopy(list, channel) {
         ];
       }),
       pick(WA_CLOSERS),
+      ...(list[0] && list[0]._site ? ['', `🛍️ Mais achadinhos: ${list[0]._site.url}`] : []),
     ].join('\n');
   }
   const tags = [...new Set(list.flatMap((p) => hashtags(p).split(' ')))].slice(0, 12).join(' ');
@@ -296,8 +309,9 @@ function templateGroupCopy(list, channel) {
     '',
     ...list.map((p, i) => `${NUMS[i]} ${groupLine(p)}`),
     '',
-    '👉 Link na bio! Comenta o NÚMERO do produto que eu te mando o link.',
-    'Preços e estoque podem mudar.',
+    '👉 Comenta o NÚMERO do produto que eu te mando o link',
+    siteLine(list[0] && list[0]._site, 'Todos na minha vitrine:'),
+    '',
     tags,
   ].join('\n');
 }
@@ -325,9 +339,11 @@ async function aiGroupCopy(list, channel, { cfg, fetchImpl }) {
 }
 
 /** Texto para vários produtos. Mesmas regras do buildCaption: IA se pedida e configurada, senão modelo. */
-async function buildGroupCaption(list, channel, opts) {
+async function buildGroupCaption(list0, channel, opts) {
+  const list = opts.site ? list0.map((p) => ({ ...p, _site: opts.site })) : list0;
   const out = await buildGroupCaptionRaw(list, channel, opts);
-  return { ...out, caption: withFollow(out.caption, opts.follow, channel) };
+  const text = out.source === 'ia' ? withSite(out.caption, opts.site, channel) : out.caption;
+  return { ...out, caption: withFollow(text, opts.follow, channel) };
 }
 
 async function buildGroupCaptionRaw(list, channel, { ai, cfg, fetchImpl }) {
@@ -340,6 +356,30 @@ async function buildGroupCaptionRaw(list, channel, { ai, cfg, fetchImpl }) {
   }
   const warning = ai && !cfg.anthropicKey ? 'ANTHROPIC_API_KEY não configurada. Usei o modelo padrão.' : undefined;
   return { caption: templateGroupCopy(list, channel), source: 'modelo', warning };
+}
+
+/* ---------- vitrine (mini site) ---------- */
+
+/** Vitrine publicada do usuário: { label: domínio próprio ou null, url }. Null se não houver. */
+async function vitrineSite(pool, uid, cfg) {
+  const r = (await pool.query('select slug, domain, published from storefronts where user_id = $1', [uid])).rows[0];
+  if (!r || !r.published) return null;
+  return { label: r.domain || null, url: r.domain ? `https://${r.domain}` : `${cfg.appUrl}/v/${r.slug}` };
+}
+
+/** Texto da IA: acrescenta a vitrine no fim (no Instagram só com domínio próprio, que dá para ler e digitar). */
+function withSite(text, site, channel) {
+  if (!site || !text) return text;
+  if (channel === 'instagram' && !site.label) return text;
+  if (String(text).includes(site.label || site.url)) return text;
+  const line = channel === 'instagram' ? `🛍️ Mais achadinhos na minha vitrine: ${site.label}` : `🛍️ Mais achadinhos: ${site.url}`;
+  const lines = String(text).replace(/\s+$/, '').split('\n');
+  if (channel === 'instagram' && /^#/.test(lines[lines.length - 1] || '')) {
+    const tags = lines.pop();
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    return [...lines, '', line, '', tags].join('\n');
+  }
+  return [...lines, '', line].join('\n');
 }
 
 /* ---------- convite para seguir o perfil ---------- */
@@ -371,4 +411,4 @@ function withFollow(text, handle, channel) {
   return [...lines, '', line].join('\n');
 }
 
-module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, followHandle, withFollow, PLACEHOLDER };
+module.exports = { buildCaption, buildGroupCaption, templateCopy, templateGroupCopy, followHandle, withFollow, vitrineSite, withSite, PLACEHOLDER };

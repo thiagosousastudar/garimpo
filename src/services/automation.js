@@ -15,7 +15,7 @@
 const { HttpError, decrypt, parseNum } = require('../util');
 const { scoreProduct } = require('./score');
 const { serializeExtras } = require('./extras');
-const { buildCaption, followHandle } = require('./copy');
+const { buildCaption, followHandle, vitrineSite } = require('./copy');
 const { activeCoupons } = require('./coupons');
 const { createTelegramClient } = require('./telegram');
 
@@ -178,7 +178,7 @@ async function sendInstagram({ pool, cfg, fetchImpl, automation, config, row, pr
   if (today >= config.ig_daily_max) return `limite diário de ${config.ig_daily_max} posts atingido`;
   const images = [...new Set((product.images && product.images.length ? product.images : [product.image_url]).filter(Boolean))].slice(0, 3);
   if (!images.length) return 'produto sem foto';
-  const caption = (await buildCaption(row, 'instagram', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
+  const caption = (await buildCaption(row, 'instagram', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), site: await vitrineSite(pool, automation.user_id, cfg), tone: config.tone })).caption;
   const carousel = images.length > 1;
   const ins = await pool.query(
     `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, media_items, automation_id)
@@ -194,14 +194,14 @@ async function sendInstagram({ pool, cfg, fetchImpl, automation, config, row, pr
 async function sendTelegram({ pool, cfg, fetchImpl, automation, config, row, product }) {
   const c = (await pool.query('select tg_token_enc, tg_chat_id from connections where user_id = $1', [automation.user_id])).rows[0];
   if (!c || !c.tg_token_enc || !c.tg_chat_id) return 'Telegram não conectado';
-  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
+  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), site: await vitrineSite(pool, automation.user_id, cfg), tone: config.tone })).caption;
   await createTelegramClient({ token: decrypt(c.tg_token_enc, cfg.encryptionKey), fetchImpl })
     .sendOffer(c.tg_chat_id, { photo: product.image_url, text });
   return 'enviado';
 }
 
 async function queueWhatsapp({ pool, cfg, fetchImpl, automation, config, row }) {
-  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), tone: config.tone })).caption;
+  const text = (await buildCaption(row, 'whatsapp', { ai: false, cfg, fetchImpl, coupons: await activeCoupons(pool, automation.user_id), follow: await followHandle(pool, automation.user_id), site: await vitrineSite(pool, automation.user_id, cfg), tone: config.tone })).caption;
   await pool.query(
     `insert into queue_items (user_id, product_id, channel, caption, media_type, media_url, automation_id)
        values ($1,$2,'whatsapp',$3,'none',null,$4)`,
