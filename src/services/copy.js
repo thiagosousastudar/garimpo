@@ -222,6 +222,45 @@ function mascTags(p) {
   return [...new Set(all)].join(' ');
 }
 
+/* ---------- voz Black Box (conta masculina): frase de efeito, preço e link; objetivo ---------- */
+const BB_IG_HOOKS = ['ESCOLHA DE RESPEITO. ⬛', 'SEU PADRÃO COMEÇA AQUI. ⬛', 'A GENTE GARIMPA. VOCÊ ESCOLHE. ⬛', 'ESTILO, UTILIDADE E BOAS ESCOLHAS. ⬛'];
+// frase de efeito do WhatsApp (1ª linha, caixa alta) pelo tipo de produto; senão, pelo preço
+const BB_WA_BY_KIND = [
+  [/perfume|col[oô]nia|eau de|edt\b|edp\b|body splash|desodorante/i, ['CHEIROSO PAGANDO BARATO', 'PERFUME DE RESPEITO, PREÇO JUSTO', 'CHEIRO BOM SEM PAGAR CARO']],
+  [/rel[oó]gio|smartwatch/i, ['RELÓGIO DE RESPEITO PAGANDO POUCO', 'PULSO ALINHADO SEM GASTAR MUITO']],
+  [/carro|automotiv|veicular|volante|banco do carro|para-brisa|pneu/i, ['ACHADO PRO CARRO QUE VALE A PENA', 'CARRO ORGANIZADO PAGANDO POUCO']],
+  [/fone|carregador|bluetooth|cabo usb|power ?bank|suporte (de|para) celular|mouse|teclado|caixa de som|smart/i, ['TECH BOA PAGANDO POUCO', 'UTILIDADE QUE FAZ DIFERENÇA NO DIA A DIA']],
+  [/camis|bermuda|cal[cç]a|t[eê]nis|bon[eé]|jaqueta|moletom|cueca|meia|cinto|carteira|[oó]culos|pulseira/i, ['ESTILO NA MEDIDA, PREÇO JUSTO', 'BOM, BONITO E PAGANDO POUCO']],
+  [/barba|barbeador|aparador|m[aá]quina de cortar|pomada|shampoo/i, ['CUIDADO DE RESPEITO PAGANDO POUCO']],
+  [/ferrament|chave|furadeira|parafusadeira|alicate|trena/i, ['FERRAMENTA BOA PAGANDO POUCO', 'PRA QUEM RESOLVE AS COISAS EM CASA']],
+];
+const BB_WA_DISCOUNT = ['PREÇO DERRUBADO, APROVEITA', 'DESCONTO PESADO NESSE AQUI', 'PAGANDO BARATO DE VERDADE'];
+const BB_WA_GENERAL = ['ACHADO DE RESPEITO, VALE CADA CENTAVO', 'QUALIDADE PAGANDO POUCO', 'ESCOLHA CERTA PRO DIA A DIA'];
+
+/** Frase de efeito do WhatsApp: pelo tipo do produto, depois pelo desconto, depois uma geral. */
+function bbHook(p) {
+  const text = `${p.title || ''} ${p.category || ''}`;
+  const kind = BB_WA_BY_KIND.find(([re]) => re.test(text));
+  if (kind) return pick(kind[1]);
+  return pick(scoreProduct(p).desc >= 30 ? BB_WA_DISCOUNT : BB_WA_GENERAL);
+}
+
+/** Nome da loja guardado no produto ("Loja: X" nas anotações). */
+function shopName(p) {
+  const m = String(p.notes || '').match(/Loja:\s*([^\n]+)/i);
+  return m ? m[1].trim().slice(0, 40) : String(details(p).shop || '').trim().slice(0, 40);
+}
+
+/** Selo de confiança numa linha: "Loja Oficial Clube Rosa no ML"; senão avaliação e vendas; senão frete grátis. */
+function cleanTrust(p) {
+  const d = details(p);
+  const where = p.marketplace === 'ML' ? 'no ML' : 'na Shopee';
+  if (d.official_store) return `Loja Oficial${shopName(p) ? ` ${shopName(p)}` : ''} ${where}`;
+  const a = [Number(p.rating) >= 4.5 ? `Avaliação ★ ${Number(p.rating).toFixed(1).replace('.', ',')}` : '', salesText(p.sales_k)].filter(Boolean);
+  if (a.length) return a.join(' · ');
+  return d.free_shipping ? 'Frete grátis' : '';
+}
+
 /** "R$ 78" quando o valor é redondo, senão "R$ 77,90". */
 function brlClean(v) {
   const n = Math.round(Number(v) * 100) / 100;
@@ -244,15 +283,6 @@ function cleanCouponLine(c) {
   return c.code ? `Use o cupom *${c.code}* e ganhe *${off}* 🎟️` : `Aplique o cupom de *${off}* no anúncio 🎟️`;
 }
 
-/** Selo de confiança numa linha: loja oficial; senão avaliação e vendas; senão frete grátis. */
-function cleanTrust(p) {
-  const d = details(p);
-  if (d.official_store) return `Loja Oficial ${p.marketplace === 'ML' ? 'no ML' : 'na Shopee'}`;
-  const a = [Number(p.rating) >= 4.5 ? `Avaliação ★ ${Number(p.rating).toFixed(1).replace('.', ',')}` : '', salesText(p.sales_k)].filter(Boolean);
-  if (a.length) return a.join(' · ');
-  return d.free_shipping ? 'Frete grátis' : '';
-}
-
 /** Preço do estilo limpo: "De R$ 78 Por R$ 54" (com desconto, mesmo com opções), "A partir de R$ 54" ou "Por R$ 54". */
 function cleanPrice(p) {
   const { desc } = scoreProduct(p);
@@ -261,12 +291,11 @@ function cleanPrice(p) {
 }
 
 function mascCopy(p, channel) {
+  const trust = cleanTrust(p);
   if (channel === 'whatsapp') {
-    const from = details(p).price_max > Number(p.price);
-    const trust = cleanTrust(p);
+    // simples e objetivo: frase de efeito, nome, preço, (cupom), loja e o link sozinho no fim (o WhatsApp mostra a prévia)
     return [
-      cleanHeadline(p),
-      ...(from ? ['_várias opções disponíveis_'] : []),
+      bbHook(p),
       '',
       p.title,
       '',
@@ -277,17 +306,18 @@ function mascCopy(p, channel) {
       p.affiliate_url || PLACEHOLDER,
     ].join('\n');
   }
+  const proof = igProof(p);
   return [
-    pick(M_IG_HOOKS),
+    pick(BB_IG_HOOKS),
     '',
-    `📦 ${p.title}`,
+    p.title,
     '',
-    ...igPrice(p),
+    cleanPrice(p),
+    ...(proof.length ? [proof[0]] : []),
     ...(p._coupon ? [couponLine(p._coupon, 'instagram')] : []),
-    ...igProof(p),
     '',
     '👉 Comenta EU QUERO que eu mando o link',
-    siteLine(p._site, 'Ou pega na vitrine:', '🛒'),
+    p._site && p._site.label ? `🔗 Ou pega na vitrine: ${p._site.label}` : '💎 Grupo VIP e todos os achados no link da bio',
     '',
     mascTags(p),
   ].join('\n');
@@ -296,16 +326,16 @@ function mascCopy(p, channel) {
 function mascGroupCopy(list, channel) {
   const site = list[0] && list[0]._site;
   if (channel === 'whatsapp') {
-    return list.map((p) => [cleanHeadline(p), cleanPrice(p), p.affiliate_url || PLACEHOLDER].join('\n')).join('\n\n');
+    return [pick(BB_WA_GENERAL), '', ...list.map((p) => [p.title, cleanPrice(p), p.affiliate_url || PLACEHOLDER].join('\n') + '\n')].join('\n').replace(/\n+$/, '');
   }
   const tags = [...new Set(list.flatMap((p) => mascTags(p).split(' ')))].slice(0, 12).join(' ');
   return [
-    `🔥 ${list.length} achados que valem a pena. Arrasta pro lado ➡️`,
+    `${pick(BB_IG_HOOKS)}\n\n${list.length} achados selecionados. Arrasta pro lado ➡️`,
     '',
     ...list.map((p, i) => `${NUMS[i]} ${groupLine(p)}`),
     '',
     '👉 Comenta o NÚMERO do produto que eu mando o link',
-    siteLine(site, 'Todos na vitrine:', '🛒'),
+    site && site.label ? `🔗 Todos na vitrine: ${site.label}` : '💎 Grupo VIP e todos os achados no link da bio',
     '',
     tags,
   ].join('\n');
@@ -335,7 +365,10 @@ async function aiCopy(p, channel, { cfg, fetchImpl }) {
       ? `Mensagem de WhatsApp da Anninha, como uma amiga animada que achou algo incrível: primeira linha em *negrito* e caixa alta com emoji, nome do produto em *negrito*, "De: ~preço original~" riscado (se houver) e "Por: *preço*", cada destaque numa linha com emoji (frete grátis, mais vendido etc., só se os dados disserem), depois a linha "👉 ${p.affiliate_url || PLACEHOLDER}" e um fechamento animado. Use a formatação do WhatsApp (*negrito*, ~riscado~). Sem prazos ou "tempo limitado" inventados; pode dizer que o preço pode mudar.`
       : 'Legenda de Instagram: gancho forte na primeira linha, 3 a 4 benefícios curtos com emojis, chamada para "link na bio", 5 a 8 hashtags e o aviso de que preços podem mudar. No máximo 1800 caracteres.';
   const voz = p._tone === 'masculino' ? ' Tom masculino, direto, sem corações nem diminutivos.' : '';
-  const prompt = `Escreva em português do Brasil.${voz} ${formato}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
+  const formatoFinal = p._tone === 'masculino' && channel === 'whatsapp'
+    ? `Mensagem de WhatsApp simples e objetiva, exatamente nesta ordem: 1ª linha uma frase de efeito curta em CAIXA ALTA sobre o benefício ou o preço (ex.: "CHEIROSO PAGANDO BARATO"; pode comparar com algo conhecido só se for comum dizer isso do produto), linha em branco, o nome do produto, linha em branco, "De R$ X Por R$ Y" (sem centavos quando o valor for redondo; só "Por R$ Y" se não houver preço original), linha em branco, uma linha de confiança ("Loja Oficial no ML" ou avaliação) e por último o link ${p.affiliate_url || PLACEHOLDER} sozinho. Sem emojis, sem hashtags, sem convite para seguir.`
+    : formato;
+  const prompt = `Escreva em português do Brasil.${voz} ${formatoFinal}\nUse SOMENTE os dados abaixo. Não invente especificações, cupons, prazos nem urgência. Se um dado for null, não o mencione.\nDados: ${JSON.stringify(dados)}\nResponda apenas com o texto final.`;
   const res = await fetchImpl('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -512,7 +545,7 @@ async function followHandle(pool, uid) {
 
 /** Linha do convite: no Instagram o @ (link na legenda não é clicável); no WhatsApp/Telegram o link do perfil. */
 function followLine(handle, channel, masc) {
-  if (channel === 'instagram') return masc ? `👊 Segue @${handle} pra não perder nenhum achado!` : `💖 Segue @${handle} pra não perder nenhum achadinho!`;
+  if (channel === 'instagram') return masc ? `⬛ Segue @${handle} · Seu padrão começa aqui.` : `💖 Segue @${handle} pra não perder nenhum achadinho!`;
   return `📲 Segue a gente no Instagram: https://www.instagram.com/${handle}/`;
 }
 

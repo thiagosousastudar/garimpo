@@ -62,7 +62,7 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .cat .tags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
 .cat .cnt,.cat .best{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px}
 .cat .cnt{background:var(--soft);color:var(--accent)}
-.cat .best{background:var(--accent);color:var(--accent-ink)}
+.cat .best{background:var(--hot);color:var(--hot-ink)}
 .cat .stack{display:flex;padding-left:14px;margin-left:2px}
 .cat .stack img{width:30px;height:30px;border-radius:9px;object-fit:cover;margin-left:-14px;border:2px solid var(--card);box-shadow:0 3px 8px rgba(0,0,0,.12);background:var(--soft)}
 .cat .stack img:nth-child(1){transform:rotate(-6deg)}
@@ -74,7 +74,7 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .cat[open] summary{border-bottom:1px solid var(--line)}
 .cat .grid{padding:14px 12px 14px 17px;animation:abrir .25s ease-out}
 @keyframes abrir{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
-@media (max-width:420px){.cat .grid{gap:9px;padding:10px 9px 12px 13px}.pb{padding:9px 9px 10px}.cta{font-size:13.5px;padding:10px 6px}.price b{font-size:16px}.cat summary{gap:12px;padding:14px 14px 14px 18px}.cat .em{width:48px;height:48px;font-size:25px}.cat .ct b{font-size:19px}}
+@media (max-width:420px){.cat .grid{gap:9px;padding:10px 9px 12px 13px}.cat .pb{padding:9px 9px 10px}.cat .cta{font-size:13px;padding:10px 4px;gap:4px}.cat .price b{font-size:16px}.cat summary{gap:12px;padding:14px 14px 14px 18px}.cat .em{width:48px;height:48px;font-size:25px}.cat .ct b{font-size:19px}}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (min-width:600px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 
@@ -84,7 +84,7 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .ph{position:relative;aspect-ratio:1;background:#fff}
 .ph img{width:100%;height:100%;object-fit:cover}
 .ph .noimg{display:block;width:100%;height:100%;background:var(--soft)}
-.ph .off{position:absolute;top:8px;left:8px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:12px;padding:4px 8px;border-radius:999px}
+.ph .off{position:absolute;top:8px;left:8px;background:var(--hot);color:var(--hot-ink);font-weight:700;font-size:12px;padding:4px 8px;border-radius:999px}
 .ph .st{position:absolute;bottom:8px;left:8px;background:rgba(255,255,255,.92);color:#222;font-weight:600;font-size:11px;padding:3px 8px;border-radius:999px}
 .pb{display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px;flex:1}
 .pb h3{font-size:14px;font-weight:600;line-height:1.3;margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -94,7 +94,7 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .price s{font-size:12px;color:var(--muted)}
 .mt{margin:0;font-size:12px;color:var(--muted)}
 .cta{margin-top:auto;display:flex;justify-content:center;align-items:center;gap:6px;text-decoration:none;text-align:center;font-weight:700;font-size:14px;
-  padding:11px 10px;border-radius:12px;background:var(--accent);color:var(--accent-ink)}
+  padding:11px 10px;border-radius:12px;background:var(--cta);color:var(--accent-ink)}
 .cta:hover{filter:brightness(1.07)}
 .cta.off{background:var(--soft);color:var(--muted)}
 
@@ -112,3 +112,14 @@ footer{margin-top:36px;text-align:center}
 .fine{font-size:12px;color:var(--muted);margin:0}
 .fine a{font-weight:600}
 .hide{display:none!important}
+
+/* tema metálico (Black Box): títulos em prata, botões prateados com brilho */
+body.metal h1,body.metal .cat .ct b,body.metal .hero.small h1{background:linear-gradient(180deg,#FFFFFF 0%,#D7DADF 45%,#8F949B 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+body.metal h1{font-family:Figtree,system-ui,sans-serif;font-weight:700;letter-spacing:.02em;text-transform:uppercase}
+body.metal .cta{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 4px 14px rgba(0,0,0,.4)}
+body.metal .av{box-shadow:0 0 0 3px #2B2B2B,0 0 0 4px #9EA3AA,0 10px 30px rgba(0,0,0,.6)}
+body.metal .cat::before{background:linear-gradient(#F4F5F7,#6E737A)}
+body.metal .cat .cnt{color:var(--accent);background:#222}
+body.metal .ph{background:#0E0E0E}
+body.metal .cat .ct b,body.metal .av span,body.metal .ch h2{font-family:Figtree,system-ui,sans-serif;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+body.metal .cat .ct b{font-size:19px}

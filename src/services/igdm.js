@@ -14,7 +14,7 @@ const DEFAULT_KEYWORDS = ['quero', 'eu quero', 'link', 'manda', 'me manda', 'qua
 const DEFAULT_TEMPLATE = 'Oi, {nome}! 💖 Que bom que você gostou!\n\nAqui está o link do {produto}:\n👉 {link}\n\nQualquer dúvida é só me chamar! ✨';
 const PUBLIC_REPLIES = ['Te mandei no Direct! 💌', 'Já te enviei o link no Direct! 💖', 'Corre no Direct que o link tá lá! ✨', 'Link enviado no seu Direct! 😍'];
 // tom masculino
-const DEFAULT_TEMPLATE_M = 'Fala, {nome}! 👊 Valeu pelo interesse!\n\nSegue o link do {produto}:\n👉 {link}\n\nQualquer dúvida, é só chamar!';
+const DEFAULT_TEMPLATE_M = 'Fala, {nome}! 👊 Aqui está o link do {produto}:\n👉 {link}\n\nEscolhas de respeito. ⬛';
 const PUBLIC_REPLIES_M = ['Te mandei no Direct! 👊', 'Link enviado no Direct! 📩', 'Confere o Direct, mandei lá! 🔥', 'Já mandei no Direct! ✅'];
 const NUMS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 

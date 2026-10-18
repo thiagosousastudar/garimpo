@@ -2383,16 +2383,16 @@ test('contas ligadas: cria a conta masculina, troca sem senha, etiqueta da Shope
   } finally { t.close(); }
 });
 
-test('conta masculina: WhatsApp no estilo limpo (caixa alta, De/Por sem centavos, selo e link no fim, sem convite)', async () => {
+test('conta masculina: WhatsApp simples e objetivo (frase de efeito, nome, De/Por sem centavos, loja e link no fim, sem convite)', async () => {
   const { buildCaption } = require('../src/services/copy');
-  const p = { marketplace: 'ML', title: 'Camiseta Básica Ogochi Masculina Lisa (P ao XGG)', price: 54, original_price: 78, affiliate_url: 'https://meli.la/1VXkVTL',
-    extras: JSON.stringify({ brand: 'Ogochi', official_store: true, price_max: 59 }) };
+  const p = { marketplace: 'ML', title: 'Perfume Paris Elysees Vodka Man EDT 100ml', price: 60, original_price: 117, affiliate_url: 'https://meli.la/2oCUsm1',
+    notes: 'Loja: Clube Rosa', extras: JSON.stringify({ official_store: true }) };
   const out = await buildCaption(p, 'whatsapp', { ai: false, cfg: {}, follow: 'blackbox', site: { label: 'x.com.br', url: 'https://x.com.br' }, tone: 'masculino',
     coupons: [{ marketplace: 'ML', code: '', kind: 'percent', amount: 10, active: true }] });
-  assert.equal(out.caption, [
-    'CAMISETA BÁSICA DA OGOCHI', '_várias opções disponíveis_', '', 'Camiseta Básica Ogochi Masculina Lisa (P ao XGG)', '',
-    'De R$ 78 Por R$ 54', 'Aplique o cupom de *10% OFF* no anúncio 🎟️', '', 'Loja Oficial no ML', 'https://meli.la/1VXkVTL',
-  ].join('\n'));
+  const lines = out.caption.split('\n');
+  assert.match(lines[0], /^[A-ZÀ-Ú ,]+$/, 'frase de efeito em caixa alta');
+  assert.match(lines[0], /CHEIRO|PERFUME/, 'perfume ganha frase de perfume');
+  assert.deepEqual(lines.slice(1), ['', 'Perfume Paris Elysees Vodka Man EDT 100ml', '', 'De R$ 117 Por R$ 60', 'Aplique o cupom de *10% OFF* no anúncio 🎟️', '', 'Loja Oficial Clube Rosa no ML', 'https://meli.la/2oCUsm1']);
   const fem = await buildCaption(p, 'whatsapp', { ai: false, cfg: {}, follow: 'anninha', tone: undefined });
   assert.match(fem.caption, /Segue a gente no Instagram/, 'a conta feminina continua igual');
 });

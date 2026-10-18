@@ -1603,7 +1603,7 @@
 
   /* ---------- Vitrine (mini site da bio): configuração, categorias e produtos ---------- */
   var VIT_THEMES = [['rosa', '#C2496A', 'Rosa'], ['creme', '#9C6B30', 'Creme'], ['salvia', '#4F7A58', 'Sálvia'], ['azul', '#2F5D8E', 'Azul'], ['lavanda', '#7451A8', 'Lavanda'], ['preto', '#161616', 'Preto'],
-    ['grafite', '#2E3640', 'Grafite'], ['marinho', '#1F3A5F', 'Azul-marinho'], ['militar', '#4F5F34', 'Verde-militar'], ['laranja', '#F28C28', 'Preto e laranja']];
+    ['blackbox', 'linear-gradient(135deg,#141414 55%,#C9CCD1 55%)', 'Black Box'], ['grafite', '#2E3640', 'Grafite'], ['marinho', '#1F3A5F', 'Azul-marinho'], ['militar', '#4F5F34', 'Verde-militar'], ['laranja', '#F28C28', 'Preto e laranja']];
   var VIT_SUGG = [['🍳', 'Cozinha'], ['🛁', 'Banheiro'], ['☕', 'Cantinho do café'], ['🏠', 'Casa e decoração'], ['👗', 'Moda'], ['💄', 'Beleza'], ['🧸', 'Infantil'], ['📱', 'Tech'], ['🔥', 'Mais pedidos']];
   var vpick = null; // escolha de produtos de uma categoria: { id, name, items: [ids], q }
 
@@ -1620,7 +1620,7 @@
     if (!v) { loadVitrine(); return '<p class="hint">Carregando a vitrine…</p>'; }
     if (v.error) return '<p class="err">' + esc(v.error) + '</p>';
     var s = v.store;
-    var theme = state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'marinho' : 'rosa');
+    var theme = state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'blackbox' : 'rosa');
     var f = function (id, label, val, attrs, hint) {
       return '<div class="field"><label for="' + id + '">' + label + '</label><input id="' + id + '" name="' + id.replace('vf-', '') + '" type="text" value="' + esc(val == null ? '' : val) + '" ' + (attrs || '') + '>' + (hint ? '<p class="hint">' + hint + '</p>' : '') + '</div>';
     };
@@ -1720,7 +1720,7 @@
   function vitFormData() {
     var g = function (id) { var el = $('#' + id); return el ? el.value : ''; };
     var s = state.vit.store;
-    return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'marinho' : 'rosa'),
+    return { slug: g('vf-slug').trim().toLowerCase(), title: g('vf-title'), bio: g('vf-bio'), theme: state.vitTheme || (s && s.theme) || (state.voice === 'masculino' ? 'blackbox' : 'rosa'),
       instagram: g('vf-instagram'), domain: g('vf-domain'), avatar_url: g('vf-avatar_url'), whatsapp_url: g('vf-whatsapp_url'), telegram_url: g('vf-telegram_url'),
       published: Boolean(($('#vf-published') || {}).checked) };
   }
@@ -2161,7 +2161,7 @@
   var COVER_COLORS = ['#E8457A', '#7C3AED', '#2563EB', '#0E6B52', '#F97316', '#DC2626', '#111111', '#C8A24A'];
   var COVER_BGS = [['creme', '#F6F1EA', 'Creme'], ['branco', '#FFFFFF', 'Branco'], ['rosa', '#F8ECEE', 'Rosa'], ['salvia', '#EEF2EC', 'Sálvia'],
     ['azul', '#EDF2F8', 'Azul'], ['lavanda', '#F2EEF8', 'Lavanda'], ['preto', '#141414', 'Preto'],
-    ['grafite', '#22272E', 'Grafite'], ['marinho', '#14253D', 'Azul-marinho'], ['militar', '#E3E7D8', 'Verde-militar'], ['laranja', 'linear-gradient(135deg,#141414 55%,#F28C28 55%)', 'Preto e laranja']];
+    ['blackbox', 'linear-gradient(135deg,#0E0E0E 55%,#C9CCD1 55%)', 'Black Box'], ['grafite', '#22272E', 'Grafite'], ['marinho', '#14253D', 'Azul-marinho'], ['militar', '#E3E7D8', 'Verde-militar'], ['laranja', 'linear-gradient(135deg,#141414 55%,#F28C28 55%)', 'Preto e laranja']];
   var COVER_RADIUS = { oferta: 44, achadinho: 60, lista: 36, relampago: 48, foto: 0, minimal: 0, premium: 48 };
   var COVER_SHAPES = [['auto', 'Automática'], ['free', 'Solta'], ['arch', 'Arco'], ['round', 'Arredondada']];
   function coverRadius(cv) { return cv.radius != null && cv.radius !== '' ? Number(cv.radius) : COVER_RADIUS[cv.tpl] || 0; }
@@ -2296,7 +2296,7 @@
       if (!post.cover) {
         var tpl = post.group ? 'lista' : post.tone === 'premium' ? 'premium' : 'oferta';
         post.cover = {
-          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''), bg: prefGet('coverBg.' + state.user.id, state.voice === 'masculino' ? 'grafite' : prefGet('coverBg', 'creme')),
+          tpl: tpl, title: coverDefaultTitle(tpl), saveDefault: true, format: prefGet('coverFormat', 'feed') === 'story' ? 'feed' : prefGet('coverFormat', 'feed'), cta: prefGet('coverCta', 'LINK NA BIO'), opts: {}, shape: prefGet('coverShape', 'auto'), radius: prefGet('coverRadius', ''), bg: prefGet('coverBg.' + state.user.id, state.voice === 'masculino' ? 'blackbox' : prefGet('coverBg', 'creme')),
           color: state.brand.color || DEFAULT_COLOR,
           handle: state.brand.handle || (state.conn && state.conn.username) || '',
         };

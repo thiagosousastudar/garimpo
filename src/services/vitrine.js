@@ -16,6 +16,9 @@ const THEMES = {
   grafite: { bg1: '#F1F2F4', bg2: '#E3E5E9', ink: '#16191D', muted: '#5B6470', accent: '#2E3640', accentInk: '#FFFFFF', soft: '#E4E7EB', card: '#FFFFFF', line: '#D6DAE0' },
   marinho: { bg1: '#EEF3F9', bg2: '#DCE5F0', ink: '#0F1B2D', muted: '#4A5B73', accent: '#1F3A5F', accentInk: '#FFFFFF', soft: '#DDE6F2', card: '#FFFFFF', line: '#CBD7E6' },
   militar: { bg1: '#F1F3EC', bg2: '#E2E6D8', ink: '#1D2414', muted: '#5B6650', accent: '#4F5F34', accentInk: '#FFFFFF', soft: '#E2E7D6', card: '#FFFFFF', line: '#D3D9C4' },
+  // Black Box: preto, prata metálica nos títulos e botões, laranja só nos destaques
+  blackbox: { bg1: '#141414', bg2: '#080808', ink: '#F2F2F2', muted: '#A3A6AB', accent: '#C9CCD1', accentInk: '#111111', soft: '#1E1E1E', card: '#171717', line: '#2B2B2B', dark: true,
+    hot: '#F28C28', hotInk: '#111111', cta: 'linear-gradient(180deg,#F4F5F7 0%,#C9CCD1 55%,#9EA3AA 100%)', metal: true },
   laranja: { bg1: '#161616', bg2: '#0E0E0E', ink: '#F5F1EA', muted: '#B5ADA2', accent: '#F28C28', accentInk: '#161616', soft: '#2A2017', card: '#1F1F1F', line: '#2E2E2E', dark: true },
 };
 const THEME_NAMES = Object.keys(THEMES);
@@ -53,7 +56,7 @@ function soldText(k) {
 
 function themeCss(key) {
   const t = THEMES[key] || THEMES.rosa;
-  return `:root{--bg1:${t.bg1};--bg2:${t.bg2};--ink:${t.ink};--muted:${t.muted};--accent:${t.accent};--accent-ink:${t.accentInk};--soft:${t.soft};--card:${t.card};--line:${t.line}}`;
+  return `:root{--bg1:${t.bg1};--bg2:${t.bg2};--ink:${t.ink};--muted:${t.muted};--accent:${t.accent};--accent-ink:${t.accentInk};--soft:${t.soft};--card:${t.card};--line:${t.line};--hot:${t.hot || t.accent};--hot-ink:${t.hotInk || t.accentInk};--cta:${t.cta || t.accent}}`;
 }
 
 function initials(title) {
@@ -91,7 +94,7 @@ ${image ? `<meta property="og:image" content="${esc(image)}">` : ''}<meta proper
 <link rel="icon" href="${favicon(icon || title, theme)}">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,500&family=Figtree:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/vitrine.css?v=4"><style>${themeCss(theme)}</style></head>`;
+<link rel="stylesheet" href="/vitrine.css?v=5"><style>${themeCss(theme)}</style></head>`;
 }
 
 function card(p, base, big = false) {
@@ -150,7 +153,7 @@ function renderStore({ store: s, sections, posts, base, url, preview }) {
     : '<p class="empty">Os achadinhos estão chegando. Volte daqui a pouco!</p>';
   const desc = s.bio || `Achadinhos selecionados por ${s.title}`;
   return `${head({ title: s.title, description: desc, image: httpsUrl(s.avatar_url) || (firstImg && firstImg.image), theme: s.theme, url })}
-<body>${preview ? '<div class="pv">Prévia: só você vê. Publique no Garimpo para liberar a vitrine.</div>' : ''}<main>
+<body${(THEMES[s.theme] || {}).metal ? ' class="metal"' : ''}>${preview ? '<div class="pv">Prévia: só você vê. Publique no Garimpo para liberar a vitrine.</div>' : ''}<main>
 <header class="hero">${avatar(s)}<h1>${esc(s.title)}</h1>${s.bio ? `<p class="bio">${esc(s.bio)}</p>` : ''}
 <ul class="trust"><li>✅ Links verificados</li><li>🔒 Compra no site oficial</li><li>💸 Preços conferidos</li></ul>${socials(s)}</header>
 ${total > 3 ? '<div class="search"><input id="q" type="search" placeholder="Buscar achadinho…" aria-label="Buscar achadinho" autocomplete="off"></div>' : ''}
@@ -162,7 +165,7 @@ ${footer(s, base)}</main><script src="/vitrine.js?v=3" defer></script></body></h
 function renderPost({ store: s, list, products, base, url, preview }) {
   const firstImg = products.find((p) => p.image);
   return `${head({ title: `${list.name} · ${s.title}`, description: `Os ${products.length} achadinhos do post, com link direto para a loja.`, image: firstImg && firstImg.image, theme: s.theme, url, icon: s.title })}
-<body>${preview ? '<div class="pv">Prévia: só você vê. Publique a vitrine no Garimpo para liberar esta página.</div>' : ''}<main>
+<body${(THEMES[s.theme] || {}).metal ? ' class="metal"' : ''}>${preview ? '<div class="pv">Prévia: só você vê. Publique a vitrine no Garimpo para liberar esta página.</div>' : ''}<main>
 <header class="hero small"><a class="back" href="${esc(base || '/')}">${avatar(s, 'sm')}<span>${esc(s.title)}</span></a>
 <h1>${esc(list.name)}</h1><p class="bio">Os ${products.length} ${products.length === 1 ? 'achadinho' : 'achadinhos'} do post, com link direto para a loja 💖</p></header>
 <div class="list">${products.map((p, i) => card({ ...p, name: `${i + 1}. ${p.name}` }, base, true)).join('') || '<p class="empty">Os itens deste post não estão mais disponíveis.</p>'}</div>
