@@ -1624,7 +1624,7 @@
         return '<button type="button" class="sw' + (theme === t[0] ? ' on' : '') + '" data-act="vit-theme" data-theme="' + t[0] + '" style="background:' + t[1] + '" title="' + t[2] + '" aria-label="Cor ' + t[2] + '" aria-pressed="' + (theme === t[0]) + '"></button>';
       }).join('') + '</div></div>' +
       '<div class="cols">' + f('vf-instagram', 'Seu @ no Instagram', s ? s.instagram : (state.conn && state.conn.username) || '', 'placeholder="anninhaachadinhospraticos"') +
-      f('vf-avatar_url', 'Foto (link, opcional)', s ? s.avatar_url : '', 'placeholder="https://…"', 'Sem foto, aparecem as suas iniciais.') + '</div>' +
+      vitAvatarField(s) + '</div>' +
       '<div class="cols">' + f('vf-whatsapp_url', 'Grupo/canal do WhatsApp (opcional)', s ? s.whatsapp_url : '', 'placeholder="https://chat.whatsapp.com/…"') +
       f('vf-telegram_url', 'Canal do Telegram (opcional)', s ? s.telegram_url : '', 'placeholder="https://t.me/…"') + '</div>' +
       f('vf-domain', 'Domínio próprio (opcional)', s ? s.domain : '', 'placeholder="anninhaachadinhos.com.br" autocapitalize="none" spellcheck="false"', 'O domínio que você comprou. Ele também precisa estar apontado para o Garimpo no Registro.br.') +
@@ -1662,6 +1662,51 @@
       '<section class="card"><details class="sched"' + (secs.length ? '' : ' open') + '><summary>Configurações da vitrine</summary>' + form + '</details></section>';
   }
 
+  /** Foto da bolinha: envio do aparelho (cortada em quadrado), com prévia e opção de tirar. */
+  function vitAvatarField(s) {
+    var url = state.vitAvatar !== undefined ? state.vitAvatar : (s && s.avatar_url) || '';
+    var title = (s && s.title) || (state.user && state.user.name) || '?';
+    var ini = title.trim().split(/\s+/); ini = ((ini[0] || '?')[0] + (ini.length > 1 ? ini[ini.length - 1][0] : '')).toUpperCase();
+    return '<div class="field"><label>Foto da vitrine</label><div class="vav">' +
+      '<span class="vav-pic">' + (url ? '<img src="' + esc(url) + '" alt="Foto atual">' : '<span>' + esc(ini) + '</span>') + '</span>' +
+      '<div class="stack" style="gap:6px"><label class="btn small primary vav-up">' + (state.vitAvatarBusy ? 'Enviando…' : url ? '📷 Trocar foto' : '📷 Enviar foto') +
+      '<input type="file" id="vf-avatar-file" accept="image/jpeg,image/png,image/webp" hidden' + (state.vitAvatarBusy ? ' disabled' : '') + '></label>' +
+      (url ? '<button type="button" class="btn small ghost" data-act="vit-avatar-del">Tirar foto</button>' : '') + '</div></div>' +
+      '<input type="hidden" id="vf-avatar_url" value="' + esc(url) + '"><p class="hint">Uma foto sua ou o logo. Sem foto, aparecem as suas iniciais.</p></div>';
+  }
+  /** Corta no centro em quadrado de até 640 px e salva em JPEG (foto leve para a vitrine). */
+  function squareJpeg(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var side = Math.min(img.naturalWidth, img.naturalHeight), out = Math.min(640, side);
+        if (!side) return reject(new Error('Não consegui ler a foto.'));
+        var c = document.createElement('canvas'); c.width = out; c.height = out;
+        var cx = c.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, out, out);
+        cx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, out, out);
+        c.toBlob(function (b) { b ? resolve(new File([b], 'vitrine-foto.jpg', { type: 'image/jpeg' })) : reject(new Error('Não consegui preparar a foto.')); }, 'image/jpeg', 0.9);
+      };
+      img.onerror = function () { reject(new Error('Não consegui ler a foto. Use JPEG ou PNG.')); };
+      var rd = new FileReader();
+      rd.onload = function () { img.src = rd.result; };
+      rd.onerror = function () { reject(new Error('Não consegui ler a foto.')); };
+      rd.readAsDataURL(file);
+    });
+  }
+  document.addEventListener('change', function (e) {
+    if (e.target.id !== 'vf-avatar-file' || !e.target.files || !e.target.files[0]) return;
+    var file = e.target.files[0];
+    if (!/^image\//.test(file.type)) { toast('Escolha uma foto (JPEG ou PNG).'); return; }
+    var keep = state.vit && state.vit.store ? vitFormData() : null; // guarda o que já foi digitado
+    state.vitAvatarBusy = true; render();
+    squareJpeg(file).then(uploadRaw).then(function (r) {
+      if (!/^https:\/\//.test(r.url || '')) throw new Error('O envio de fotos precisa do armazenamento do Supabase configurado.');
+      state.vitAvatar = r.url;
+      if (!keep) { toast('Foto pronta. Toque em Criar minha vitrine para salvar.'); return null; }
+      return saveVitrine(Object.assign(keep, { avatar_url: r.url })).then(function () { toast('Foto da vitrine atualizada!'); });
+    }).catch(function (err) { toast(err.message); }).then(function () { state.vitAvatarBusy = false; render(); });
+  });
+
   /** Lê o formulário da vitrine. */
   function vitFormData() {
     var g = function (id) { var el = $('#' + id); return el ? el.value : ''; };
@@ -1671,7 +1716,7 @@
       published: Boolean(($('#vf-published') || {}).checked) };
   }
   function saveVitrine(data) {
-    return api('PUT', '/api/vitrine', data).then(function () { state.vit = null; state.vitTheme = null; toast('Vitrine salva'); render(); });
+    return api('PUT', '/api/vitrine', data).then(function () { state.vit = null; state.vitTheme = null; state.vitAvatar = undefined; toast('Vitrine salva'); render(); });
   }
   document.addEventListener('submit', function (e) {
     if (e.target.id !== 'vit-form') return;
@@ -1745,6 +1790,10 @@
     'vit-theme': function (t) {
       state.vitTheme = t.dataset.theme;
       document.querySelectorAll('[data-act="vit-theme"]').forEach(function (b) { var on = b.dataset.theme === state.vitTheme; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    },
+    'vit-avatar-del': function () {
+      if (!state.vit.store) { state.vitAvatar = ''; return render(); }
+      return saveVitrine(Object.assign(vitFormData(), { avatar_url: '' }));
     },
     'vit-copy': function () { var u = state.vit.store.domain_url || state.vit.store.url; return copyText(u).then(function (ok) { toast(ok ? 'Link copiado! Cole na bio do Instagram.' : u); }); },
     'vit-publish': function () { var s = state.vit.store; return saveVitrine(Object.assign({}, s, { published: true })); },

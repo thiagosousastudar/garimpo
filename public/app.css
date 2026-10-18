@@ -115,6 +115,11 @@ textarea.mlshort{min-height:64px}
 .vslug span{padding:0 4px 0 12px;color:var(--muted);font-size:13px;white-space:nowrap}
 .vslug input{border:0!important;border-radius:0!important;flex:1;min-width:0}
 .vlink .vurl{margin:8px 0;word-break:break-all}
+.vav{display:flex;align-items:center;gap:14px}
+.vav-pic{flex:0 0 auto;width:72px;height:72px;border-radius:50%;overflow:hidden;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent-soft));box-shadow:0 0 0 3px var(--surface),0 4px 12px rgba(0,0,0,.12)}
+.vav-pic img{width:100%;height:100%;object-fit:cover}
+.vav-pic span{color:#fff;font-weight:700;font-size:24px}
+.vav-up{cursor:pointer}
 .vsec{border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-top:10px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
 .vem{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--accent-soft);font-size:20px;flex:0 0 auto}
 .vthumbs{display:flex;gap:6px;align-items:center;overflow-x:auto}
