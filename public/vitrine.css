@@ -33,11 +33,6 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .search input{width:100%;font:inherit;font-size:16px;padding:13px 16px 13px 42px;border-radius:14px;border:1px solid var(--line);background:var(--card) no-repeat 14px 50%/18px;color:var(--ink);
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E")}
 .search input:focus{outline:2px solid var(--accent);outline-offset:1px}
-.chips{position:sticky;top:0;z-index:10;display:flex;gap:8px;overflow-x:auto;padding:10px 16px;margin:0 -16px 8px;scrollbar-width:none;
-  background:linear-gradient(var(--bg1) 70%,transparent)}
-.chips::-webkit-scrollbar{display:none}
-.chips a{flex:0 0 auto;text-decoration:none;font-weight:600;font-size:14px;padding:8px 14px;border-radius:999px;background:var(--card);border:1px solid var(--line);white-space:nowrap}
-.chips a.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 
 .lbl{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:18px 2px 10px}
 .posts .strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
@@ -47,12 +42,36 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .post b{display:block;font-size:14px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .post small{color:var(--accent);font-weight:700;font-size:12px}
 
-/* categorias */
-.cat{margin-top:22px}
-.ch{margin:0 2px 12px}
-.ch h2{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:24px;margin:0;display:flex;align-items:center;gap:10px}
-.ch .em{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:var(--soft);font-size:20px}
-.ch p{margin:6px 0 0;color:var(--muted);font-size:14px}
+/* categorias: cartões recolhidos; tocar abre os produtos */
+.cats{margin-top:8px}
+.cat{position:relative;margin:0 0 12px;border-radius:22px;background:linear-gradient(135deg,var(--card) 55%,var(--soft) 140%);border:1px solid var(--line);
+  box-shadow:0 6px 20px rgba(0,0,0,.06);overflow:hidden;transition:box-shadow .2s,transform .2s}
+.cat::before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:linear-gradient(var(--accent),var(--soft))}
+.cat:not([open]):hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.1)}
+.cat summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 16px 16px 20px;-webkit-tap-highlight-color:transparent}
+.cat summary::-webkit-details-marker{display:none}
+.cat summary:focus-visible{outline:2px solid var(--accent);outline-offset:-4px;border-radius:22px}
+.cat .em{flex:0 0 auto;display:grid;place-items:center;width:54px;height:54px;border-radius:16px;font-size:28px;
+  background:linear-gradient(145deg,var(--soft),var(--card));box-shadow:inset 0 0 0 1px var(--line),0 4px 10px rgba(0,0,0,.06)}
+.cat .ct{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.cat .ct b{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:21px;line-height:1.15;letter-spacing:-.005em}
+.cat .ct small{font-size:13px;line-height:1.35;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cat .tags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.cat .cnt,.cat .best{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px}
+.cat .cnt{background:var(--soft);color:var(--accent)}
+.cat .best{background:var(--accent);color:var(--accent-ink)}
+.cat .stack{display:flex;padding-left:14px;margin-left:2px}
+.cat .stack img{width:30px;height:30px;border-radius:9px;object-fit:cover;margin-left:-14px;border:2px solid var(--card);box-shadow:0 3px 8px rgba(0,0,0,.12);background:var(--soft)}
+.cat .stack img:nth-child(1){transform:rotate(-6deg)}
+.cat .stack img:nth-child(3){transform:rotate(6deg)}
+.cat .chev{flex:0 0 auto;width:32px;height:32px;border-radius:50%;background:var(--soft);display:grid;place-items:center;transition:transform .25s,background .2s}
+.cat .chev::after{content:'';width:8px;height:8px;border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);transform:translateY(-2px) rotate(45deg)}
+.cat[open] .chev{transform:rotate(180deg);background:var(--accent)}
+.cat[open] .chev::after{border-color:var(--accent-ink)}
+.cat[open] summary{border-bottom:1px solid var(--line)}
+.cat .grid{padding:14px 12px 14px 17px;animation:abrir .25s ease-out}
+@keyframes abrir{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@media (max-width:420px){.cat .grid{gap:9px;padding:10px 9px 12px 13px}.pb{padding:9px 9px 10px}.cta{font-size:13.5px;padding:10px 6px}.price b{font-size:16px}.cat summary{gap:12px;padding:14px 14px 14px 18px}.cat .em{width:48px;height:48px;font-size:25px}.cat .ct b{font-size:19px}}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (min-width:600px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 

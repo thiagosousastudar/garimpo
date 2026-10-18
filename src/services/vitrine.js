@@ -69,14 +69,14 @@ ${image ? `<meta property="og:image" content="${esc(image)}">` : ''}<meta proper
 <meta name="theme-color" content="${esc((THEMES[theme] || THEMES.rosa).bg1)}">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,500&family=Figtree:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/vitrine.css?v=1"><style>${themeCss(theme)}</style></head>`;
+<link rel="stylesheet" href="/vitrine.css?v=3"><style>${themeCss(theme)}</style></head>`;
 }
 
 function card(p, base, big = false) {
   const price = `<div class="price"><b>${p.priceMax ? '<small>a partir de</small> ' : ''}${brl(p.price)}</b>${p.orig ? `<s>${brl(p.orig)}</s>` : ''}</div>`;
   const meta = [p.rating ? `★ ${p.rating.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}` : '', soldText(p.sold)].filter(Boolean).join(' · ');
   const cta = p.hasLink
-    ? `<a class="cta" href="${esc(base)}/ir/${p.id}" target="_blank" rel="nofollow sponsored noopener">Ver na ${esc(p.store)} <span aria-hidden="true">→</span></a>`
+    ? `<a class="cta" href="${esc(base)}/ir/${p.id}" target="_blank" rel="nofollow sponsored noopener">Ver ${p.store === 'Mercado Livre' ? 'no' : 'na'} ${esc(p.store)} <span aria-hidden="true">→</span></a>`
     : '<span class="cta off">Link em breve</span>';
   return `<article class="pc${big ? ' big' : ''}" data-q="${esc((p.name + ' ' + p.store).toLowerCase())}">
 <div class="ph">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="noimg"></span>'}${p.off >= 5 ? `<span class="off">−${p.off}%</span>` : ''}<span class="st">${esc(p.store)}</span></div>
@@ -103,10 +103,21 @@ function renderStore({ store: s, sections, posts, base, url, preview }) {
   const filled = sections.filter((x) => x.products.length);
   const total = filled.reduce((n, x) => n + x.products.length, 0);
   const firstImg = (filled[0] && filled[0].products.find((p) => p.image)) || null;
-  const chips = filled.length > 1 ? `<nav class="chips" aria-label="Categorias">${filled.map((x) => `<a href="#c${x.id}">${x.emoji ? esc(x.emoji) + ' ' : ''}${esc(x.name)}</a>`).join('')}</nav>` : '';
+
   const postStrip = posts.length ? `<section class="posts"><h2 class="lbl">Dos últimos posts</h2><div class="strip">${posts.map((p) => `<a class="post" href="${esc(base)}/p/${p.id}">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="noimg"></span>'}<span><b>${esc(p.name)}</b><small>${p.count} ${p.count === 1 ? 'item' : 'itens'} →</small></span></a>`).join('')}</div></section>` : '';
+  // categorias recolhidas: o cartão mostra nome, descrição, quantos itens e as primeiras fotos; toque abre os produtos
+  const catCard = (x) => {
+    const imgs = x.products.filter((p) => p.image).slice(0, 3);
+    const best = x.products.reduce((m, p) => Math.max(m, p.off || 0), 0);
+    return `<details class="cat" id="c${x.id}"${filled.length === 1 ? ' open' : ''}><summary>` +
+      `<span class="em">${esc(x.emoji || '🛍️')}</span>` +
+      `<span class="ct"><b>${esc(x.name)}</b>${x.description ? `<small>${esc(x.description)}</small>` : ''}` +
+      `<span class="tags"><span class="cnt">${x.products.length} ${x.products.length === 1 ? 'achadinho' : 'achadinhos'}</span>${best >= 10 ? `<span class="best">até −${best}%</span>` : ''}` +
+      (imgs.length ? `<span class="stack" aria-hidden="true">${imgs.map((p) => `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`).join('')}</span>` : '') + '</span></span>' +
+      `<span class="chev" aria-hidden="true"></span></summary><div class="grid">${x.products.map((p) => card(p, base)).join('')}</div></details>`;
+  };
   const body = filled.length
-    ? filled.map((x) => `<section class="cat" id="c${x.id}"><div class="ch"><h2>${x.emoji ? `<span class="em">${esc(x.emoji)}</span>` : ''}${esc(x.name)}</h2>${x.description ? `<p>${esc(x.description)}</p>` : ''}</div><div class="grid">${x.products.map((p) => card(p, base)).join('')}</div></section>`).join('')
+    ? `<section class="cats"><h2 class="lbl">Categorias</h2>${filled.map(catCard).join('')}</section>`
     : '<p class="empty">Os achadinhos estão chegando. Volte daqui a pouco!</p>';
   const desc = s.bio || `Achadinhos selecionados por ${s.title}`;
   return `${head({ title: s.title, description: desc, image: httpsUrl(s.avatar_url) || (firstImg && firstImg.image), theme: s.theme, url })}
@@ -114,8 +125,8 @@ function renderStore({ store: s, sections, posts, base, url, preview }) {
 <header class="hero">${avatar(s)}<h1>${esc(s.title)}</h1>${s.bio ? `<p class="bio">${esc(s.bio)}</p>` : ''}
 <ul class="trust"><li>✅ Links verificados</li><li>🔒 Compra no site oficial</li><li>💸 Preços conferidos</li></ul>${socials(s)}</header>
 ${total > 3 ? '<div class="search"><input id="q" type="search" placeholder="Buscar achadinho…" aria-label="Buscar achadinho" autocomplete="off"></div>' : ''}
-${chips}${postStrip}${body}<p class="none" id="none" hidden>Nada encontrado com essa busca.</p>
-${footer(s, base)}</main><script src="/vitrine.js?v=1" defer></script></body></html>`;
+${postStrip}${body}<p class="none" id="none" hidden>Nada encontrado com essa busca.</p>
+${footer(s, base)}</main><script src="/vitrine.js?v=3" defer></script></body></html>`;
 }
 
 /** Página de um post (lista salva na Mensagem com links). */
