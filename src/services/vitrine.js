@@ -69,7 +69,7 @@ ${image ? `<meta property="og:image" content="${esc(image)}">` : ''}<meta proper
 <meta name="theme-color" content="${esc((THEMES[theme] || THEMES.rosa).bg1)}">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,500&family=Figtree:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/vitrine.css?v=3"><style>${themeCss(theme)}</style></head>`;
+<link rel="stylesheet" href="/vitrine.css?v=4"><style>${themeCss(theme)}</style></head>`;
 }
 
 function card(p, base, big = false) {
@@ -88,13 +88,20 @@ function footer(s, base) {
 <p class="fine">${esc(s.title)} · <a href="${esc(base || '/')}">Vitrine</a></p></footer>`;
 }
 
+/* logos das redes (desenhados em SVG, nítidos em qualquer tela) */
+const LOGO = {
+  wa: '<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#25D366" d="M16 2.5C8.6 2.5 2.6 8.4 2.6 15.7c0 2.5.7 4.9 2 7L2.5 29.5l7-2c2 1.1 4.2 1.6 6.5 1.6 7.4 0 13.4-5.9 13.4-13.2S23.4 2.5 16 2.5z"/><path fill="#fff" d="M16 5c-5.9 0-10.8 4.8-10.8 10.7 0 2.2.7 4.3 2 6.1l-1.3 3.9 4.1-1.3c1.7 1.1 3.8 1.7 6 1.7 5.9 0 10.8-4.8 10.8-10.7S21.9 5 16 5z"/><path fill="#25D366" d="M16 6.9c-4.9 0-8.9 3.9-8.9 8.8 0 1.9.6 3.7 1.7 5.2l-.8 2.4 2.5-.8c1.5 1 3.3 1.6 5.4 1.6 4.9 0 8.9-3.9 8.9-8.8S20.9 6.9 16 6.9z"/><path fill="#fff" d="M12.6 10.6c-.2-.5-.5-.5-.7-.5h-.6c-.2 0-.6.1-.9.4-.3.3-1.1 1.1-1.1 2.7s1.2 3.1 1.3 3.3c.2.2 2.2 3.5 5.5 4.8 2.7 1.1 3.3.9 3.9.8.6-.1 1.9-.8 2.2-1.5.3-.8.3-1.4.2-1.5-.1-.1-.3-.2-.6-.4l-2.1-1c-.3-.1-.5-.2-.7.2l-.9 1.2c-.2.2-.3.2-.6.1-.3-.2-1.4-.5-2.6-1.6-1-.9-1.6-1.9-1.8-2.3-.2-.3 0-.5.1-.7l.5-.6c.2-.2.2-.3.3-.5.1-.2.1-.4 0-.6l-.9-2.3z"/></svg>',
+  ig: '<svg viewBox="0 0 32 32" aria-hidden="true"><defs><radialGradient id="igg" cx="30%" cy="105%" r="130%"><stop offset="0" stop-color="#FDF497"/><stop offset=".08" stop-color="#FDF497"/><stop offset=".45" stop-color="#FD5949"/><stop offset=".62" stop-color="#D6249F"/><stop offset=".95" stop-color="#285AEB"/></radialGradient></defs><circle cx="16" cy="16" r="16" fill="url(#igg)"/><rect x="8" y="8" width="16" height="16" rx="4.8" fill="none" stroke="#fff" stroke-width="2.2"/><circle cx="16" cy="16" r="3.9" fill="none" stroke="#fff" stroke-width="2.2"/><circle cx="20.9" cy="11.1" r="1.25" fill="#fff"/></svg>',
+  tg: '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="16" fill="#229ED9"/><path fill="#fff" d="M7.2 15.6l15.3-5.9c.7-.3 1.3.2 1.1 1.2l-2.6 12.3c-.2.9-.7 1.1-1.5.7l-4-3-1.9 1.9c-.2.2-.4.4-.8.4l.3-4.1 7.4-6.7c.3-.3-.1-.5-.5-.2l-9.2 5.8-4-1.2c-.9-.3-.9-.9.2-1.3z"/></svg>',
+};
+
 function socials(s) {
   const out = [];
   const wa = httpsUrl(s.whatsapp_url); const tg = httpsUrl(s.telegram_url);
   const ig = String(s.instagram || '').replace(/^@/, '').trim();
-  if (wa) out.push(`<a class="so wa" href="${esc(wa)}" target="_blank" rel="noopener">💬 Grupo no WhatsApp</a>`);
-  if (tg) out.push(`<a class="so tg" href="${esc(tg)}" target="_blank" rel="noopener">✈️ Canal no Telegram</a>`);
-  if (/^[A-Za-z0-9._]{1,30}$/.test(ig)) out.push(`<a class="so ig" href="https://www.instagram.com/${esc(ig)}/" target="_blank" rel="noopener">📸 @${esc(ig)}</a>`);
+  if (wa) out.push(`<a class="so wa" href="${esc(wa)}" target="_blank" rel="noopener">${LOGO.wa}<span>Grupo no WhatsApp</span></a>`);
+  if (tg) out.push(`<a class="so tg" href="${esc(tg)}" target="_blank" rel="noopener">${LOGO.tg}<span>Canal no Telegram</span></a>`);
+  if (/^[A-Za-z0-9._]{1,30}$/.test(ig)) out.push(`<a class="so ig" href="https://www.instagram.com/${esc(ig)}/" target="_blank" rel="noopener">${LOGO.ig}<span>@${esc(ig)}</span></a>`);
   return out.length ? `<nav class="socials">${out.join('')}</nav>` : '';
 }
 

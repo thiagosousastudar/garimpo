@@ -24,6 +24,9 @@ h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(28px,7vw,3
 .socials{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
 .so{display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-weight:600;font-size:14px;padding:10px 14px;border-radius:999px;background:var(--card);border:1px solid var(--line);box-shadow:0 2px 8px rgba(0,0,0,.04)}
 .so:hover{border-color:var(--accent)}
+.so svg{width:24px;height:24px;flex:0 0 auto;display:block}
+.so{padding:9px 16px 9px 10px;gap:8px}
+.so span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
 .hero.small{padding-bottom:10px}
 .hero.small h1{font-size:clamp(24px,6vw,32px);margin-top:14px}
 .back{display:inline-flex;align-items:center;gap:8px;text-decoration:none;font-weight:600;font-size:14px;padding:6px 12px 6px 6px;border-radius:999px;background:var(--card);border:1px solid var(--line)}
